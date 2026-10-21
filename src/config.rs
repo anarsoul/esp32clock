@@ -21,14 +21,16 @@ pub const WIFI_PASSWORD: &str = match option_env!("WIFI_PASSWORD") {
     None => "",
 };
 
-/// Minutes east of UTC. No daylight saving handling.
-pub const TZ_OFFSET_MINUTES: i32 = match option_env!("TZ_OFFSET_MINUTES") {
-    Some(s) => parse_i32(s),
+/// Minutes east of UTC at boot until the user sets it. No daylight saving
+/// handling.
+pub const DEFAULT_TZ_OFFSET_MINUTES: i16 = match option_env!("TZ_OFFSET_MINUTES") {
+    Some(s) => parse_i32(s) as i16,
     None => 0,
 };
 
-/// Show 12 hour time with the AM mark instead of 24 hour time.
-pub const TWELVE_HOUR: bool = false;
+/// Show 12 hour time with the AM mark instead of 24 hour time, until the
+/// user sets it.
+pub const DEFAULT_TWELVE_HOUR: bool = false;
 
 /// Index into `settings::PALETTE` at boot. 1 is orange.
 pub const DEFAULT_COLOR: usize = 1;
@@ -36,8 +38,8 @@ pub const DEFAULT_COLOR: usize = 1;
 /// Index into `settings::BRIGHTNESS_STEPS` at boot. 2 is 50 %.
 pub const DEFAULT_BRIGHTNESS: usize = 2;
 
-/// Alarm time at boot, disarmed. These three are only the defaults; the
-/// saved settings in flash take precedence once the user has changed them.
+/// Alarm time at boot, disarmed. These are only the defaults; the saved
+/// settings in flash take precedence once the user has changed them.
 pub const DEFAULT_ALARM: (u8, u8) = (7, 0);
 
 /// Ceiling on the current step whatever the brightness. Step 11 is the
@@ -53,6 +55,12 @@ pub const NTP_RESYNC_SECS: u64 = 3600;
 
 /// Seconds before retrying after a failed sync.
 pub const NTP_RETRY_SECS: u64 = 30;
+
+/// Name sent to the DHCP server until the user sets one.
+pub const DEFAULT_HOSTNAME: &str = "clock";
+
+/// TCP port of the settings page.
+pub const HTTP_PORT: u16 = 80;
 
 const fn parse_i32(s: &str) -> i32 {
     let b = s.as_bytes();

@@ -31,7 +31,7 @@ use static_cell::StaticCell;
 
 use esp32clock::buzzer;
 use esp32clock::settings::Settings;
-use esp32clock::{buttons, display, net, scan, settings, storage};
+use esp32clock::{buttons, display, http, net, scan, settings, storage};
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
 esp_bootloader_esp_idf::esp_app_desc!();
@@ -135,6 +135,21 @@ async fn main(spawner: Spawner) -> ! {
     // The drivers discard anything sent in the first 200 us after power-up.
     Timer::after(Duration::from_millis(10)).await;
 
+    // Wi-Fi station and the network stack on top of it. Built before the
+    // display task, which asks the stack for the IP to show.
+    let controller = WifiController::new(peripherals.WIFI, Default::default()).expect("wifi init");
+    let station = Interface::station();
+    let rng = Rng::new();
+    let seed = (rng.random() as u64) << 32 | rng.random() as u64;
+    // DNS, SNTP, the HTTP listeners, and headroom.
+    static RESOURCES: StaticCell<StackResources<8>> = StaticCell::new();
+    let (stack, runner) = embassy_net::new(
+        station,
+        net::dhcp_config(&settings::get().hostname),
+        RESOURCES.init(StackResources::new()),
+        seed,
+    );
+
     // The scan task restarts the DMA transfer the moment one ends. In the
     // thread-mode executor a Wi-Fi task can hold it off for hundreds of
     // microseconds, which is a dark blink on the panel. An interrupt-mode
@@ -144,28 +159,20 @@ async fn main(spawner: Spawner) -> ! {
     let scan_executor = SCAN_EXECUTOR.init(InterruptExecutor::new(peripherals.FROM_CPU_INTR1));
     let scan_spawner = scan_executor.start(Priority::Priority2);
     scan_spawner.spawn(scan::scan_task(scan::ScanHardware { spi, buf }).expect("spawn scan"));
-    spawner.spawn(display::display_task().expect("spawn display"));
+    spawner.spawn(display::display_task(stack).expect("spawn display"));
     spawner.spawn(buttons::button_task(button_top, button_bottom).expect("spawn buttons"));
     spawner.spawn(buzzer::buzzer_task(Ledc::new(peripherals.LEDC), buzzer_pin).expect("spawn buzzer"));
     if let Some(store) = store.take() {
         spawner.spawn(storage::persist_task(store, stored).expect("spawn persist"));
     }
 
-    // Wi-Fi station and the network stack on top of it.
-    let controller = WifiController::new(peripherals.WIFI, Default::default()).expect("wifi init");
-    let station = Interface::station();
-    let rng = Rng::new();
-    let seed = (rng.random() as u64) << 32 | rng.random() as u64;
-    static RESOURCES: StaticCell<StackResources<4>> = StaticCell::new();
-    let (stack, runner) = embassy_net::new(
-        station,
-        embassy_net::Config::dhcpv4(Default::default()),
-        RESOURCES.init(StackResources::new()),
-        seed,
-    );
     spawner.spawn(net::wifi_task(controller).expect("spawn wifi"));
     spawner.spawn(net::net_task(runner).expect("spawn net"));
     spawner.spawn(net::ntp_task(stack).expect("spawn ntp"));
+    spawner.spawn(net::hostname_task(stack).expect("spawn hostname"));
+    for i in 0..http::LISTENERS {
+        spawner.spawn(http::http_task(stack, i).expect("spawn http"));
+    }
 
     info!("running");
     loop {

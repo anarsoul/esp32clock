@@ -4,23 +4,38 @@ use core::net::{IpAddr, SocketAddr};
 
 use embassy_net::dns::DnsQueryType;
 use embassy_net::udp::{PacketMetadata, UdpSocket};
-use embassy_net::{IpAddress, Runner, Stack};
+use embassy_net::{ConfigV4, DhcpConfig, IpAddress, Runner, Stack};
+use embassy_futures::select::{Either, select};
 use embassy_time::{Duration, Instant, Timer, with_timeout};
-use esp_radio::wifi::sta::StationConfig;
+use esp_radio::wifi::sta::{ScanMethod, StationConfig};
 use esp_radio::wifi::{AuthenticationMethodConfig, Config, Interface, WifiController};
 use log::{error, info, warn};
 use sntpc::{NtpContext, get_time};
 use sntpc_net_embassy::UdpSocketWrapper;
 use sntpc_time_embassy::EmbassyTimestampGenerator;
 
-use crate::{clock, config};
+use crate::settings::Hostname;
+use crate::{clock, config, settings};
 
 const NTP_PORT: u16 = 123;
 const LOCAL_PORT: u16 = 12345;
 const NTP_TIMEOUT: Duration = Duration::from_secs(5);
 const RECONNECT_DELAY: Duration = Duration::from_secs(5);
 
+/// Quiet time after a hostname change before DHCP is renewed. The renewal
+/// drops the address until the new lease arrives, which resets any open
+/// connection, so the page's response and the redirect that follows it
+/// must be done first.
+const RENEW_SETTLE: Duration = Duration::from_secs(3);
+
 /// Build the station configuration from the build-time credentials.
+///
+/// The scan method matters with more than one access point on the SSID.
+/// The driver's default, `Fast`, takes the first beacon it hears on any
+/// channel, so it would happily pick a far AP at -82 dBm and fail to
+/// authenticate. `AllChannels` scans every channel first and, with the
+/// by-signal sort order esp-radio sets, connects to the strongest. It
+/// costs a second or two more at connect time.
 fn station_config() -> Result<Config, esp_radio::wifi::WifiError> {
     let ssid = config::WIFI_SSID.try_into()?;
     let auth = if config::WIFI_PASSWORD.is_empty() {
@@ -29,7 +44,10 @@ fn station_config() -> Result<Config, esp_radio::wifi::WifiError> {
         AuthenticationMethodConfig::Wpa2Personal(config::WIFI_PASSWORD.try_into()?)
     };
     Ok(Config::Station(
-        StationConfig::default().with_ssid(ssid).with_authentication(auth),
+        StationConfig::default()
+            .with_ssid(ssid)
+            .with_authentication(auth)
+            .with_scan_method(ScanMethod::AllChannels),
     ))
 }
 
@@ -80,6 +98,40 @@ pub async fn wifi_task(mut controller: WifiController<'static>) -> ! {
 #[embassy_executor::task]
 pub async fn net_task(mut runner: Runner<'static, Interface>) -> ! {
     runner.run().await
+}
+
+/// DHCP with our name as option 12, so a router that publishes DHCP
+/// names in its DNS resolves it.
+pub fn dhcp_config(hostname: &Hostname) -> embassy_net::Config {
+    let mut cfg = DhcpConfig::default();
+    // The hostname is validated shorter than the option, so this cannot fail.
+    cfg.hostname = heapless::String::try_from(hostname.as_str()).ok();
+    embassy_net::Config::dhcpv4(cfg)
+}
+
+/// Re-run DHCP with the new name once the hostname setting has changed
+/// and stayed put for `RENEW_SETTLE`. The lease restarts; the address
+/// normally comes back the same.
+#[embassy_executor::task]
+pub async fn hostname_task(stack: Stack<'static>) -> ! {
+    let mut rx = settings::receiver();
+    let mut current = settings::get().hostname;
+    loop {
+        let mut next = rx.changed().await.hostname;
+        loop {
+            match select(Timer::after(RENEW_SETTLE), rx.changed()).await {
+                Either::First(()) => break,
+                Either::Second(s) => next = s.hostname,
+            }
+        }
+        if next != current {
+            info!("net: hostname {} -> {}, renewing dhcp", current.as_str(), next.as_str());
+            current = next;
+            if let ConfigV4::Dhcp(cfg) = dhcp_config(&current).ipv4 {
+                stack.set_config_v4(ConfigV4::Dhcp(cfg));
+            }
+        }
+    }
 }
 
 /// One SNTP exchange. Returns the Unix time in microseconds as of return.

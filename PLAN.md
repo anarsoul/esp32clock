@@ -442,33 +442,121 @@ saved colour and brightness and the degree mark is lit. The log shows
 `settings: loaded ...` at boot and `settings: saved` 2 s after the last
 change.
 
-### M6 — settings over Wi-Fi
+### M6 — settings over Wi-Fi — DONE, verified on the panel 2026-10-21
 
-A small HTTP page served by the clock on its LAN address.
+A small HTTP page served by the clock on its LAN address, and the same
+values as a scriptable API. No TLS, no authentication: anyone on the LAN
+can set the alarm, which is the right trade for a bedside clock.
 
-- **Server.** `picoserve` on embassy-net TCP (it targets exactly this
-  stack), one or two sockets, no TLS. A single HTML page with a form:
-  colour (palette choice or a colour picker mapped to `Rgb`), brightness,
-  alarm time and armed, 12/24 hour, timezone offset. `GET /` renders the
-  current values, `POST /` applies them and redirects back. A `GET /api`
-  JSON view and `POST /api` make it scriptable from Home Assistant or a
-  shell.
-- **Shared settings.** The store from M5 is the single source of truth; the
-  page and the buttons both write through it and the display picks up the
-  change signal. Timezone offset and 12/24 hour become settings rather than
-  build-time constants.
-- **Finding it.** Log the IP at boot (already done) and show it on the panel
-  on a long press of both buttons, four digits at a time, so no serial
-  console is needed. mDNS (`clock.local`) is possible with embassy-net's
-  `mdns` feature and worth trying once the page works.
-- **Out of scope for M6.** Wi-Fi credentials stay build-time. Provisioning
-  through an access-point captive portal is its own milestone, since it
-  needs AP+STA mode, DHCP server and a DNS catch-all.
-- **Risks.** Flash and RAM: the HTTP server and page are small, but
-  embassy-net TCP buffers and another socket add a few KB; heap is at
-  about 54 KB free with Wi-Fi up. Keep the page static and tiny, no
-  JavaScript needed. The server task runs in thread mode and never touches
-  the scan path.
+**Settings.** Timezone offset and 12/24 hour stop being build-time
+constants and join the record, which grows to version 2, 12 bytes:
+version, colour, brightness, alarm hour, alarm minute, armed, twelve-hour,
+timezone offset as a little-endian i16 in minutes, three spare bytes. A
+version 1 record is still read and the two new fields take the build-time
+defaults, so nobody loses their colour on the upgrade. `TZ_OFFSET_MINUTES`
+at build time is now just the default. `clock::now` and the hour drawing
+read the live settings.
+
+**Server.** `src/http.rs`, three identical tasks in thread mode, each on
+its own embassy-net TCP socket, HTTP/1.0 style: read the request head
+into a 1.5 KB buffer, read a body of at most 512 bytes if
+`Content-Length` says so, write the whole response from a 2 KB buffer,
+close. One request per connection, which is all a form needs. Three
+listeners rather than one because a browser opens more connections than
+it uses: a speculative one alongside the page, one for the favicon, a
+fresh one for the redirect after a form post. With one socket, each of
+those was "connection refused" for the next real request (found on the
+panel). A client that connects but sends nothing is dropped after 2 s so
+an idle speculative connection frees its socket. No framework: `picoserve` was considered and is more
+than four routes on one socket deserve, and it would tie the project to
+whichever embassy-net version it tracks. The parsing is in
+`src/form.rs`, pure code with no sockets, so it is host-testable.
+
+| route | does |
+| --- | --- |
+| `GET /` | the page: a form with the current values |
+| `POST /` | applies the form, absent checkboxes mean off, redirects to `/` |
+| `GET /api` | JSON of the current settings |
+| `POST /api` | applies the given keys only, returns the JSON; 400 on a bad key or value |
+
+Keys, as `application/x-www-form-urlencoded` on both routes so that
+`curl -d` and Home Assistant's `rest_command` can drive it without JSON:
+
+| key | value |
+| --- | --- |
+| `color` | palette name: `red`, `orange`, `yellow`, `green`, `cyan`, `blue`, `magenta`, `white` |
+| `brightness` | percent from the step list: 10, 25, 50, 75, 100 |
+| `alarm` | `HH:MM` |
+| `armed` | `on`, `1`, `true`, or anything else for off |
+| `twelve_hour` | same |
+| `tz` | minutes east of UTC, −840 to 840 |
+| `hostname` | 1 to 24 of `a-z`, `0-9`, `-`; sent to the DHCP server |
+
+Changes go through `settings::update`, so the display redraws and the
+persist task writes exactly as for a button press.
+
+**Finding the clock.** The IP is logged at boot. On the panel, holding
+both buttons for 0.8 s shows it: four octets in turn, two seconds each,
+the first digit the octet's number and the other three its value, so
+192.168.1.42 reads `1192`, `2168`, `3  1`, `4 42`. Two rounds, or any
+press, and it is back to the clock. Before DHCP has an address it shows
+`no1P`. The button task reports the two-button hold as its own event and
+holds back the single long presses while both are down. mDNS is left out:
+embassy-net has no responder and the IP display covers it.
+
+**Resources.** Per listener: socket buffers 1 KB each way, request
+1.5 KB, response 2 KB, all in the task's static frame; 16.5 KB for the
+three. `StackResources` goes from 4 to 8 sockets (DNS, SNTP, three TCP,
+headroom). The server never touches the scan
+path.
+
+**Hostname.** The clock tells the DHCP server its name (option 12,
+embassy-net's `dhcpv4-hostname` feature), so routers that publish DHCP
+names in local DNS resolve `clock` or `clock.lan` without mDNS. The name
+is a setting: record version 3 appends a length byte and 24 bytes of
+name to version 2, and versions 1 and 2 still load with the default name
+from `config::DEFAULT_HOSTNAME`. Valid names are 1 to 24 characters of
+`a-z`, `0-9` and `-`, not starting or ending with `-`; the form and the
+API lower-case what they get and reject the rest. `net::hostname_task`
+holds a settings receiver and, when the name changes, calls
+`Stack::set_config_v4` with a fresh DHCP config, which re-sends the
+option and restarts the lease; the address normally comes back the
+same. The display shows `no1P` for the second or so DHCP takes. The
+renewal waits until the name has been stable for 3 s: done at once, it
+dropped the address while the page's response and the browser's redirect
+were still in flight, and the browser reported a connection reset (found
+on the panel). Saving to flash needs no such care; the persist task
+already waits 2 s and the write does not touch the network.
+
+**Roaming.** Found while testing: with two access points on one SSID the
+clock sometimes connected to the far one at -82 dBm and failed with
+`AuthenticationExpired`. esp-radio's default station scan method is
+`Fast`, which takes the first matching beacon on any channel.
+`ScanMethod::AllChannels` scans everything first and connects to the
+strongest, since esp-radio sets the driver's sort order to by-signal.
+One builder call in `net::station_config`; connecting takes a second or
+two longer.
+
+**Checked on the host** (scratch crate with `form.rs`, the pure part of
+`settings.rs` and the head parser from `http.rs`): a version 3 record
+round-trips and version 1 and 2 records migrate with the defaults for the
+fields they lack; a record with a hostname too long or holding a bad
+character is rejected; hostnames are lower-cased and the empty, leading
+or trailing dash, space and 25-character cases are refused; the form
+parser applies every key, turns absent checkboxes off only for the page,
+rejects an unknown key, a colour not in the palette, a brightness off the
+step list, `24:00`, a timezone past the limit and a malformed escape, and
+accepts an empty body; the page is 1628 bytes, within the 2 KB response
+buffer; the head parser finds the method, path and body length.
+
+**Verify on the panel.** Open `http://<ip>/` from a phone: the form shows
+the current colour, brightness, alarm, armed, 12/24 hour and timezone.
+Change the colour and submit; the panel changes at once and `settings:
+saved` follows 2 s later. `curl http://<ip>/api` prints JSON;
+`curl -d armed=on http://<ip>/api` lights the degree mark. Hold both
+buttons: the octets cycle. Set the timezone by 60 and the hour moves.
+Change the hostname: the log shows the DHCP renewal and the router's
+client list shows the new name.
 
 ## 6. Risks and how they are handled
 

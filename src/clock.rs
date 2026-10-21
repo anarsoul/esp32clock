@@ -9,7 +9,7 @@ use core::cell::Cell;
 use critical_section::Mutex;
 use embassy_time::{Duration, Instant};
 
-use crate::config::TZ_OFFSET_MINUTES;
+use crate::settings;
 
 const SECS_PER_DAY: i64 = 86_400;
 
@@ -45,10 +45,11 @@ pub fn is_synced() -> bool {
     critical_section::with(|cs| OFFSET_US.borrow(cs).get()).is_some()
 }
 
-/// Local time of day, if synced.
+/// Local time of day, if synced, in the timezone from the settings.
 pub fn now() -> Option<LocalTime> {
     let unix_s = unix_micros()?.div_euclid(1_000_000);
-    let local_s = (unix_s + TZ_OFFSET_MINUTES as i64 * 60).rem_euclid(SECS_PER_DAY);
+    let tz_minutes = settings::get().tz_offset_minutes as i64;
+    let local_s = (unix_s + tz_minutes * 60).rem_euclid(SECS_PER_DAY);
     Some(LocalTime {
         hour: (local_s / 3600) as u8,
         minute: (local_s % 3600 / 60) as u8,

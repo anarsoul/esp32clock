@@ -10,7 +10,9 @@ use core::cell::{Cell, RefCell};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::watch::{Receiver, Watch};
 
-use crate::config::{DEFAULT_ALARM, DEFAULT_BRIGHTNESS, DEFAULT_COLOR};
+use crate::config::{
+    DEFAULT_ALARM, DEFAULT_BRIGHTNESS, DEFAULT_COLOR, DEFAULT_HOSTNAME, DEFAULT_TWELVE_HOUR, DEFAULT_TZ_OFFSET_MINUTES,
+};
 use crate::panel::Rgb;
 
 /// Colours the top button cycles through.
@@ -25,8 +27,73 @@ pub const PALETTE: [Rgb; 8] = [
     Rgb::WHITE,
 ];
 
+/// Names of the palette entries, for the page and the API.
+pub const PALETTE_NAMES: [&str; 8] = ["red", "orange", "yellow", "green", "cyan", "blue", "magenta", "white"];
+
 /// Brightness steps the bottom button cycles through, in percent.
 pub const BRIGHTNESS_STEPS: [u8; 5] = [10, 25, 50, 75, 100];
+
+/// Timezone offsets this far either side of UTC are accepted, in minutes.
+pub const TZ_LIMIT_MINUTES: i16 = 14 * 60;
+
+/// Longest hostname, in bytes. Fits embassy-net's 32-byte DHCP option.
+pub const HOSTNAME_MAX: usize = 24;
+
+/// A DHCP hostname: 1 to `HOSTNAME_MAX` of `a-z`, `0-9` and `-`, not
+/// starting or ending with `-`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct Hostname {
+    len: u8,
+    bytes: [u8; HOSTNAME_MAX],
+}
+
+impl Hostname {
+    /// Validate and store a name, lower-casing ASCII letters.
+    pub fn new(name: &str) -> Option<Hostname> {
+        let src = name.as_bytes();
+        if src.is_empty() || src.len() > HOSTNAME_MAX || src[0] == b'-' || src[src.len() - 1] == b'-' {
+            return None;
+        }
+        let mut bytes = [0u8; HOSTNAME_MAX];
+        for (dst, &c) in bytes.iter_mut().zip(src) {
+            *dst = match c {
+                b'a'..=b'z' | b'0'..=b'9' | b'-' => c,
+                b'A'..=b'Z' => c.to_ascii_lowercase(),
+                _ => return None,
+            };
+        }
+        Some(Hostname { len: src.len() as u8, bytes })
+    }
+
+    /// The compile-time default; the constant is checked at build time.
+    pub const DEFAULT: Hostname = {
+        let src = DEFAULT_HOSTNAME.as_bytes();
+        assert!(!src.is_empty() && src.len() <= HOSTNAME_MAX, "DEFAULT_HOSTNAME length");
+        let mut bytes = [0u8; HOSTNAME_MAX];
+        let mut i = 0;
+        while i < src.len() {
+            let c = src[i];
+            assert!(
+                (c >= b'a' && c <= b'z') || (c >= b'0' && c <= b'9') || (c == b'-' && i != 0 && i != src.len() - 1),
+                "DEFAULT_HOSTNAME must be a-z, 0-9 and inner dashes"
+            );
+            bytes[i] = c;
+            i += 1;
+        }
+        Hostname { len: src.len() as u8, bytes }
+    };
+
+    pub fn as_str(&self) -> &str {
+        // Only ASCII gets in, so this cannot fail.
+        core::str::from_utf8(&self.bytes[..self.len as usize]).unwrap_or("")
+    }
+}
+
+impl core::fmt::Debug for Hostname {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{:?}", self.as_str())
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Settings {
@@ -35,14 +102,24 @@ pub struct Settings {
     pub alarm_hour: u8,
     pub alarm_minute: u8,
     pub alarm_armed: bool,
+    /// 12 hour time with the AM mark instead of 24 hour time.
+    pub twelve_hour: bool,
+    /// Minutes east of UTC.
+    pub tz_offset_minutes: i16,
+    /// Name sent to the DHCP server.
+    pub hostname: Hostname,
 }
 
 /// Bytes in a stored record.
-pub const RECORD_LEN: usize = 8;
+pub const RECORD_LEN: usize = 36;
 
-/// Stored record layout version. Bump when the layout changes; an old
-/// record is then ignored and the defaults apply.
-const RECORD_VERSION: u8 = 1;
+/// Stored record layout version. Bump when the layout changes and teach
+/// `from_record` the old one, or the user's settings are lost.
+const RECORD_VERSION: u8 = 3;
+
+/// Where the hostname sits in a version 3 record.
+const RECORD_HOSTNAME_LEN: usize = 9;
+const RECORD_HOSTNAME: usize = 10;
 
 impl Settings {
     /// The compile-time defaults.
@@ -52,6 +129,9 @@ impl Settings {
         alarm_hour: DEFAULT_ALARM.0,
         alarm_minute: DEFAULT_ALARM.1,
         alarm_armed: false,
+        twelve_hour: DEFAULT_TWELVE_HOUR,
+        tz_offset_minutes: DEFAULT_TZ_OFFSET_MINUTES,
+        hostname: Hostname::DEFAULT,
     };
 
     pub fn color(&self) -> Rgb {
@@ -68,42 +148,64 @@ impl Settings {
             && self.brightness < BRIGHTNESS_STEPS.len()
             && self.alarm_hour < 24
             && self.alarm_minute < 60
+            && (-TZ_LIMIT_MINUTES..=TZ_LIMIT_MINUTES).contains(&self.tz_offset_minutes)
     }
 
     /// The flash record: version, colour, brightness, alarm hour, alarm
-    /// minute, armed, two spare bytes.
+    /// minute, armed, twelve-hour, timezone offset as little-endian i16,
+    /// hostname length, hostname padded to 24 bytes, two spare bytes.
     pub fn to_record(&self) -> [u8; RECORD_LEN] {
-        [
+        let tz = self.tz_offset_minutes.to_le_bytes();
+        let mut r = [0u8; RECORD_LEN];
+        r[..9].copy_from_slice(&[
             RECORD_VERSION,
             self.color as u8,
             self.brightness as u8,
             self.alarm_hour,
             self.alarm_minute,
             self.alarm_armed as u8,
-            0,
-            0,
-        ]
+            self.twelve_hour as u8,
+            tz[0],
+            tz[1],
+        ]);
+        r[RECORD_HOSTNAME_LEN] = self.hostname.len;
+        r[RECORD_HOSTNAME..RECORD_HOSTNAME + HOSTNAME_MAX].copy_from_slice(&self.hostname.bytes);
+        r
     }
 
-    /// Parse a flash record. `None` for another version or a field out of
-    /// range, so a bad record falls back to the defaults.
-    pub fn from_record(r: &[u8; RECORD_LEN]) -> Option<Settings> {
-        if r[0] != RECORD_VERSION {
+    /// Parse a flash record. Older versions lack the later fields, which
+    /// take the defaults: version 1 (M5) stops after `armed`, version 2
+    /// (M6) after the timezone. `None` for an unknown version or a field
+    /// out of range, so a bad record falls back to the defaults.
+    pub fn from_record(r: &[u8]) -> Option<Settings> {
+        let mut s = Settings {
+            color: *r.get(1)? as usize,
+            brightness: *r.get(2)? as usize,
+            alarm_hour: *r.get(3)?,
+            alarm_minute: *r.get(4)?,
+            alarm_armed: *r.get(5)? != 0,
+            ..Settings::DEFAULT
+        };
+        let version = r[0];
+        if version >= 2 {
+            s.twelve_hour = *r.get(6)? != 0;
+            s.tz_offset_minutes = i16::from_le_bytes([*r.get(7)?, *r.get(8)?]);
+        }
+        if version >= 3 {
+            let len = *r.get(RECORD_HOSTNAME_LEN)? as usize;
+            let bytes = r.get(RECORD_HOSTNAME..RECORD_HOSTNAME + HOSTNAME_MAX)?;
+            let name = core::str::from_utf8(bytes.get(..len)?).ok()?;
+            s.hostname = Hostname::new(name)?;
+        }
+        if version > RECORD_VERSION {
             return None;
         }
-        let s = Settings {
-            color: r[1] as usize,
-            brightness: r[2] as usize,
-            alarm_hour: r[3],
-            alarm_minute: r[4],
-            alarm_armed: r[5] != 0,
-        };
         s.is_valid().then_some(s)
     }
 }
 
-/// Receivers: the display task and the persist task.
-const RECEIVERS: usize = 2;
+/// Receivers: the display task, the persist task and the hostname task.
+const RECEIVERS: usize = 3;
 
 static WATCH: Watch<CriticalSectionRawMutex, Settings, RECEIVERS> = Watch::new();
 

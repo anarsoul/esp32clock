@@ -12,6 +12,8 @@ pub enum Button {
     Top,
     /// S2, the lower button.
     Bottom,
+    /// Both held together. Only ever `Long`.
+    Both,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -61,7 +63,22 @@ impl Tracker {
         }
     }
 
-    fn poll(&mut self, raw_pressed: bool, now: Instant) {
+    /// Held past the long-press threshold, with no event sent for it yet.
+    fn long_due(&self, now: Instant) -> bool {
+        self.pressed_at.is_some_and(|t| now - t >= LONG_PRESS) && !self.long_sent
+    }
+
+    /// Treat the current press as reported; no event on release either.
+    fn consume(&mut self) {
+        if self.pressed_at.is_some() {
+            self.long_sent = true;
+        }
+    }
+
+    /// `other_held` holds back this button's long press while the other
+    /// is down, so that a two-button hold can be reported as its own
+    /// event instead.
+    fn poll(&mut self, raw_pressed: bool, now: Instant, other_held: bool) {
         if raw_pressed != self.last_raw {
             self.last_raw = raw_pressed;
             self.changed_at = now;
@@ -78,10 +95,7 @@ impl Tracker {
                 self.emit(Kind::Short);
             }
         }
-        if let Some(t) = self.pressed_at
-            && !self.long_sent
-            && now - t >= LONG_PRESS
-        {
+        if self.long_due(now) && !other_held {
             self.long_sent = true;
             self.emit(Kind::Long);
         }
@@ -101,8 +115,13 @@ pub async fn button_task(top: Input<'static>, bottom: Input<'static>) -> ! {
     let mut b = Tracker::new(Button::Bottom);
     loop {
         let now = Instant::now();
-        t.poll(top.is_low(), now);
-        b.poll(bottom.is_low(), now);
+        t.poll(top.is_low(), now, b.pressed_at.is_some());
+        b.poll(bottom.is_low(), now, t.pressed_at.is_some());
+        if t.long_due(now) && b.long_due(now) {
+            t.consume();
+            b.consume();
+            let _ = EVENTS.try_send(Event { button: Button::Both, kind: Kind::Long });
+        }
         Timer::after(POLL).await;
     }
 }

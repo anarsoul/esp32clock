@@ -69,11 +69,12 @@ type Map = MapStorage<u8, AsyncFlash, NoCache>;
 
 type MapError = sequential_storage::Error<FlashStorageError>;
 
-/// Scratch for the map: key, record, item header, rounded up. Word aligned
+/// Scratch for the map: key, record, item header, rounded up; a stale
+/// record of another length fits too. Word aligned
 /// so `esp-storage` reads into it directly instead of through a sector
 /// buffer on the stack.
 #[repr(C, align(4))]
-struct Scratch([u8; 64]);
+struct Scratch([u8; 128]);
 
 /// The settings map in the `nvs` partition.
 pub struct Store {
@@ -114,15 +115,15 @@ impl Store {
                 return None;
             }
         };
-        Some(Store { map: Map::new(AsyncFlash(flash), config, NoCache::new_uncached()), scratch: Scratch([0; 64]) })
+        Some(Store { map: Map::new(AsyncFlash(flash), config, NoCache::new_uncached()), scratch: Scratch([0; 128]) })
     }
 
     /// The stored settings, if there is a valid record. A map that cannot
     /// be read (first boot over a partition holding something else, or a
     /// torn write the repair could not fix) is erased so that saving works.
     pub async fn load(&mut self) -> Option<Settings> {
-        match self.map.fetch_item::<[u8; RECORD_LEN]>(&mut self.scratch.0, &KEY).await {
-            Ok(Some(record)) => match Settings::from_record(&record) {
+        match self.map.fetch_item::<&[u8]>(&mut self.scratch.0, &KEY).await {
+            Ok(Some(record)) => match Settings::from_record(record) {
                 Some(s) => {
                     info!("settings: loaded from flash");
                     Some(s)
@@ -148,7 +149,8 @@ impl Store {
 
     /// Write the settings.
     pub async fn save(&mut self, s: &Settings) -> Result<(), MapError> {
-        self.map.store_item(&mut self.scratch.0, &KEY, &s.to_record()).await
+        let record: [u8; RECORD_LEN] = s.to_record();
+        self.map.store_item(&mut self.scratch.0, &KEY, &record.as_slice()).await
     }
 }
 

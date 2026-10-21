@@ -28,12 +28,16 @@ esp-radio = { version = "1.0.0-beta.1", features = [
 esp-alloc = { version = "0.11.0", features = ["esp32c3"] }
 embassy-net = { version = "0.9.1", features = [
   "dhcpv4",
+  "dhcpv4-hostname",
   "dns",
   "log",
   "medium-ethernet",
   "proto-ipv4",
+  "tcp",
   "udp",
 ] }
+embedded-io-async = "0.7.0"
+heapless          = "0.9"
 sntpc              = { version = "0.11.0", default-features = false }
 sntpc-net-embassy  = "0.11.0"
 sntpc-time-embassy = "0.6.0"

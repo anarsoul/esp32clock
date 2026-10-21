@@ -6,6 +6,8 @@ pub mod buzzer;
 pub mod clock;
 pub mod config;
 pub mod display;
+pub mod form;
+pub mod http;
 pub mod net;
 pub mod panel;
 pub mod scan;

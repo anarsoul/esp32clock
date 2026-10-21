@@ -29,9 +29,13 @@ WIFI_SSID='…' WIFI_PASSWORD='…' TZ_OFFSET_MINUTES=-420 cargo run --release
 ```
 
 `cargo run` flashes with espflash and opens the monitor. Credentials and the
-timezone are read at build time by `src/config.rs`; `build.rs` reruns the
-build when they change. `rust-version` must stay at 1.95 or higher or cargo's
-MSRV-aware resolver picks an esp-rom-sys that esp-storage cannot build with.
+default timezone are read at build time by `src/config.rs`; `build.rs` reruns
+the build when they change. The timezone, 12/24 hour, colour, brightness,
+alarm and DHCP hostname are settings: saved in the `nvs` partition, editable
+from the buttons and from `http://<ip>/` (form) or `/api` (form-encoded keys,
+JSON back).
+`rust-version` must stay at 1.95 or higher or cargo's MSRV-aware resolver
+picks an esp-rom-sys that esp-storage cannot build with.
 
 ## Layout
 
@@ -40,9 +44,13 @@ MSRV-aware resolver picks an esp-rom-sys that esp-storage cannot build with.
 | `src/aip33628.rs` | frame format, bit-reversed current table, quad-nibble waveform encoder; pure `core` |
 | `src/panel.rs` | COM/SEG map, font, per-position colour, gamma and brightness tables, `Panel::render` → `ScanImage` |
 | `src/scan.rs` | cycle/transfer builder, double-buffered DMA scan task, restart-gap statistics |
-| `src/display.rs` | UI loop: tick or button → `ui` → draw → publish; rings the alarm |
-| `src/ui.rs` | settings and mode state machine, pure logic |
-| `src/buttons.rs` | debounced short/long press events |
+| `src/display.rs` | UI loop: tick, button or settings change → `ui` → draw → publish; rings the alarm; shows the IP |
+| `src/ui.rs` | mode state machine, pure logic; edits the settings it is handed |
+| `src/settings.rs` | `Settings`, palette and brightness tables, shared `Watch` with change signal, flash record format |
+| `src/storage.rs` | nvs partition lookup, `sequential-storage` map over `esp-storage`, debounced persist task |
+| `src/form.rs` | key=value parsing, JSON and the HTML page; pure logic |
+| `src/http.rs` | one-socket HTTP/1.0 server: `GET`/`POST` on `/` and `/api` |
+| `src/buttons.rs` | debounced short/long press events, plus the two-button hold |
 | `src/buzzer.rs` | LEDC PWM beeps and melodies on an open-drain pin |
 | `src/clock.rs` | Unix time = uptime + NTP offset; local time |
 | `src/net.rs` | Wi-Fi station, embassy-net, SNTP |
@@ -92,7 +100,11 @@ repo; recreate it in a scratch crate by copying `aip33628.rs` and
 
 - `no_std`, no `alloc` use outside what esp-radio needs; the heap exists
   for the Wi-Fi driver.
-- Keep hardware out of `ui.rs` and `panel.rs` so they stay testable.
+- Keep hardware out of `ui.rs`, `panel.rs`, `form.rs` and the record part of
+  `settings.rs` so they stay testable.
+- Settings change only through `settings::update`; it is what wakes the
+  display and the persist task. Bump the record version in `settings.rs`
+  when the layout changes and keep reading the old one.
 - Tables copied from the reference docs (`BLOCKS`, `SEGMAP`, `COM_SEQ`,
   `IS_WIRE`) are verbatim; cite `3rdparty/HU-058_ESPHome/docs/` when
   changing anything near them.

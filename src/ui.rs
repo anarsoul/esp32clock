@@ -16,12 +16,20 @@ const SET_TIMEOUT: Duration = Duration::from_secs(15);
 /// Stop ringing after this long if nobody presses anything.
 const RING_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// Each octet of the IP stays this long.
+pub const IP_STEP: Duration = Duration::from_millis(2000);
+
+/// Show the four octets this many times.
+const IP_ROUNDS: u64 = 2;
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Mode {
     Clock,
     SetHour,
     SetMinute,
     Ringing,
+    /// Showing the IP address, octet by octet.
+    ShowIp,
 }
 
 /// Which part of an alarm-set view is being edited.
@@ -42,6 +50,8 @@ pub enum View {
     AlarmSet { hour: u8, minute: u8, field: Field, blank: bool },
     /// Alarm ringing: the time, all on, flashing.
     Ringing { time: LocalTime, flash: bool },
+    /// Octet `index` (0 to 3) of the IP address.
+    Ip { index: usize },
 }
 
 pub struct Ui {
@@ -50,6 +60,8 @@ pub struct Ui {
     last_press: Instant,
     /// When ringing started.
     ring_started: Instant,
+    /// When the IP display started.
+    ip_started: Instant,
     /// Minute of day the alarm last fired on, so it fires once.
     fired_minute: Option<u16>,
 }
@@ -63,14 +75,14 @@ impl Default for Ui {
 impl Ui {
     pub fn new() -> Self {
         let now = Instant::now();
-        Ui { mode: Mode::Clock, last_press: now, ring_started: now, fired_minute: None }
+        Ui { mode: Mode::Clock, last_press: now, ring_started: now, ip_started: now, fired_minute: None }
     }
 
     /// Feed a button event, editing `settings` as the mode dictates.
     pub fn handle(&mut self, settings: &mut Settings, ev: Event, now: Instant) {
         self.last_press = now;
         match self.mode {
-            Mode::Ringing => self.mode = Mode::Clock,
+            Mode::Ringing | Mode::ShowIp => self.mode = Mode::Clock,
             Mode::Clock => match (ev.button, ev.kind) {
                 (Button::Top, Kind::Short) => {
                     settings.color = (settings.color + 1) % PALETTE.len();
@@ -82,6 +94,11 @@ impl Ui {
                 (Button::Bottom, Kind::Long) => {
                     settings.alarm_armed = !settings.alarm_armed;
                 }
+                (Button::Both, Kind::Long) => {
+                    self.ip_started = now;
+                    self.mode = Mode::ShowIp;
+                }
+                (Button::Both, Kind::Short) => {}
             },
             Mode::SetHour => match (ev.button, ev.kind) {
                 (Button::Top, Kind::Short) => {
@@ -114,6 +131,11 @@ impl Ui {
                     self.mode = Mode::Clock;
                 }
             }
+            Mode::ShowIp => {
+                if now - self.ip_started >= IP_STEP * (4 * IP_ROUNDS as u32) {
+                    self.mode = Mode::Clock;
+                }
+            }
             Mode::Clock => {
                 if let Some(t) = time {
                     let minute = t.hour as u16 * 60 + t.minute as u16;
@@ -140,6 +162,10 @@ impl Ui {
     pub fn view(&self, settings: &Settings, time: Option<LocalTime>, phase_ms: u64) -> View {
         let blink = (phase_ms / 250) % 2 == 1;
         match self.mode {
+            Mode::ShowIp => {
+                let elapsed = phase_ms.saturating_sub(self.ip_started.as_millis());
+                View::Ip { index: (elapsed / IP_STEP.as_millis()) as usize % 4 }
+            }
             Mode::SetHour | Mode::SetMinute => View::AlarmSet {
                 hour: settings.alarm_hour,
                 minute: settings.alarm_minute,

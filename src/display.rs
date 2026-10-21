@@ -1,14 +1,15 @@
 //! Turns the clock and the UI state into panel images, and rings the alarm.
 
 use embassy_futures::select::{Either3, select3};
+use embassy_net::Stack;
 use embassy_time::{Duration, Instant, Timer};
 
 use crate::buttons;
 use crate::buzzer::{self, Beep};
-use crate::config::{MAX_CURRENT_STEP, TWELVE_HOUR};
+use crate::config::MAX_CURRENT_STEP;
 use crate::panel::{Panel, Rgb, ScanImage, current_step_for};
 use crate::settings::{self, Settings};
-use crate::ui::{Field, Ui, View};
+use crate::ui::{Field, IP_STEP, Ui, View};
 use crate::{clock, scan};
 
 /// Step time of the waiting animation and of the blink.
@@ -29,9 +30,9 @@ fn dimmed(c: Rgb) -> Rgb {
 }
 
 /// Hours as shown: 24 hour, or 12 hour with the AM mark.
-fn draw_hhmm(panel: &mut Panel, hour: u8, minute: u8, show_hour: bool, show_minute: bool) {
+fn draw_hhmm(panel: &mut Panel, twelve_hour: bool, hour: u8, minute: u8, show_hour: bool, show_minute: bool) {
     let mut h = hour;
-    if TWELVE_HOUR {
+    if twelve_hour {
         h %= 12;
         if h == 0 {
             h = 12;
@@ -59,20 +60,38 @@ fn draw_sweep(panel: &mut Panel, color: Rgb, phase_ms: u64) {
     panel.set_char(tail, '-');
 }
 
-fn draw(panel: &mut Panel, view: View, settings: &Settings, phase_ms: u64) {
+/// One octet of the IP: its number (1 to 4) in the first digit, its
+/// value right-aligned in the other three. `no1P` without an address.
+fn draw_ip(panel: &mut Panel, ip: Option<[u8; 4]>, index: usize) {
+    let Some(ip) = ip else {
+        for (i, c) in "no1P".chars().enumerate() {
+            panel.set_char(i, c);
+        }
+        return;
+    };
+    let v = ip[index];
+    panel.set_char(0, (b'1' + index as u8) as char);
+    panel.set_char(1, if v >= 100 { (b'0' + v / 100) as char } else { ' ' });
+    panel.set_char(2, if v >= 10 { (b'0' + v / 10 % 10) as char } else { ' ' });
+    panel.set_char(3, (b'0' + v % 10) as char);
+}
+
+fn draw(panel: &mut Panel, view: View, settings: &Settings, ip: Option<[u8; 4]>, phase_ms: u64) {
     panel.clear();
     panel.set_color(settings.color());
     panel.set_current(current_step_for(settings.brightness_pct()).min(MAX_CURRENT_STEP));
     panel.set_degree(settings.alarm_armed);
+    let twelve = settings.twelve_hour;
     match view {
         View::Sweep => draw_sweep(panel, settings.color(), phase_ms),
         View::Time { time, colon } => {
-            draw_hhmm(panel, time.hour, time.minute, true, true);
+            draw_hhmm(panel, twelve, time.hour, time.minute, true, true);
             panel.set_colon(colon);
         }
         View::AlarmSet { hour, minute, field, blank } => {
             draw_hhmm(
                 panel,
+                twelve,
                 hour,
                 minute,
                 !(blank && field == Field::Hour),
@@ -82,17 +101,18 @@ fn draw(panel: &mut Panel, view: View, settings: &Settings, phase_ms: u64) {
         }
         View::Ringing { time, flash } => {
             if flash {
-                draw_hhmm(panel, time.hour, time.minute, true, true);
+                draw_hhmm(panel, twelve, time.hour, time.minute, true, true);
                 panel.set_colon(true);
             }
         }
+        View::Ip { index } => draw_ip(panel, ip, index),
     }
 }
 
 /// Run the UI: wait for a tick, a button or a settings change from
-/// elsewhere, update, draw, ring.
+/// elsewhere, update, draw, ring. `stack` is only asked for the IP.
 #[embassy_executor::task]
-pub async fn display_task() -> ! {
+pub async fn display_task(stack: Stack<'static>) -> ! {
     let mut panel = Panel::new();
     let mut ui = Ui::new();
     let mut changes = settings::receiver();
@@ -114,7 +134,8 @@ pub async fn display_task() -> ! {
         }
 
         let view = ui.view(&current, time, now.as_millis());
-        draw(&mut panel, view, &current, now.as_millis());
+        let ip = stack.config_v4().map(|c| c.address.address().octets());
+        draw(&mut panel, view, &current, ip, now.as_millis());
         let img = panel.render();
         if last != Some(img) {
             scan::publish(&img).await;
@@ -123,8 +144,11 @@ pub async fn display_task() -> ! {
 
         // Next redraw: the next second in clock mode, the blink step while
         // anything blinks or sweeps, plus a little so the boundary has passed.
-        let steady = matches!(view, View::Time { .. });
-        let wait = if steady { clock::until_next_second() } else { BLINK_STEP / 4 };
+        let wait = match view {
+            View::Time { .. } => clock::until_next_second(),
+            View::Ip { .. } => IP_STEP / 4,
+            _ => BLINK_STEP / 4,
+        };
         match select3(
             Timer::after(wait + Duration::from_millis(2)),
             buttons::next_event(),
