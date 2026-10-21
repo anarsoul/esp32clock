@@ -666,6 +666,8 @@ scan. The failing BSSID turned out to be the AP that reads -35 dBm from
 the other room, so the two locations simply have different nearest APs.
 At 8.5 dBm both connected first time, and from the far room the scan now
 lists both APs (-71 and -83 dBm) with the driver picking the stronger.
+Inside the enclosure 8.5 dBm was not enough; the ceiling went to 44
+(11 dBm), which connects and holds with the clock in its case.
 
 ## 6. Risks and how they are handled
 
