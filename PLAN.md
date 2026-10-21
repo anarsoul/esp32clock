@@ -393,6 +393,37 @@ Settings live in RAM; a reboot returns to the compile-time defaults.
   NVS-style key-value store on a dedicated partition, e.g. via
   `sequential-storage` over `esp-storage`), written only when a setting
   changes and read once at boot.
+- Settings move out of the display task into a shared store with a change
+  signal, so both the buttons and M6 can edit them and the display redraws
+  on either.
+
+### M6 — settings over Wi-Fi
+
+A small HTTP page served by the clock on its LAN address.
+
+- **Server.** `picoserve` on embassy-net TCP (it targets exactly this
+  stack), one or two sockets, no TLS. A single HTML page with a form:
+  colour (palette choice or a colour picker mapped to `Rgb`), brightness,
+  alarm time and armed, 12/24 hour, timezone offset. `GET /` renders the
+  current values, `POST /` applies them and redirects back. A `GET /api`
+  JSON view and `POST /api` make it scriptable from Home Assistant or a
+  shell.
+- **Shared settings.** The store from M5 is the single source of truth; the
+  page and the buttons both write through it and the display picks up the
+  change signal. Timezone offset and 12/24 hour become settings rather than
+  build-time constants.
+- **Finding it.** Log the IP at boot (already done) and show it on the panel
+  on a long press of both buttons, four digits at a time, so no serial
+  console is needed. mDNS (`clock.local`) is possible with embassy-net's
+  `mdns` feature and worth trying once the page works.
+- **Out of scope for M6.** Wi-Fi credentials stay build-time. Provisioning
+  through an access-point captive portal is its own milestone, since it
+  needs AP+STA mode, DHCP server and a DNS catch-all.
+- **Risks.** Flash and RAM: the HTTP server and page are small, but
+  embassy-net TCP buffers and another socket add a few KB; heap is at
+  about 54 KB free with Wi-Fi up. Keep the page static and tiny, no
+  JavaScript needed. The server task runs in thread mode and never touches
+  the scan path.
 
 ## 6. Risks and how they are handled
 
