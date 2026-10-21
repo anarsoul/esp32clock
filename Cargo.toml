@@ -45,6 +45,7 @@ embassy-executor = { version = "0.10.0", features = ["log"] }
 embassy-time = { version = "0.5.0", features = ["log"] }
 embassy-sync = "0.7"
 esp-backtrace = { version = "0.20.0", features = [
+  "custom-halt",
   "esp32c3",
   "panic-handler",
   "println",

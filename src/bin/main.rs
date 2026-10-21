@@ -34,6 +34,17 @@ use esp32clock::{display, net, scan};
 // This creates a default app-descriptor required by the esp-idf bootloader.
 esp_bootloader_esp_idf::esp_app_desc!();
 
+/// Called by esp-backtrace after it has printed the panic message and the
+/// backtrace. A clock should not sit dark waiting for a power cycle, so
+/// give the serial output a moment to drain and reboot. The DMA scan has
+/// already stopped by then; the panel is dark until the firmware is back,
+/// a couple of seconds including the NTP sync.
+#[unsafe(no_mangle)]
+pub extern "Rust" fn custom_halt() -> ! {
+    esp_hal::delay::Delay::new().delay_millis(500);
+    esp_hal::system::software_reset()
+}
+
 /// Display wires, as GPIO numbers, for the idle pull-downs.
 const DISPLAY_GPIOS: [usize; 4] = [6, 7, 8, 9];
 
