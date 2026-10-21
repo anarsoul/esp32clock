@@ -703,6 +703,74 @@ settings mutably and the display loop runs it through
 missed-alarm check on boot goes through the same gate, where the flag is
 always false. No panel indication of the flag yet.
 
+### Form posts are all or nothing (after M8)
+
+A code review found that `POST /` ran `form::apply` on the live
+settings inside `settings::update`. `apply` turns the three checkbox
+fields off before it reads any pair, and stops at the first bad pair, so
+a form the browser could submit, such as one with the alarm time
+cleared (`alarm=`), left colour, brightness and melody applied and the
+alarm disarmed and 12-hour mode off, then answered with the usual
+redirect and no word of it. Checked on the host before the fix: that
+body returns `BadValue` with `armed` and `twelve_hour` both false.
+
+The fix follows `/api`: the body is applied to a copy of the settings
+and committed with one `update` only when every pair parsed, which also
+takes the parsing out of the watch's critical section. On an error the
+redirect goes to `/?error=value` or `/?error=key`; the request parser
+now keeps the query string, and the page renders one line above the
+form saying that nothing was saved and why. `/play` keeps previewing
+whatever it could parse, since it saves nothing.
+
+**Checked on the host** (the scratch crate of the pure modules): the
+cleared-alarm body leaves the copy untouched apart from the reported
+error; the page is 2244 bytes plain and 2306 with the notice, 2409 with
+headers, of the 2560-byte response buffer.
+
+**Verify on the panel.** Open the page, clear the alarm time field, press
+Save: the page comes back with the notice, and the alarm stays armed and
+the clock in the mode it was. Correct the time and Save: the notice is
+gone and the values stick.
+
+### Review backlog (2026-10-21)
+
+Found in the same review, not yet done, in rough order of value:
+
+- **Alarm lost while in another mode.** `Ui::tick` only checks the alarm
+  in clock mode. If the alarm minute passes entirely while the user is
+  in alarm-set mode or the IP display (both run about 15 s and the set
+  mode is extended by every press), it never rings; the missed-alarm
+  grace covers only the first valid time after boot. Evaluate the due
+  check in every mode and switch to ringing from any of them, or on the
+  return to clock mode ring if the alarm came round within the grace.
+- **Spaced day lists.** `parse_days` trims each name, but the 32-byte
+  value buffer in `form::apply` is one byte short of
+  `mon, tue, wed, thu, fri, sat, sun`, so the API answers "bad value"
+  before the trim runs. Raise the buffer to 40 or so.
+- **Page buffer headroom.** The worst-case page plus headers is 2409 of
+  the 2560-byte `RESPONSE_BUF`. One more select or a longer label tips
+  it into the 500 path. Raise it to 4096, about 4.5 KB more across the
+  three listeners.
+- **First wake of a fresh watch receiver.** embassy-sync starts a
+  receiver at id 0 and `settings::init` bumps the watch to 1, so the
+  first `changed()` returns at once. `persist_task` swallows that with
+  `try_changed`; the display and hostname tasks do not, costing one
+  extra redraw and one no-op renew check. A `try_changed` after
+  `receiver()` in those two, or a helper in `settings`, makes them
+  consistent.
+- **Build-time timezone range.** `TZ_OFFSET_MINUTES` is cast to i16 in
+  `config.rs` without a range check, so a wild value wraps silently and
+  `Settings::DEFAULT` is never run through `is_valid`. A const assert
+  against `TZ_LIMIT_MINUTES` catches it at compile time.
+- **Unused public API.** `Panel::set_time`, `set_segment`,
+  `set_position_color`, `set_dash`, `Levels::OFF`, `clock::is_synced`,
+  `aip33628::IS_MA_TENTHS` and `scan::SLOT_US` have no callers; the lib
+  crate hides the warnings. `Panel::lamp_test` is also unused but worth
+  keeping as a hardware aid.
+- **Gap statistics on a DMA start failure.** The retry path in
+  `scan_task` leaves `ended_at` set, so each retry adds its delay to the
+  restart-gap statistics. Statistics only.
+
 ## 6. Risks and how they are handled
 
 | risk | mitigation |

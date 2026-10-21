@@ -179,14 +179,21 @@ pub fn write_json(out: &mut impl core::fmt::Write, s: &Settings) -> core::fmt::R
     )
 }
 
-/// The settings page.
-pub fn write_page(out: &mut impl core::fmt::Write, s: &Settings) -> core::fmt::Result {
+/// The settings page. `error` is why the last form post was refused, if
+/// it was; the page then says so above the form.
+pub fn write_page(out: &mut impl core::fmt::Write, s: &Settings, error: Option<FormError>) -> core::fmt::Result {
     out.write_str(
         "<!doctype html><html><head><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\">\
 <title>Clock</title><style>body{font-family:sans-serif;max-width:22em;margin:2em auto;padding:0 1em}\
 label{display:block;margin:.8em 0}select,input[type=time],input[type=number],input[type=text]{font-size:1em;width:100%;box-sizing:border-box}\
-button{font-size:1em;padding:.5em 1.5em;margin-top:1em}</style></head><body><h1>Clock</h1><form method=post action=/>",
+button{font-size:1em;padding:.5em 1.5em;margin-top:1em}p.err{color:#b00}</style></head><body><h1>Clock</h1>",
     )?;
+    match error {
+        None => {}
+        Some(FormError::BadValue) => out.write_str("<p class=err>Nothing was saved: a field had a bad value.</p>")?,
+        Some(FormError::UnknownKey) => out.write_str("<p class=err>Nothing was saved: an unknown field was sent.</p>")?,
+    }
+    out.write_str("<form method=post action=/>")?;
     out.write_str("<label>Colour <select name=color>")?;
     for (i, name) in PALETTE_NAMES.iter().enumerate() {
         write!(out, "<option value={name}{}>{name}</option>", if i == s.color { " selected" } else { "" })?;

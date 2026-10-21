@@ -72,10 +72,12 @@ enum Method {
     Post,
 }
 
-/// What was asked. The body is a slice of the request buffer.
+/// What was asked. The body is a slice of the request buffer; `query` is
+/// what followed `?` in the target, without the `?`.
 struct Request<'a> {
     method: Method,
     path: &'a str,
+    query: &'a str,
     body: &'a [u8],
 }
 
@@ -85,6 +87,7 @@ struct Head {
     method: Method,
     target_start: usize,
     path_len: usize,
+    target_len: usize,
     content_length: usize,
 }
 
@@ -105,7 +108,7 @@ fn parse_head(head: &str) -> Option<Head> {
         .find(|(k, _)| k.eq_ignore_ascii_case("content-length"))
         .and_then(|(_, v)| v.trim().parse().ok())
         .unwrap_or(0);
-    Some(Head { method, target_start, path_len, content_length })
+    Some(Head { method, target_start, path_len, target_len: target.len(), content_length })
 }
 
 /// Read the head and the body. `None` for anything that is not a request
@@ -139,12 +142,34 @@ async fn read_request<'a>(socket: &mut TcpSocket<'_>, buf: &'a mut [u8; REQUEST_
     }
 
     let (head_bytes, rest) = buf.split_at(head_end);
-    let path = core::str::from_utf8(&head_bytes[head.target_start..head.target_start + head.path_len]).ok()?;
-    Some(Request { method: head.method, path, body: &rest[..head.content_length] })
+    let target = core::str::from_utf8(&head_bytes[head.target_start..head.target_start + head.target_len]).ok()?;
+    let (path, query) = target.split_at(head.path_len);
+    let query = query.strip_prefix('?').unwrap_or(query);
+    Some(Request { method: head.method, path, query, body: &rest[..head.content_length] })
 }
 
 fn status_line(out: &mut Response, status: &str, content_type: &str) -> core::fmt::Result {
     write!(out, "HTTP/1.0 {status}\r\nContent-Type: {content_type}\r\nConnection: close\r\nCache-Control: no-store\r\n\r\n")
+}
+
+/// Back to the page, with the error of a rejected form in the query so
+/// the page can say that nothing was saved.
+fn redirect_home(out: &mut Response, error: Option<FormError>) -> core::fmt::Result {
+    let suffix = match error {
+        None => "",
+        Some(FormError::BadValue) => "?error=value",
+        Some(FormError::UnknownKey) => "?error=key",
+    };
+    write!(out, "HTTP/1.0 303 See Other\r\nLocation: /{suffix}\r\nConnection: close\r\n\r\n")
+}
+
+/// The error the page was redirected back with, from `?error=...`.
+fn error_from_query(query: &str) -> Option<FormError> {
+    query.split('&').find_map(|pair| match pair.split_once('=') {
+        Some(("error", "value")) => Some(FormError::BadValue),
+        Some(("error", "key")) => Some(FormError::UnknownKey),
+        _ => None,
+    })
 }
 
 /// Build the response for one request.
@@ -152,15 +177,22 @@ fn respond(out: &mut Response, req: &Request<'_>) -> core::fmt::Result {
     match (req.method, req.path) {
         (Method::Get, "/") => {
             status_line(out, "200 OK", "text/html; charset=utf-8")?;
-            form::write_page(out, &settings::get())
+            form::write_page(out, &settings::get(), error_from_query(req.query))
         }
         (Method::Post, "/") => {
-            let mut result = Ok(());
-            settings::update(|s| result = form::apply(s, req.body, true));
-            if let Err(e) = result {
-                warn!("http: form rejected: {e:?}");
+            // All or nothing: the form is applied to a copy and committed
+            // only if every pair parsed, so a bad field (an alarm time the
+            // browser sent empty, say) cannot leave the checkboxes, which
+            // `apply` resets first, half applied.
+            let mut trial = settings::get();
+            let result = form::apply(&mut trial, req.body, true);
+            match result {
+                Ok(()) => {
+                    settings::update(|s| *s = trial);
+                }
+                Err(e) => warn!("http: form rejected: {e:?}"),
             }
-            write!(out, "HTTP/1.0 303 See Other\r\nLocation: /\r\nConnection: close\r\n\r\n")
+            redirect_home(out, result.err())
         }
         (Method::Post, "/play") => {
             // Preview the sound chosen in the form without saving anything:
@@ -170,7 +202,7 @@ fn respond(out: &mut Response, req: &Request<'_>) -> core::fmt::Result {
                 warn!("http: play form rejected: {e:?}");
             }
             buzzer::preview(trial.melody);
-            write!(out, "HTTP/1.0 303 See Other\r\nLocation: /\r\nConnection: close\r\n\r\n")
+            redirect_home(out, None)
         }
         (Method::Get, "/api") => {
             status_line(out, "200 OK", "application/json")?;
