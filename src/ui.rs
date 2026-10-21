@@ -140,7 +140,11 @@ impl Ui {
                 if let Some(t) = time {
                     let minute = t.hour as u16 * 60 + t.minute as u16;
                     let alarm = settings.alarm_hour as u16 * 60 + settings.alarm_minute as u16;
-                    if settings.alarm_armed && minute == alarm && self.fired_minute != Some(minute) {
+                    if settings.alarm_armed
+                        && settings.alarm_on(t.weekday)
+                        && minute == alarm
+                        && self.fired_minute != Some(minute)
+                    {
                         self.fired_minute = Some(minute);
                         self.ring_started = now;
                         self.mode = Mode::Ringing;

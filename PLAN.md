@@ -460,7 +460,7 @@ read the live settings.
 **Server.** `src/http.rs`, three identical tasks in thread mode, each on
 its own embassy-net TCP socket, HTTP/1.0 style: read the request head
 into a 1.5 KB buffer, read a body of at most 512 bytes if
-`Content-Length` says so, write the whole response from a 2 KB buffer,
+`Content-Length` says so, write the whole response from a 2.5 KB buffer,
 close. One request per connection, which is all a form needs. Three
 listeners rather than one because a browser opens more connections than
 it uses: a speculative one alongside the page, one for the favicon, a
@@ -505,7 +505,7 @@ holds back the single long presses while both are down. mDNS is left out:
 embassy-net has no responder and the IP display covers it.
 
 **Resources.** Per listener: socket buffers 1 KB each way, request
-1.5 KB, response 2 KB, all in the task's static frame; 16.5 KB for the
+1.5 KB, response 2.5 KB, all in the task's static frame; 18 KB for the
 three. `StackResources` goes from 4 to 8 sockets (DNS, SNTP, three TCP,
 headroom). The server never touches the scan
 path.
@@ -557,6 +557,42 @@ saved` follows 2 s later. `curl http://<ip>/api` prints JSON;
 buttons: the octets cycle. Set the timezone by 60 and the hour moves.
 Change the hostname: the log shows the DHCP renewal and the router's
 client list shows the new name.
+
+### M7 — alarm days — DONE, verified on the panel 2026-10-21
+
+The alarm rings only on chosen days, so a weekday alarm stays armed
+over the weekend without ringing.
+
+- **Setting.** `alarm_days`, a 7-bit mask with bit 0 Monday and bit 6
+  Sunday, default all seven. Record version 4 stores it in the byte at
+  offset 34 that version 3 left spare; a version 3 record loads with every
+  day set. A mask of zero is rejected as a value: it would be a disarmed
+  alarm that looks armed.
+- **Clock.** `LocalTime` gains `weekday` (0 Monday to 6 Sunday), from the
+  local day count since 1970-01-01, a Thursday, so `(days + 3) mod 7`.
+- **Trigger.** `Ui::tick` fires only when armed and today's bit is set.
+  The degree mark still means armed, whatever the day, so a glance on
+  Sunday evening says Monday's alarm is on.
+- **Page and API.** Key `days`: `all`, `weekdays`, `weekend`, or a
+  comma-separated list of `mon` to `sun`. The page offers the three
+  presets in a select, plus `custom` showing the list when the API set
+  something else. JSON reports the preset name when one matches and the
+  list otherwise.
+- **Buttons.** Unchanged; the long press on the bottom button still arms
+  and disarms.
+
+**Checked on the host:** the weekday of 1970-01-01, 1969-12-31,
+2000-01-01 and 2026-10-21; a version 3 record loads with every day set
+and a version 4 record round-trips; masks of zero and with bit 7 are
+rejected; the parser and printer agree on the presets and on lists, and
+refuse the empty string, `none` and a trailing comma; the page selects
+the preset or shows the custom list. The page is now 1842 bytes, so the
+response buffer grew from 2 KB to 2.5 KB.
+
+**Verify on the panel.** Set `days=weekend` from the page on a weekday,
+set the alarm one minute ahead, arm it: nothing rings, the degree mark is
+lit. Set `days=all`: it rings. `curl -d days=mon,wed http://<ip>/api`
+echoes `"days":"mon,wed"`; `days=none` and `days=` get a 400.
 
 ## 6. Risks and how they are handled
 

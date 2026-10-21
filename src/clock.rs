@@ -22,6 +22,14 @@ pub struct LocalTime {
     pub hour: u8,
     pub minute: u8,
     pub second: u8,
+    /// 0 is Monday, 6 is Sunday.
+    pub weekday: u8,
+}
+
+/// Day of the week of a local day count since 1970-01-01, which was a
+/// Thursday. 0 is Monday.
+pub fn weekday_of_days(days: i64) -> u8 {
+    (days + 3).rem_euclid(7) as u8
 }
 
 fn uptime_us() -> i64 {
@@ -49,11 +57,13 @@ pub fn is_synced() -> bool {
 pub fn now() -> Option<LocalTime> {
     let unix_s = unix_micros()?.div_euclid(1_000_000);
     let tz_minutes = settings::get().tz_offset_minutes as i64;
-    let local_s = (unix_s + tz_minutes * 60).rem_euclid(SECS_PER_DAY);
+    let local = unix_s + tz_minutes * 60;
+    let local_s = local.rem_euclid(SECS_PER_DAY);
     Some(LocalTime {
         hour: (local_s / 3600) as u8,
         minute: (local_s % 3600 / 60) as u8,
         second: (local_s % 60) as u8,
+        weekday: weekday_of_days(local.div_euclid(SECS_PER_DAY)),
     })
 }
 

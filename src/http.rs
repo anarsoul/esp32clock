@@ -27,7 +27,7 @@ const RX_BUF: usize = 1024;
 const TX_BUF: usize = 1024;
 const REQUEST_BUF: usize = 1536;
 const BODY_MAX: usize = 512;
-const RESPONSE_BUF: usize = 2048;
+const RESPONSE_BUF: usize = 2560;
 
 /// A client that stalls this long mid-transfer is dropped.
 const TIMEOUT: Duration = Duration::from_secs(5);

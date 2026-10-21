@@ -108,6 +108,8 @@ pub struct Settings {
     pub tz_offset_minutes: i16,
     /// Name sent to the DHCP server.
     pub hostname: Hostname,
+    /// Days the alarm rings on: bit 0 Monday to bit 6 Sunday.
+    pub alarm_days: u8,
 }
 
 /// Bytes in a stored record.
@@ -115,11 +117,26 @@ pub const RECORD_LEN: usize = 36;
 
 /// Stored record layout version. Bump when the layout changes and teach
 /// `from_record` the old one, or the user's settings are lost.
-const RECORD_VERSION: u8 = 3;
+const RECORD_VERSION: u8 = 4;
 
 /// Where the hostname sits in a version 3 record.
 const RECORD_HOSTNAME_LEN: usize = 9;
 const RECORD_HOSTNAME: usize = 10;
+
+/// Where the alarm days sit in a version 4 record.
+const RECORD_ALARM_DAYS: usize = 34;
+
+/// Day names, Monday first, for the page and the API.
+pub const DAY_NAMES: [&str; 7] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+
+/// Every day of the week.
+pub const DAYS_ALL: u8 = 0x7f;
+
+/// Monday to Friday.
+pub const DAYS_WEEKDAYS: u8 = 0x1f;
+
+/// Saturday and Sunday.
+pub const DAYS_WEEKEND: u8 = 0x60;
 
 impl Settings {
     /// The compile-time defaults.
@@ -132,6 +149,7 @@ impl Settings {
         twelve_hour: DEFAULT_TWELVE_HOUR,
         tz_offset_minutes: DEFAULT_TZ_OFFSET_MINUTES,
         hostname: Hostname::DEFAULT,
+        alarm_days: DAYS_ALL,
     };
 
     pub fn color(&self) -> Rgb {
@@ -149,11 +167,19 @@ impl Settings {
             && self.alarm_hour < 24
             && self.alarm_minute < 60
             && (-TZ_LIMIT_MINUTES..=TZ_LIMIT_MINUTES).contains(&self.tz_offset_minutes)
+            && self.alarm_days != 0
+            && self.alarm_days & !DAYS_ALL == 0
+    }
+
+    /// Whether the alarm rings on `weekday` (0 Monday to 6 Sunday).
+    pub fn alarm_on(&self, weekday: u8) -> bool {
+        self.alarm_days & (1 << (weekday % 7)) != 0
     }
 
     /// The flash record: version, colour, brightness, alarm hour, alarm
     /// minute, armed, twelve-hour, timezone offset as little-endian i16,
-    /// hostname length, hostname padded to 24 bytes, two spare bytes.
+    /// hostname length, hostname padded to 24 bytes, alarm days, one
+    /// spare byte.
     pub fn to_record(&self) -> [u8; RECORD_LEN] {
         let tz = self.tz_offset_minutes.to_le_bytes();
         let mut r = [0u8; RECORD_LEN];
@@ -170,13 +196,15 @@ impl Settings {
         ]);
         r[RECORD_HOSTNAME_LEN] = self.hostname.len;
         r[RECORD_HOSTNAME..RECORD_HOSTNAME + HOSTNAME_MAX].copy_from_slice(&self.hostname.bytes);
+        r[RECORD_ALARM_DAYS] = self.alarm_days;
         r
     }
 
     /// Parse a flash record. Older versions lack the later fields, which
     /// take the defaults: version 1 (M5) stops after `armed`, version 2
-    /// (M6) after the timezone. `None` for an unknown version or a field
-    /// out of range, so a bad record falls back to the defaults.
+    /// (M6) after the timezone, version 3 (M6) after the hostname. `None`
+    /// for an unknown version or a field out of range, so a bad record
+    /// falls back to the defaults.
     pub fn from_record(r: &[u8]) -> Option<Settings> {
         let mut s = Settings {
             color: *r.get(1)? as usize,
@@ -196,6 +224,9 @@ impl Settings {
             let bytes = r.get(RECORD_HOSTNAME..RECORD_HOSTNAME + HOSTNAME_MAX)?;
             let name = core::str::from_utf8(bytes.get(..len)?).ok()?;
             s.hostname = Hostname::new(name)?;
+        }
+        if version >= 4 {
+            s.alarm_days = *r.get(RECORD_ALARM_DAYS)?;
         }
         if version > RECORD_VERSION {
             return None;

@@ -31,7 +31,7 @@ WIFI_SSID='…' WIFI_PASSWORD='…' TZ_OFFSET_MINUTES=-420 cargo run --release
 `cargo run` flashes with espflash and opens the monitor. Credentials and the
 default timezone are read at build time by `src/config.rs`; `build.rs` reruns
 the build when they change. The timezone, 12/24 hour, colour, brightness,
-alarm and DHCP hostname are settings: saved in the `nvs` partition, editable
+alarm, alarm days and DHCP hostname are settings: saved in the `nvs` partition, editable
 from the buttons and from `http://<ip>/` (form) or `/api` (form-encoded keys,
 JSON back).
 `rust-version` must stay at 1.95 or higher or cargo's MSRV-aware resolver
