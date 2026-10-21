@@ -9,8 +9,6 @@
 //!
 //! `build.rs` re-runs the build when any of them changes.
 
-use crate::panel::Rgb;
-
 /// Wi-Fi network name. Empty when the variable was not set at build time.
 pub const WIFI_SSID: &str = match option_env!("WIFI_SSID") {
     Some(s) => s,
@@ -32,11 +30,14 @@ pub const TZ_OFFSET_MINUTES: i32 = match option_env!("TZ_OFFSET_MINUTES") {
 /// Show 12 hour time with the AM mark instead of 24 hour time.
 pub const TWELVE_HOUR: bool = false;
 
-/// Colour of the whole panel, until the buttons milestone makes it live.
-pub const PANEL_COLOR: Rgb = Rgb::ORANGE;
+/// Index into `ui::PALETTE` at boot. 1 is orange.
+pub const DEFAULT_COLOR: usize = 1;
 
-/// Brightness in percent. Maps to the driver current step.
-pub const BRIGHTNESS_PCT: u8 = 50;
+/// Index into `ui::BRIGHTNESS_STEPS` at boot. 2 is 50 %.
+pub const DEFAULT_BRIGHTNESS: usize = 2;
+
+/// Alarm time at boot, disarmed.
+pub const DEFAULT_ALARM: (u8, u8) = (7, 0);
 
 /// Ceiling on the current step whatever the brightness. Step 11 is the
 /// stock firmware's "normal" setting, 30 mA per lit sink. The drivers get

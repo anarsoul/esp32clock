@@ -164,8 +164,8 @@ otherwise keep the template's pinned set. Updating `esp-generate` to 1.4.0
 | GPIO | function | config |
 | ---- | -------- | ------ |
 | 5    | buzzer (PNP base via 10 k, emitter at +5 V) | **open-drain output, released (high-Z) at boot**. A push-pull 3.3 V high still turns the PNP on. Low = buzzer on. |
-| 4    | button 2 (switch to GND, no board pull-up) | input, internal pull-up |
-| 3    | button 1 (switch to GND, no board pull-up) | input, internal pull-up |
+| 4    | upper button (switch to GND, no board pull-up) | input, internal pull-up |
+| 3    | lower button (switch to GND, no board pull-up) | input, internal pull-up |
 
 Strapping notes for ESP32-C3: GPIO8 and GPIO9 are strapping pins (GPIO9 is the
 BOOT button, GPIO8 must be high for download mode). Both are driven by us only
@@ -344,9 +344,55 @@ set from the user's brightness alone and never from what is lit.
   such as orange (255, 128, 0) should look orange, and the four digits can
   be given four colours to confirm per-digit mixing.
 
-### M4 — buttons and buzzer
-- Debounced button tasks (set time / brightness / colour), buzzer PWM via
-  LEDC on the open-drain pin (hourly chime, alarm).
+### M4 — buttons and alarm — DONE, verified on the panel 2026-10-21
+
+Two buttons, top (GPIO4) and bottom (GPIO3), both switch to ground with the
+internal pull-up. The buzzer is used for the alarm only.
+
+**Controls**
+
+| button | press | clock mode | alarm-set mode |
+| --- | --- | --- | --- |
+| top | short | next colour in the palette | increment the field (hour +1, minute +5) |
+| top | long | enter alarm-set mode | — |
+| bottom | short | next brightness step | next field; from minutes: save and leave |
+| bottom | long | arm / disarm the alarm | — |
+| any | short | stops the alarm while it rings (press consumed) | — |
+
+Palette: red, orange, yellow, green, cyan, blue, magenta, white. Brightness
+steps: 10, 25, 50, 75, 100 %. The degree mark is lit while the alarm is
+armed. Alarm-set mode shows the alarm time with the field being edited
+blinking at 2 Hz and leaves on its own after 15 s without a press. The
+alarm fires when the local time reaches HH:MM with the alarm armed, rings
+a beep pattern every 1.5 s until a press or for two minutes, and does not
+fire again in the same minute.
+
+**Code**
+
+- `src/buttons.rs`: one task polls both pins every 10 ms, debounces, and
+  emits `Event { button, kind: Short | Long }` on a channel. Long fires at
+  800 ms while still held, so the user gets feedback without releasing.
+- `src/ui.rs`: `Settings` (colour index, brightness index, alarm hour,
+  minute, armed) and the mode state machine (`Clock`, `SetHour`,
+  `SetMinute`, `Ringing`). Pure logic: takes events and the time, returns a
+  `View` describing what to draw. No hardware, so host-testable.
+- `src/display.rs`: a loop that waits on whichever comes first, the next
+  tick or a button event, feeds the UI, draws the view, and drives the
+  buzzer while ringing. Tick is the next second in clock mode, 62 ms while
+  blinking or sweeping.
+- `embassy-futures` for the select.
+
+Lessons: an `Instant` minus a `Duration` panics when the uptime is still
+shorter than the duration, so "last happened" timestamps are `Option`s;
+and the physical top button turned out to be GPIO4, not GPIO3.
+
+Settings live in RAM; a reboot returns to the compile-time defaults.
+
+### M5 — persistence (next)
+- Keep colour, brightness and the alarm across power cuts in flash (an
+  NVS-style key-value store on a dedicated partition, e.g. via
+  `sequential-storage` over `esp-storage`), written only when a setting
+  changes and read once at boot.
 
 ## 6. Risks and how they are handled
 

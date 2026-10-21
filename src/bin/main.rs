@@ -29,7 +29,7 @@ use log::info;
 use static_cell::StaticCell;
 
 use esp32clock::buzzer;
-use esp32clock::{display, net, scan};
+use esp32clock::{buttons, display, net, scan};
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
 esp_bootloader_esp_idf::esp_app_desc!();
@@ -93,9 +93,10 @@ async fn main(spawner: Spawner) -> ! {
         );
     }
 
-    // Buttons switch to ground and the board has no pull-ups.
-    let _button1 = Input::new(peripherals.GPIO3, InputConfig::default().with_pull(Pull::Up));
-    let _button2 = Input::new(peripherals.GPIO4, InputConfig::default().with_pull(Pull::Up));
+    // Buttons switch to ground and the board has no pull-ups. GPIO4 is the
+    // upper button on this board, GPIO3 the lower one.
+    let button_top = Input::new(peripherals.GPIO4, InputConfig::default().with_pull(Pull::Up));
+    let button_bottom = Input::new(peripherals.GPIO3, InputConfig::default().with_pull(Pull::Up));
 
     // Display: SPI2 in quad mode, no SCK, the four data lines are the four
     // panel wires. See scan.rs and aip33628.rs.
@@ -132,6 +133,7 @@ async fn main(spawner: Spawner) -> ! {
     let scan_spawner = scan_executor.start(Priority::Priority2);
     scan_spawner.spawn(scan::scan_task(scan::ScanHardware { spi, buf }).expect("spawn scan"));
     spawner.spawn(display::display_task().expect("spawn display"));
+    spawner.spawn(buttons::button_task(button_top, button_bottom).expect("spawn buttons"));
     spawner.spawn(buzzer::buzzer_task(Ledc::new(peripherals.LEDC), buzzer_pin).expect("spawn buzzer"));
 
     // Wi-Fi station and the network stack on top of it.

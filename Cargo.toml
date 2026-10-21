@@ -55,6 +55,7 @@ esp-println = { version = "0.18.0", features = ["esp32c3", "log-04"] }
 critical-section = "1.2.0"
 esp32c3          = "0.33"
 static_cell      = "2.1.1"
+embassy-futures = "0.1.2"
 
 
 # For fine tuning these settings, please refer to https://doc.rust-lang.org/cargo/reference/profiles.html
