@@ -22,6 +22,28 @@ pub const IP_STEP: Duration = Duration::from_millis(2000);
 /// Show the four octets this many times.
 const IP_ROUNDS: u64 = 2;
 
+/// After a power cut the clock comes back and gets a valid time some
+/// minutes late. On the first tick with a time, an alarm that came round
+/// within this many minutes before is rung anyway, so an outage across
+/// the alarm minute does not swallow it.
+pub const MISSED_ALARM_GRACE: u16 = 10;
+
+const MINUTES_PER_DAY: u16 = 24 * 60;
+
+/// Minutes since the alarm time last came round, if the alarm is armed
+/// on the day it came round on. Before the alarm time that day is the
+/// day before.
+fn alarm_age(settings: &Settings, t: LocalTime) -> Option<u16> {
+    let minute = t.hour as u16 * 60 + t.minute as u16;
+    let alarm = settings.alarm_hour as u16 * 60 + settings.alarm_minute as u16;
+    let (age, day) = if minute >= alarm {
+        (minute - alarm, t.weekday)
+    } else {
+        (minute + MINUTES_PER_DAY - alarm, (t.weekday + 6) % 7)
+    };
+    (settings.alarm_armed && settings.alarm_on(day)).then_some(age)
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Mode {
     Clock,
@@ -64,6 +86,9 @@ pub struct Ui {
     ip_started: Instant,
     /// Minute of day the alarm last fired on, so it fires once.
     fired_minute: Option<u16>,
+    /// A valid time has been seen since boot; the missed-alarm check is
+    /// only made before that.
+    had_time: bool,
 }
 
 impl Default for Ui {
@@ -75,7 +100,14 @@ impl Default for Ui {
 impl Ui {
     pub fn new() -> Self {
         let now = Instant::now();
-        Ui { mode: Mode::Clock, last_press: now, ring_started: now, ip_started: now, fired_minute: None }
+        Ui {
+            mode: Mode::Clock,
+            last_press: now,
+            ring_started: now,
+            ip_started: now,
+            fired_minute: None,
+            had_time: false,
+        }
     }
 
     /// Feed a button event, editing `settings` as the mode dictates.
@@ -140,11 +172,15 @@ impl Ui {
                 if let Some(t) = time {
                     let minute = t.hour as u16 * 60 + t.minute as u16;
                     let alarm = settings.alarm_hour as u16 * 60 + settings.alarm_minute as u16;
-                    if settings.alarm_armed
-                        && settings.alarm_on(t.weekday)
-                        && minute == alarm
-                        && self.fired_minute != Some(minute)
-                    {
+                    // On the alarm minute, once. On the first valid time
+                    // after boot, also shortly after it: a power cut may
+                    // have eaten the alarm.
+                    let due = match alarm_age(settings, t) {
+                        Some(0) => self.fired_minute != Some(minute),
+                        Some(age) => !self.had_time && age <= MISSED_ALARM_GRACE,
+                        None => false,
+                    };
+                    if due {
                         self.fired_minute = Some(minute);
                         self.ring_started = now;
                         self.mode = Mode::Ringing;
@@ -155,6 +191,7 @@ impl Ui {
                 }
             }
         }
+        self.had_time |= time.is_some();
     }
 
     pub fn ringing(&self) -> bool {

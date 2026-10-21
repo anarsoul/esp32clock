@@ -669,6 +669,23 @@ lists both APs (-71 and -83 dBm) with the driver picking the stronger.
 Inside the enclosure 8.5 dBm was not enough; the ceiling went to 44
 (11 dBm), which connects and holds with the clock in its case.
 
+### Missed alarm after a power cut (after M8)
+
+The alarm fires in `Ui::tick` on the tick where the local minute equals
+the alarm minute. A power cut across that minute loses it: the clock
+boots, waits for Wi-Fi and NTP, and by the time it has a valid time the
+minute has passed. The safeguard: on the first tick that has a valid
+time, if the alarm is armed for the day it last came round on and that
+was no more than `MISSED_ALARM_GRACE` (10) minutes ago, ring as if it
+had just fired. The age is computed modulo the day, so an alarm at 23:55
+seen at 00:03 is eight minutes old and is checked against the previous
+weekday. The check runs once per boot (`Ui::had_time`); the normal
+on-the-minute path is unchanged and still rings once per alarm minute.
+The first valid time arrives in clock mode unless someone is pressing
+buttons within seconds of power-up, in which case the grace check is
+skipped: whoever is at the buttons is awake. No settings or record
+change; the grace is a constant in `ui.rs`.
+
 ## 6. Risks and how they are handled
 
 | risk | mitigation |
