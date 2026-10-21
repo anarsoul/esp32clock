@@ -7,20 +7,27 @@
 )]
 #![deny(clippy::large_stack_frames)]
 
+extern crate alloc;
+
 use embassy_executor::Spawner;
+use embassy_net::StackResources;
 use embassy_time::{Duration, Timer};
 use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
 use esp_hal::dma_tx_buffer;
 use esp_hal::gpio::{DriveMode, Input, InputConfig, Level, Output, OutputConfig, Pull};
+use esp_hal::ledc::Ledc;
+use esp_hal::rng::Rng;
 use esp_hal::spi::Mode;
 use esp_hal::spi::master::{Config as SpiConfig, Spi};
 use esp_hal::time::Rate;
 use esp_hal::timer::timg::TimerGroup;
+use esp_radio::wifi::{Interface, WifiController};
 use log::info;
+use static_cell::StaticCell;
 
-use esp32clock::panel::{Color, Panel};
-use esp32clock::scan;
+use esp32clock::buzzer;
+use esp32clock::{display, net, scan};
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
 esp_bootloader_esp_idf::esp_app_desc!();
@@ -51,17 +58,27 @@ async fn main(spawner: Spawner) -> ! {
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
 
+    // Heap for the Wi-Fi driver, sized as esp-radio recommends.
+    esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 64 * 1024);
+    esp_alloc::heap_allocator!(size: 36 * 1024);
+
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     esp_rtos::start(timg0.timer0, peripherals.FROM_CPU_INTR0);
 
     // Buzzer first. The pin feeds the base of a PNP whose emitter sits at
     // +5 V, so a push-pull 3.3 V high still turns it on. Open drain and
     // released (high impedance) is off, low is on.
-    let _buzzer = Output::new(
-        peripherals.GPIO5,
-        Level::High,
-        OutputConfig::default().with_drive_mode(DriveMode::OpenDrain),
-    );
+    let mut buzzer_pin = peripherals.GPIO5;
+    {
+        // Set the output register high and the pad open-drain now, so the
+        // pin is released however the pad was left. The buzzer task takes
+        // the pin over from here.
+        let _ = Output::new(
+            buzzer_pin.reborrow(),
+            Level::High,
+            OutputConfig::default().with_drive_mode(DriveMode::OpenDrain),
+        );
+    }
 
     // Buttons switch to ground and the board has no pull-ups.
     let _button1 = Input::new(peripherals.GPIO3, InputConfig::default().with_pull(Pull::Up));
@@ -89,17 +106,28 @@ async fn main(spawner: Spawner) -> ! {
     // The drivers discard anything sent in the first 200 us after power-up.
     Timer::after(Duration::from_millis(10)).await;
     spawner.spawn(scan::scan_task(spi, buf).expect("spawn scan"));
+    spawner.spawn(display::display_task().expect("spawn display"));
+    spawner.spawn(buzzer::buzzer_task(Ledc::new(peripherals.LEDC), buzzer_pin).expect("spawn buzzer"));
 
-    let mut panel = Panel::new();
-    panel.set_color(Color::RED);
-    panel.set_current(5); // 15.2 mA per lit sink, conservative first light
-    panel.set_time(12, 34);
-    panel.set_colon(true);
-    scan::publish(panel.render());
-    info!("showing 12:34");
+    // Wi-Fi station and the network stack on top of it.
+    let controller = WifiController::new(peripherals.WIFI, Default::default()).expect("wifi init");
+    let station = Interface::station();
+    let rng = Rng::new();
+    let seed = (rng.random() as u64) << 32 | rng.random() as u64;
+    static RESOURCES: StaticCell<StackResources<4>> = StaticCell::new();
+    let (stack, runner) = embassy_net::new(
+        station,
+        embassy_net::Config::dhcpv4(Default::default()),
+        RESOURCES.init(StackResources::new()),
+        seed,
+    );
+    spawner.spawn(net::wifi_task(controller).expect("spawn wifi"));
+    spawner.spawn(net::net_task(runner).expect("spawn net"));
+    spawner.spawn(net::ntp_task(stack).expect("spawn ntp"));
 
+    info!("running");
     loop {
-        Timer::after(Duration::from_secs(10)).await;
-        info!("alive");
+        Timer::after(Duration::from_secs(60)).await;
+        info!("alive, heap free {} bytes", esp_alloc::HEAP.free());
     }
 }

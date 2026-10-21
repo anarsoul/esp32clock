@@ -1,4 +1,7 @@
 fn main() {
+    for var in ["WIFI_SSID", "WIFI_PASSWORD", "TZ_OFFSET_MINUTES"] {
+        println!("cargo:rerun-if-env-changed={var}");
+    }
     linker_be_nice();
     // make sure linkall.x is the last linker script (otherwise might cause problems with flip-link)
     println!("cargo:rustc-link-arg=-Tlinkall.x");

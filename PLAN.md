@@ -203,9 +203,69 @@ the display lines sit low/undriven during reset, which the drivers ignore.
      do, the blanking frame is missing or not being latched.
    - Optional 1 s all-red lamp test at boot (as stock does) as a wiring check.
 
-### M2 — real time
-- NTP over Wi-Fi (esp-radio + embassy-net + sntpc), timezone constant, colon
-  blink once a second, leading-zero suppression, 12/24 h.
+### M2 — real time over NTP — DONE, verified on the panel 2026-10-21
+
+Crate set (verified against sources): esp-radio 1.0.0-beta.1 (needs esp-hal
+~1.2, esp-rtos with the `esp-radio` and `esp-alloc` features, a heap from
+esp-alloc 0.11), embassy-net 0.9.1 (dhcpv4, dns, udp), sntpc 0.11 with the
+`sntpc-net-embassy` 0.11 socket adapter and `sntpc-time-embassy` 0.6
+timestamp generator.
+
+Design:
+
+- `src/config.rs`: `WIFI_SSID`, `WIFI_PASSWORD` and `TZ_OFFSET_MINUTES` come
+  from environment variables at build time (`option_env!`), so no secret is
+  ever in the tree. Missing credentials still build; the clock then shows
+  `--:--` and logs why. `TWELVE_HOUR` is a const. `NTP_SERVER` is
+  `pool.ntp.org`, resync every hour, retry every 30 s after a failure.
+- `src/clock.rs`: Unix time = Embassy uptime (systimer, crystal derived) plus
+  an offset set from each SNTP result. `now()` returns local hour, minute,
+  second or `None` before the first sync. No DST handling; the offset is a
+  fixed number of minutes.
+- `src/net.rs`: three tasks. `wifi_task` configures the station, connects,
+  waits for a disconnect, reconnects after a delay. `net_task` runs the
+  embassy-net runner. `ntp_task` waits for DHCP, resolves the server, sends
+  one SNTP query through a UDP socket with a timeout, stores the offset.
+- `src/display.rs`: a task that reads the clock, draws `HH:MM` with the
+  leading zero suppressed, blinks the colon (1 s on, 1 s off), lights the AM
+  mark in 12 hour mode before noon, draws `--:--` with the colon off until
+  the first sync, and publishes a new image only when it changed. It sleeps
+  until the next whole second so the colon edge is sharp.
+- `main.rs`: heap regions, Wi-Fi controller and station interface,
+  embassy-net stack with DHCP and a hardware-random seed, spawn everything.
+
+Steps: Cargo.toml and build.rs (`rerun-if-env-changed` for the three
+variables), the four modules, main wiring, build, flash with
+`WIFI_SSID=... WIFI_PASSWORD=... TZ_OFFSET_MINUTES=... cargo run --release`,
+confirm the log shows a sync and the panel shows the current time.
+
+Risks: heap too small for the Wi-Fi driver (follow the esp-radio recommended
+64 KiB reclaimed + 36 KiB), binary size versus espflash's default app
+partition (check with `espflash` output), the DMA scan continuing unaffected
+while Wi-Fi runs (DMA needs no CPU, so it should).
+
+### M2b — buzzer — DONE, verified 2026-10-21; reserved for the alarm
+
+The buzzer is a magnetic (passive) type behind an S8550 PNP with its emitter
+at +5 V and a 10 k base resistor from GPIO5. Any driven level turns it on
+(3.3 V high still leaves 1.7 V across base-emitter), so **only high
+impedance is off**. The pin must be open-drain: low = energised, released =
+off.
+
+- `src/buzzer.rs`: LEDC low-speed timer 0 at the tone frequency, channel 0
+  on GPIO5 in open-drain mode. Idle duty is 100 % (output high = released,
+  silent). A beep sets 50 % duty for the on time, then back to 100 %.
+  Requests arrive through a channel as `Beep { freq_hz, on_ms, off_ms, count }`
+  so callers never touch the hardware.
+- The pin is handed to LEDC as an `Output` already high and open-drain, so
+  there is no low blip while the channel is being wired up.
+- Verified with a boot beep and a melody, both since removed. The firmware
+  makes no sound until the alarm milestone uses `beep` / `play`.
+- Tone: 2.5 kHz as a starting point; magnetic buzzers resonate around
+  2 to 3 kHz. Adjust by ear. Verified 2026-10-21: beeps work.
+- Melody: a `Note { freq_hz, ms }` slice (`freq_hz == 0` is a rest) played
+  note by note with a short articulation gap, through the same request
+  channel as beeps. `ODE_TO_JOY` is kept as an alarm tune candidate.
 
 ### M3 — colour and brightness
 - Binary-weighted sub-frames inside each 600 µs slot (40/80/160/320 µs =
