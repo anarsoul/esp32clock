@@ -25,11 +25,13 @@ use esp_hal::time::Rate;
 use esp_hal::timer::timg::TimerGroup;
 use esp_radio::wifi::{Interface, WifiController};
 use esp_rtos::embassy::InterruptExecutor;
+use esp_storage::FlashStorage;
 use log::info;
 use static_cell::StaticCell;
 
 use esp32clock::buzzer;
-use esp32clock::{buttons, display, net, scan};
+use esp32clock::settings::Settings;
+use esp32clock::{buttons, display, net, scan, settings, storage};
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
 esp_bootloader_esp_idf::esp_app_desc!();
@@ -120,6 +122,16 @@ async fn main(spawner: Spawner) -> ! {
     let spare = dma_tx_buffer!(scan::TRANSFER_BYTES).expect("dma spare buffer");
     scan::init_spare(spare);
 
+    // Saved settings, so the first frame already has the user's colour.
+    // Without a usable nvs partition they live in RAM for this boot.
+    let mut store = storage::Store::open(FlashStorage::new(peripherals.FLASH));
+    let mut stored = None;
+    if let Some(store) = store.as_mut() {
+        stored = store.load().await;
+    }
+    settings::init(stored.unwrap_or(Settings::DEFAULT));
+    info!("settings: {:?}", settings::get());
+
     // The drivers discard anything sent in the first 200 us after power-up.
     Timer::after(Duration::from_millis(10)).await;
 
@@ -135,6 +147,9 @@ async fn main(spawner: Spawner) -> ! {
     spawner.spawn(display::display_task().expect("spawn display"));
     spawner.spawn(buttons::button_task(button_top, button_bottom).expect("spawn buttons"));
     spawner.spawn(buzzer::buzzer_task(Ledc::new(peripherals.LEDC), buzzer_pin).expect("spawn buzzer"));
+    if let Some(store) = store.take() {
+        spawner.spawn(storage::persist_task(store, stored).expect("spawn persist"));
+    }
 
     // Wi-Fi station and the network stack on top of it.
     let controller = WifiController::new(peripherals.WIFI, Default::default()).expect("wifi init");

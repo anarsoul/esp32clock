@@ -9,4 +9,6 @@ pub mod display;
 pub mod net;
 pub mod panel;
 pub mod scan;
+pub mod settings;
+pub mod storage;
 pub mod ui;

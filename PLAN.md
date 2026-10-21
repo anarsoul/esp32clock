@@ -386,16 +386,61 @@ Lessons: an `Instant` minus a `Duration` panics when the uptime is still
 shorter than the duration, so "last happened" timestamps are `Option`s;
 and the physical top button turned out to be GPIO4, not GPIO3.
 
-Settings live in RAM; a reboot returns to the compile-time defaults.
+Settings lived in RAM until M5; a reboot returned to the compile-time defaults.
 
-### M5 — persistence (next)
-- Keep colour, brightness and the alarm across power cuts in flash (an
-  NVS-style key-value store on a dedicated partition, e.g. via
-  `sequential-storage` over `esp-storage`), written only when a setting
-  changes and read once at boot.
-- Settings move out of the display task into a shared store with a change
-  signal, so both the buttons and M6 can edit them and the display redraws
-  on either.
+### M5 — persistence — DONE, verified on the panel 2026-10-21
+
+Colour, brightness and the alarm survive a power cut. Settings also leave
+the display task so that M6 can edit them from the network.
+
+**Shared settings.** `src/settings.rs` owns `Settings` and a
+`embassy_sync::watch::Watch` holding the current value. `settings::get()`
+reads it, `settings::update(|s| ...)` applies a change and publishes only
+if something actually changed, and the display and the persist task each
+hold a receiver. `Ui` no longer owns the settings: `handle`, `tick` and
+`view` take them as a parameter, so the display loop runs button events as
+`settings::update(|s| ui.handle(s, ev, now))`. The display redraws on a
+tick, a button, or a settings change from elsewhere (nothing else writes
+yet; M6 will).
+
+**Flash layout.** The espflash default partition table has a 24 KB `nvs`
+data partition at 0x9000 that nothing else uses. At boot
+`esp-bootloader-esp-idf` reads the table and the persist task takes the
+`nvs` entry's range; if there is no such partition it logs an error and
+settings stay in RAM. `sequential-storage`'s map over `esp-storage`'s
+`FlashStorage` keeps one key (0) whose value is an 8-byte record:
+version, colour index, brightness index, alarm hour, alarm minute, armed,
+two spare bytes. A record with the wrong version or an out-of-range field
+is ignored and the defaults apply. Six 4 KB pages at about 20 bytes an
+item means a few hundred changes between sector erases.
+
+**Writing.** The persist task waits for a settings change, then waits until
+2 s have passed without another one, and writes if the value differs from
+the last one written. Cycling through the palette costs one write, not
+seven. `esp-storage` runs each flash operation with interrupts off and the
+cache disabled, so the scan task cannot restart a DMA transfer meanwhile:
+a 32-byte write is well under a millisecond and invisible, a sector erase
+is tens of milliseconds and a brief dark blink, once per few hundred
+changes. `esp-storage`'s blocking `NorFlash` is wrapped in a 30-line async
+adapter in `storage.rs` because `sequential-storage` only speaks
+`embedded-storage-async`.
+
+**Boot.** `main` loads the settings before spawning the display so the
+first frame already has the saved colour, then hands the flash handle to
+the persist task.
+
+**Checked on the host** (scratch crate with `sequential-storage`'s mock
+flash, 6 pages of 4 KB, the real key and record types): the record
+round-trips, records with another version or an out-of-range field are
+rejected, and 2000 saves cost 5 page erases and 20 bytes written each.
+The firmware image grew by 33 KB (`sequential-storage` with its repair
+paths, `esp-storage`, and the partition-table parser).
+
+**Verify on the panel.** Change colour and brightness, arm the alarm, wait
+a few seconds, pull the plug. On power-up the first sweep frame uses the
+saved colour and brightness and the degree mark is lit. The log shows
+`settings: loaded ...` at boot and `settings: saved` 2 s after the last
+change.
 
 ### M6 — settings over Wi-Fi
 

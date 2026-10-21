@@ -30,13 +30,14 @@ pub const TZ_OFFSET_MINUTES: i32 = match option_env!("TZ_OFFSET_MINUTES") {
 /// Show 12 hour time with the AM mark instead of 24 hour time.
 pub const TWELVE_HOUR: bool = false;
 
-/// Index into `ui::PALETTE` at boot. 1 is orange.
+/// Index into `settings::PALETTE` at boot. 1 is orange.
 pub const DEFAULT_COLOR: usize = 1;
 
-/// Index into `ui::BRIGHTNESS_STEPS` at boot. 2 is 50 %.
+/// Index into `settings::BRIGHTNESS_STEPS` at boot. 2 is 50 %.
 pub const DEFAULT_BRIGHTNESS: usize = 2;
 
-/// Alarm time at boot, disarmed.
+/// Alarm time at boot, disarmed. These three are only the defaults; the
+/// saved settings in flash take precedence once the user has changed them.
 pub const DEFAULT_ALARM: (u8, u8) = (7, 0);
 
 /// Ceiling on the current step whatever the brightness. Step 11 is the

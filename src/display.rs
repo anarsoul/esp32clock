@@ -1,13 +1,14 @@
 //! Turns the clock and the UI state into panel images, and rings the alarm.
 
-use embassy_futures::select::{Either, select};
+use embassy_futures::select::{Either3, select3};
 use embassy_time::{Duration, Instant, Timer};
 
 use crate::buttons;
 use crate::buzzer::{self, Beep};
-use crate::config::{DEFAULT_ALARM, DEFAULT_BRIGHTNESS, DEFAULT_COLOR, MAX_CURRENT_STEP, TWELVE_HOUR};
+use crate::config::{MAX_CURRENT_STEP, TWELVE_HOUR};
 use crate::panel::{Panel, Rgb, ScanImage, current_step_for};
-use crate::ui::{Field, Settings, Ui, View};
+use crate::settings::{self, Settings};
+use crate::ui::{Field, Ui, View};
 use crate::{clock, scan};
 
 /// Step time of the waiting animation and of the blink.
@@ -88,24 +89,21 @@ fn draw(panel: &mut Panel, view: View, settings: &Settings, phase_ms: u64) {
     }
 }
 
-/// Run the UI: wait for a tick or a button, update, draw, ring.
+/// Run the UI: wait for a tick, a button or a settings change from
+/// elsewhere, update, draw, ring.
 #[embassy_executor::task]
 pub async fn display_task() -> ! {
     let mut panel = Panel::new();
-    let mut ui = Ui::new(Settings {
-        color: DEFAULT_COLOR,
-        brightness: DEFAULT_BRIGHTNESS,
-        alarm_hour: DEFAULT_ALARM.0,
-        alarm_minute: DEFAULT_ALARM.1,
-        alarm_armed: false,
-    });
+    let mut ui = Ui::new();
+    let mut changes = settings::receiver();
     let mut last: Option<ScanImage> = None;
     let mut last_ring: Option<Instant> = None;
 
     loop {
         let now = Instant::now();
         let time = clock::now();
-        ui.tick(time, now);
+        let current = settings::get();
+        ui.tick(&current, time, now);
 
         if ui.ringing() && last_ring.is_none_or(|t| now - t >= RING_STEP) {
             buzzer::beep(ALARM_BEEP);
@@ -115,8 +113,8 @@ pub async fn display_task() -> ! {
             last_ring = None;
         }
 
-        let view = ui.view(time, now.as_millis());
-        draw(&mut panel, view, &ui.settings, now.as_millis());
+        let view = ui.view(&current, time, now.as_millis());
+        draw(&mut panel, view, &current, now.as_millis());
         let img = panel.render();
         if last != Some(img) {
             scan::publish(&img).await;
@@ -127,9 +125,21 @@ pub async fn display_task() -> ! {
         // anything blinks or sweeps, plus a little so the boundary has passed.
         let steady = matches!(view, View::Time { .. });
         let wait = if steady { clock::until_next_second() } else { BLINK_STEP / 4 };
-        match select(Timer::after(wait + Duration::from_millis(2)), buttons::next_event()).await {
-            Either::First(()) => {}
-            Either::Second(ev) => ui.handle(ev, Instant::now()),
+        match select3(
+            Timer::after(wait + Duration::from_millis(2)),
+            buttons::next_event(),
+            changes.changed(),
+        )
+        .await
+        {
+            Either3::First(()) => {}
+            Either3::Second(ev) => {
+                let now = Instant::now();
+                settings::update(|s| ui.handle(s, ev, now));
+                // Our own change; the redraw happens on this loop anyway.
+                let _ = changes.try_changed();
+            }
+            Either3::Third(_) => {}
         }
     }
 }
