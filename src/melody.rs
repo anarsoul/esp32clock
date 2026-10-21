@@ -123,16 +123,18 @@ pub const TWINKLE: Melody = Melody {
     repeat_gap_ms: 2000,
 };
 
-/// Ode to Joy, the first two phrases of the theme. Beethoven, 1824.
+/// Ode to Joy, the first two phrases of the theme, in G so it spans
+/// G5 to D6 like the others; in C its top note G6 rang out louder than
+/// the rest. Beethoven, 1824.
 pub const ODE_TO_JOY: Melody = Melody {
     name: "ode",
     label: "Ode to Joy",
     bpm: 120,
     notes: &[
-        n(E6, Q), n(E6, Q), n(F6, Q), n(G6, Q), n(G6, Q), n(F6, Q), n(E6, Q), n(D6, Q),
-        n(C6, Q), n(C6, Q), n(D6, Q), n(E6, Q), n(E6, DQ), n(D6, E), n(D6, H),
-        n(E6, Q), n(E6, Q), n(F6, Q), n(G6, Q), n(G6, Q), n(F6, Q), n(E6, Q), n(D6, Q),
-        n(C6, Q), n(C6, Q), n(D6, Q), n(E6, Q), n(D6, DQ), n(C6, E), n(C6, H),
+        n(B5, Q), n(B5, Q), n(C6, Q), n(D6, Q), n(D6, Q), n(C6, Q), n(B5, Q), n(A5, Q),
+        n(G5, Q), n(G5, Q), n(A5, Q), n(B5, Q), n(B5, DQ), n(A5, E), n(A5, H),
+        n(B5, Q), n(B5, Q), n(C6, Q), n(D6, Q), n(D6, Q), n(C6, Q), n(B5, Q), n(A5, Q),
+        n(G5, Q), n(G5, Q), n(A5, Q), n(B5, Q), n(A5, DQ), n(G5, E), n(G5, H),
     ],
     repeat_gap_ms: 2000,
 };
