@@ -150,8 +150,8 @@ impl Ui {
     }
 
     /// Advance timeouts and the alarm trigger. `time` is `None` before the
-    /// first sync.
-    pub fn tick(&mut self, settings: &Settings, time: Option<LocalTime>, now: Instant) {
+    /// first sync. `settings` is only written to consume `skip_next`.
+    pub fn tick(&mut self, settings: &mut Settings, time: Option<LocalTime>, now: Instant) {
         match self.mode {
             Mode::SetHour | Mode::SetMinute => {
                 if now - self.last_press >= SET_TIMEOUT {
@@ -182,8 +182,13 @@ impl Ui {
                     };
                     if due {
                         self.fired_minute = Some(minute);
-                        self.ring_started = now;
-                        self.mode = Mode::Ringing;
+                        if settings.skip_next {
+                            // A skipped alarm is used up, not postponed.
+                            settings.skip_next = false;
+                        } else {
+                            self.ring_started = now;
+                            self.mode = Mode::Ringing;
+                        }
                     }
                     if minute != alarm {
                         self.fired_minute = None;

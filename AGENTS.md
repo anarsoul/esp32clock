@@ -33,7 +33,8 @@ default timezone are read at build time by `src/config.rs`; `build.rs` reruns
 the build when they change. The timezone, 12/24 hour, colour, brightness,
 alarm, alarm days, alarm melody and DHCP hostname are settings: saved in the `nvs` partition, editable
 from the buttons and from `http://<ip>/` (form) or `/api` (form-encoded keys,
-JSON back).
+JSON back). `skip_next` (page checkbox, key `skip`) is the one setting the
+record does not store: it skips one alarm and is cleared by it or by a reboot.
 `rust-version` must stay at 1.95 or higher or cargo's MSRV-aware resolver
 picks an esp-rom-sys that esp-storage cannot build with.
 

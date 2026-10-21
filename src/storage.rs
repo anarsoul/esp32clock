@@ -170,7 +170,9 @@ pub async fn persist_task(mut store: Store, mut stored: Option<Settings>) -> ! {
                 Either::Second(next) => s = next,
             }
         }
-        if stored == Some(s) {
+        // Compare what would be written, so a change to a field the
+        // record leaves out (`skip_next`) does not touch flash.
+        if stored.is_some_and(|old| old.to_record() == s.to_record()) {
             continue;
         }
         match store.save(&s).await {

@@ -686,6 +686,23 @@ buttons within seconds of power-up, in which case the grace check is
 skipped: whoever is at the buttons is awake. No settings or record
 change; the grace is a constant in `ui.rs`.
 
+### Skip the next alarm (after M8)
+
+A volatile flag for holidays: `Settings::skip_next`, set from a checkbox
+on the page (`skip` in the form and the API, `"skip"` in the JSON). It
+lives in `Settings` so it rides the same `Watch`, wakes the display and
+is edited only through `settings::update`, but `to_record` does not
+write it and `from_record` leaves it false, so a reboot clears it and it
+never costs a flash write: the persist task now compares records rather
+than structs before saving. When the alarm minute arrives and the alarm
+would ring, `Ui::tick` clears the flag instead of ringing, once; the
+flag is not consumed by a minute on which the alarm would not have rung
+anyway (disarmed, or a day that is off). `Ui::tick` therefore takes the
+settings mutably and the display loop runs it through
+`settings::update`, which only signals when something changed. The
+missed-alarm check on boot goes through the same gate, where the flag is
+always false. No panel indication of the flag yet.
+
 ## 6. Risks and how they are handled
 
 | risk | mitigation |

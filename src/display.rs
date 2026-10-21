@@ -116,8 +116,11 @@ pub async fn display_task(stack: Stack<'static>) -> ! {
     loop {
         let now = Instant::now();
         let time = clock::now();
+        // The tick only writes the settings to use up a skipped alarm.
+        if settings::update(|s| ui.tick(s, time, now)) {
+            let _ = changes.try_changed();
+        }
         let current = settings::get();
-        ui.tick(&current, time, now);
 
         // The buzzer loops the melody on its own; tell it only on the edges.
         if ui.ringing() != was_ringing {

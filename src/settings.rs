@@ -113,6 +113,10 @@ pub struct Settings {
     pub alarm_days: u8,
     /// Index into `melody::MELODIES`.
     pub melody: usize,
+    /// Skip the next alarm that would ring, then clear. Not stored: a
+    /// reboot clears it, and `to_record` leaves it out so toggling it
+    /// does not write flash.
+    pub skip_next: bool,
 }
 
 /// Bytes in a stored record.
@@ -157,6 +161,7 @@ impl Settings {
         hostname: Hostname::DEFAULT,
         alarm_days: DAYS_ALL,
         melody: 0,
+        skip_next: false,
     };
 
     pub fn color(&self) -> Rgb {

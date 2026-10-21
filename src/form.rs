@@ -114,6 +114,7 @@ pub fn apply_one(s: &mut Settings, key: &str, value: &str) -> Result<(), FormErr
         }
         "armed" => s.alarm_armed = truthy(value),
         "twelve_hour" => s.twelve_hour = truthy(value),
+        "skip" => s.skip_next = truthy(value),
         "tz" => {
             let tz: i16 = value.parse().map_err(|_| FormError::BadValue)?;
             if !(-TZ_LIMIT_MINUTES..=TZ_LIMIT_MINUTES).contains(&tz) {
@@ -137,6 +138,7 @@ pub fn apply(s: &mut Settings, body: &[u8], checkboxes_absent_off: bool) -> Resu
     if checkboxes_absent_off {
         s.alarm_armed = false;
         s.twelve_hour = false;
+        s.skip_next = false;
     }
     for pair in body.split(|&c| c == b'&').filter(|p| !p.is_empty()) {
         let (k, v) = match pair.iter().position(|&c| c == b'=') {
@@ -168,7 +170,8 @@ pub fn write_json(out: &mut impl core::fmt::Write, s: &Settings) -> core::fmt::R
     write_days(out, s.alarm_days)?;
     writeln!(
         out,
-        "\",\"melody\":\"{}\",\"twelve_hour\":{},\"tz\":{},\"hostname\":\"{}\"}}",
+        "\",\"skip\":{},\"melody\":\"{}\",\"twelve_hour\":{},\"tz\":{},\"hostname\":\"{}\"}}",
+        s.skip_next,
         melody::get(s.melody).name,
         s.twelve_hour,
         s.tz_offset_minutes,
@@ -201,6 +204,7 @@ button{font-size:1em;padding:.5em 1.5em;margin-top:1em}</style></head><body><h1>
         "</select></label><label>Alarm <input type=time name=alarm value={:02}:{:02}></label>\
 <label><input type=checkbox name=armed{}> Alarm armed</label>\
 <label>Alarm days <select name=days>{}</select></label>\
+<label><input type=checkbox name=skip{}> Skip the next alarm</label>\
 <label><input type=checkbox name=twelve_hour{}> 12 hour clock</label>\
 <label>Timezone, minutes east of UTC <input type=number name=tz min=-{lim} max={lim} step=15 value={}></label>\
 <label>Hostname, for the DHCP server <input type=text name=hostname maxlength={hmax} pattern=\"[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?\" value=\"{}\"></label>\
@@ -209,6 +213,7 @@ button{font-size:1em;padding:.5em 1.5em;margin-top:1em}</style></head><body><h1>
         s.alarm_minute,
         if s.alarm_armed { " checked" } else { "" },
         DayOptions(s.alarm_days),
+        if s.skip_next { " checked" } else { "" },
         if s.twelve_hour { " checked" } else { "" },
         s.tz_offset_minutes,
         s.hostname.as_str(),
