@@ -7,6 +7,7 @@ use embassy_net::udp::{PacketMetadata, UdpSocket};
 use embassy_net::{ConfigV4, DhcpConfig, IpAddress, Runner, Stack};
 use embassy_futures::select::{Either, select};
 use embassy_time::{Duration, Instant, Timer, with_timeout};
+use esp_radio::wifi::scan::{ScanConfig, ScanTypeConfig};
 use esp_radio::wifi::sta::{ScanMethod, StationConfig};
 use esp_radio::wifi::{AuthenticationMethodConfig, Config, Interface, WifiController};
 use log::{error, info, warn};
@@ -51,6 +52,33 @@ fn station_config() -> Result<Config, esp_radio::wifi::WifiError> {
     ))
 }
 
+/// Log every access point on our SSID with its channel and signal, so a
+/// failed connect can be read against the choice the driver had. Costs a
+/// scan of about two seconds before each connect: the default dwell of
+/// 10 to 20 ms per channel missed every AP but a strong one, since a far
+/// AP's probe response takes longer than that to arrive; ESP-IDF's own
+/// default is 120 ms.
+async fn log_candidates(controller: &mut WifiController<'static>) {
+    let Ok(ssid) = config::WIFI_SSID.try_into() else { return };
+    let scan = ScanConfig::default().with_ssid(ssid).with_scan_type(ScanTypeConfig::Active {
+        min: esp_hal::time::Duration::from_millis(120),
+        max: esp_hal::time::Duration::from_millis(200),
+    });
+    match controller.scan_async(&scan).await {
+        Ok(aps) if aps.is_empty() => warn!("wifi: scan found no AP for {}", config::WIFI_SSID),
+        Ok(aps) => {
+            for ap in aps {
+                let b = ap.bssid;
+                info!(
+                    "wifi: candidate {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} channel {} rssi {}",
+                    b[0], b[1], b[2], b[3], b[4], b[5], ap.channel, ap.signal_strength
+                );
+            }
+        }
+        Err(e) => warn!("wifi: scan failed: {e:?}"),
+    }
+}
+
 /// Keep the station connected. Reconnects after any disconnect.
 #[embassy_executor::task]
 pub async fn wifi_task(mut controller: WifiController<'static>) -> ! {
@@ -71,12 +99,18 @@ pub async fn wifi_task(mut controller: WifiController<'static>) -> ! {
         }
     };
 
+    match controller.set_max_tx_power(config::WIFI_MAX_TX_POWER_QDBM) {
+        Ok(()) => info!("wifi: max tx power {} dBm", config::WIFI_MAX_TX_POWER_QDBM as f32 / 4.0),
+        Err(e) => warn!("wifi: set_max_tx_power: {e:?}"),
+    }
+
     loop {
         if let Err(e) = controller.set_config(&cfg) {
             error!("wifi: set_config: {e:?}");
             Timer::after(RECONNECT_DELAY).await;
             continue;
         }
+        log_candidates(&mut controller).await;
         info!("wifi: connecting to {}", config::WIFI_SSID);
         match controller.connect_async().await {
             Ok(info) => info!("wifi: connected, channel {}", info.channel),

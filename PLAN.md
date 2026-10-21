@@ -647,6 +647,26 @@ the saved sound is unchanged until Save. Set the alarm a minute ahead: it rings 
 pause, and a press stops it mid-tune. `curl -d melody=ode http://<ip>/api`
 echoes `"melody":"ode"`; `melody=jingle` gets a 400.
 
+### Wi-Fi reach (after M8) — DONE, verified on the panel 2026-10-21
+
+A far access point at -78 dBm kept failing with `AuthenticationExpired`
+even after the all-channel scan. esp-radio starts the radio at a
+transmit ceiling of 5 dBm; the AP at 20 dBm is heard at -78, so the
+clock's reply lands at the AP near -93 dBm, at the noise floor, and the
+authentication request is never answered. The ceiling is now
+`config::WIFI_MAX_TX_POWER_QDBM`, default 34 (8.5 dBm): the value the
+user found to keep ESP32-C3 SuperMini boards stable in another project,
+since their antenna makes higher power worse, not better. Before each
+connect the station now scans for its SSID and logs every candidate with
+channel and RSSI, so a failure can be read against the choice it had.
+The first cut used the default scan dwell of 10 to 20 ms per channel
+and saw nothing from where the far AP is, while the driver's own scan
+found the other AP; the dwell is now 120 to 200 ms, about two seconds a
+scan. The failing BSSID turned out to be the AP that reads -35 dBm from
+the other room, so the two locations simply have different nearest APs.
+At 8.5 dBm both connected first time, and from the far room the scan now
+lists both APs (-71 and -83 dBm) with the driver picking the stronger.
+
 ## 6. Risks and how they are handled
 
 | risk | mitigation |

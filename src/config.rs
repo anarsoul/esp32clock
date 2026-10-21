@@ -47,6 +47,12 @@ pub const DEFAULT_ALARM: (u8, u8) = (7, 0);
 /// hot at the top steps with many sinks lit.
 pub const MAX_CURRENT_STEP: u8 = 11;
 
+/// Ceiling on Wi-Fi transmit power, in quarter dBm, 8 to 84. esp-radio
+/// starts at 20 (5 dBm), which does not reach a far access point; 34
+/// (8.5 dBm) is known to work on the ESP32-C3 SuperMini boards, whose
+/// antenna makes higher settings unstable.
+pub const WIFI_MAX_TX_POWER_QDBM: i8 = 34;
+
 /// NTP server, resolved through the DHCP-supplied DNS.
 pub const NTP_SERVER: &str = "pool.ntp.org";
 
