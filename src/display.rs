@@ -2,13 +2,9 @@
 
 use embassy_time::Timer;
 
-use crate::config::TWELVE_HOUR;
-use crate::panel::{Color, Panel, ScanImage};
+use crate::config::{BRIGHTNESS_PCT, MAX_CURRENT_STEP, PANEL_COLOR, TWELVE_HOUR};
+use crate::panel::{Panel, ScanImage, current_step_for};
 use crate::{clock, scan};
-
-/// Panel colour and current until there is a way to change them.
-const COLOR: Color = Color::RED;
-const CURRENT_STEP: u8 = 5;
 
 fn draw(panel: &mut Panel) {
     panel.clear();
@@ -38,15 +34,15 @@ fn draw(panel: &mut Panel) {
 #[embassy_executor::task]
 pub async fn display_task() -> ! {
     let mut panel = Panel::new();
-    panel.set_color(COLOR);
-    panel.set_current(CURRENT_STEP);
+    panel.set_color(PANEL_COLOR);
+    panel.set_current(current_step_for(BRIGHTNESS_PCT).min(MAX_CURRENT_STEP));
     let mut last: Option<ScanImage> = None;
 
     loop {
         draw(&mut panel);
         let img = panel.render();
         if last != Some(img) {
-            scan::publish(img);
+            scan::publish(&img).await;
             last = Some(img);
         }
         // A little past the boundary so the second has really changed.

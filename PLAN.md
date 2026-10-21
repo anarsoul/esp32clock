@@ -267,11 +267,82 @@ off.
   note by note with a short articulation gap, through the same request
   channel as beeps. `ODE_TO_JOY` is kept as an alarm tune candidate.
 
-### M3 — colour and brightness
-- Binary-weighted sub-frames inside each 600 µs slot (40/80/160/320 µs =
-  80/160/320/640 nibbles at 2 MHz), identical to the ESPHome scheme but with
-  DMA-exact timing. Only `build_cycle` changes; the scan task is unchanged.
-- Brightness via `IS` with the gamma mapping from `aip33628.cpp:current_for`.
+### M3 — colour and brightness — DONE, verified on the panel 2026-10-21
+
+Colour is time: each RGB LED is three SEG sinks, and a channel's duty inside
+the 600 µs COM slot sets its level. Brightness is the driver current `IS`,
+set from the user's brightness alone and never from what is lit.
+
+- **Sub-frames.** Each slot is split into four binary-weighted regions of
+  40, 80, 160 and 320 µs. A channel at level L (0..=15) is lit in region k
+  when bit k of L is set, so all sixteen levels are reachable. Every region
+  starts with a frame to both drivers, so the latch lands at the same offset
+  in every region and the visible duration equals the region length.
+- **SPI clock 4 MHz.** At 2 MHz a frame is 47 µs, longer than the 40 µs
+  region. At 4 MHz it is 23.5 µs and fits. CLK high time is 250 ns, still
+  far above the 16 ns minimum and slower than the reference bit-bang. One
+  unit (40 µs) is 80 bytes; a slot is 1200 bytes; the cycle with its
+  blanking frame is 4847 bytes, two DMA descriptors.
+- **No merging.** The reference merges identical neighbouring sub-frames to
+  save interrupts. With DMA a frame costs the CPU nothing, so every slot
+  always carries four frames. Re-latching identical data is invisible.
+- **Panel model.** `Panel` keeps a level triple per position (4 blocks × 9
+  positions × 3 channels) plus an on/off bit, set through a whole-panel
+  colour, a per-digit colour, or a per-position colour. `render` produces a
+  `ScanImage` of SS words per driver, per slot, per bit plane.
+- **Gamma.** 8-bit colour components are perceptual; duty is linear light.
+  A 256-entry table (gamma 2.2) maps a component to a level 0..=15.
+  Brightness percent maps to a current step through a 101-entry table built
+  like the reference's `current_for`: perceived output interpolated between
+  the 2.5 mA floor and 40.4 mA with gamma 2.8, nearest step. A
+  `MAX_CURRENT_STEP` ceiling (11, stock "normal", 30 mA) caps it for heat.
+- **Config.** `PANEL_COLOR` and `BRIGHTNESS_PCT` consts until the buttons
+  milestone adds a way to change them at runtime.
+- **Scan rate, after first light.** Orange showed visible shimmer at a
+  2400 µs cycle: its green component at level 2 is one 80 µs pulse per
+  cycle, a 417 Hz strobe at 3 % duty. That is above flicker fusion for a
+  steady light but short low-duty pulses are seen as a phantom array
+  whenever the eyes move. Since the DMA engine costs the CPU nothing per
+  frame, the cycle just gets shorter: SPI at 16 MHz (62.5 ns phases, about
+  what the reference's register-store bit-bang runs at 3.3 V), unit 6 µs
+  (48 bytes, one byte over the 47-byte frame), slot 90 µs, cycle 360 µs,
+  2.8 kHz refresh. Fallback if the panel misreads at 16 MHz: 8 MHz with a
+  12 µs unit, 1.4 kHz refresh. Both are two constants in `scan.rs`.
+- **Several cycles per transfer.** With a 360 µs cycle the restart gap
+  between DMA transfers would be a large fraction of each cycle and would
+  show Wi-Fi scheduling jitter. Each transfer carries eight cycles back to
+  back (about 2.9 ms, 23 KB) and one blanking frame at the end, so the gap
+  occurs once per transfer and the cycles inside it are seamless.
+- **Still shimmering at 2.8 kHz when the eyes move.** The phantom array is
+  visible well into the kilohertz for short low-duty pulses. Two changes:
+  three bit planes instead of four (8 levels per channel, 512 colours), so
+  a slot is 7 units and the cycle 168 µs, about 6 kHz; and plane-major
+  frame order (for each plane, each COM slot) so a digit is lit three times
+  per cycle instead of once and the longest dark stretch per digit falls
+  from 21 to 12 units. Transfers are sized to the 32 KB DMA limit (23
+  cycles, 3.9 ms) and the scan task logs the largest restart gap it sees,
+  to tell whether Wi-Fi scheduling jitter contributes.
+- **Measured restart gap** at 16 MHz / three planes: average 3 µs, maximum
+  644 µs over 2567 transfers. The maximum is a Wi-Fi thread holding the
+  thread-mode executor. The scan task now runs on an esp-rtos
+  `InterruptExecutor` (software interrupt 1, priority 2), which threads
+  cannot preempt. SPI raised to 20 MHz (50 ns phases), unit 5 µs, cycle
+  140 µs, 7.1 kHz; 22 cycles per transfer.
+- **The 649 µs maximum gap was the rebuild**, not Wi-Fi: it did not move
+  on the interrupt executor. Rebuilding a 31 KB transfer between two DMA
+  transfers takes that long. Now double buffered: `publish` runs in the
+  caller's thread-mode task, fills the spare buffer and queues it; the scan
+  task swaps buffers at the boundary in microseconds.
+- **Measured after double buffering**, with reporting moved out of the scan
+  task (the serial write of the report line had itself been the 624 µs
+  maximum): restart gap average 1 µs, maximum 49 µs over 3222 transfers,
+  about 1.6 % dark once in a while. Shimmer judged fine from the 6 kHz
+  build onward; the clock runs at 7.1 kHz with 8 levels per channel.
+- **Verification.** Host simulation runs a full transfer through the chip model
+  and checks that every channel's lit time per slot equals level × 40 µs and
+  that the blanking frame still ends the cycle. Then on the panel: a colour
+  such as orange (255, 128, 0) should look orange, and the four digits can
+  be given four colours to confirm per-digit mixing.
 
 ### M4 — buttons and buzzer
 - Debounced button tasks (set time / brightness / colour), buzzer PWM via

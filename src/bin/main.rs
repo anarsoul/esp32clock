@@ -16,6 +16,7 @@ use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
 use esp_hal::dma_tx_buffer;
 use esp_hal::gpio::{DriveMode, Input, InputConfig, Level, Output, OutputConfig, Pull};
+use esp_hal::interrupt::Priority;
 use esp_hal::ledc::Ledc;
 use esp_hal::rng::Rng;
 use esp_hal::spi::Mode;
@@ -23,6 +24,7 @@ use esp_hal::spi::master::{Config as SpiConfig, Spi};
 use esp_hal::time::Rate;
 use esp_hal::timer::timg::TimerGroup;
 use esp_radio::wifi::{Interface, WifiController};
+use esp_rtos::embassy::InterruptExecutor;
 use log::info;
 use static_cell::StaticCell;
 
@@ -101,11 +103,23 @@ async fn main(spawner: Spawner) -> ! {
     .into_async();
     pull_down_display_wires();
 
-    let buf = dma_tx_buffer!(scan::CYCLE_BYTES).expect("dma buffer");
+    // Two transfer buffers: one in flight, one being filled.
+    let buf = dma_tx_buffer!(scan::TRANSFER_BYTES).expect("dma buffer");
+    let spare = dma_tx_buffer!(scan::TRANSFER_BYTES).expect("dma spare buffer");
+    scan::init_spare(spare);
 
     // The drivers discard anything sent in the first 200 us after power-up.
     Timer::after(Duration::from_millis(10)).await;
-    spawner.spawn(scan::scan_task(spi, buf).expect("spawn scan"));
+
+    // The scan task restarts the DMA transfer the moment one ends. In the
+    // thread-mode executor a Wi-Fi task can hold it off for hundreds of
+    // microseconds, which is a dark blink on the panel. An interrupt-mode
+    // executor cannot be preempted by threads, so the gap stays at a few
+    // microseconds whatever Wi-Fi is doing.
+    static SCAN_EXECUTOR: StaticCell<InterruptExecutor<1>> = StaticCell::new();
+    let scan_executor = SCAN_EXECUTOR.init(InterruptExecutor::new(peripherals.FROM_CPU_INTR1));
+    let scan_spawner = scan_executor.start(Priority::Priority2);
+    scan_spawner.spawn(scan::scan_task(scan::ScanHardware { spi, buf }).expect("spawn scan"));
     spawner.spawn(display::display_task().expect("spawn display"));
     spawner.spawn(buzzer::buzzer_task(Ledc::new(peripherals.LEDC), buzzer_pin).expect("spawn buzzer"));
 
@@ -128,6 +142,13 @@ async fn main(spawner: Spawner) -> ! {
     info!("running");
     loop {
         Timer::after(Duration::from_secs(60)).await;
-        info!("alive, heap free {} bytes", esp_alloc::HEAP.free());
+        let g = scan::take_gap_stats();
+        info!(
+            "alive, heap free {} bytes; scan restart gap avg {} us, max {} us over {} transfers",
+            esp_alloc::HEAP.free(),
+            g.sum_us / g.transfers.max(1) as u64,
+            g.max_us,
+            g.transfers
+        );
     }
 }

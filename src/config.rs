@@ -9,6 +9,8 @@
 //!
 //! `build.rs` re-runs the build when any of them changes.
 
+use crate::panel::Rgb;
+
 /// Wi-Fi network name. Empty when the variable was not set at build time.
 pub const WIFI_SSID: &str = match option_env!("WIFI_SSID") {
     Some(s) => s,
@@ -29,6 +31,17 @@ pub const TZ_OFFSET_MINUTES: i32 = match option_env!("TZ_OFFSET_MINUTES") {
 
 /// Show 12 hour time with the AM mark instead of 24 hour time.
 pub const TWELVE_HOUR: bool = false;
+
+/// Colour of the whole panel, until the buttons milestone makes it live.
+pub const PANEL_COLOR: Rgb = Rgb::ORANGE;
+
+/// Brightness in percent. Maps to the driver current step.
+pub const BRIGHTNESS_PCT: u8 = 50;
+
+/// Ceiling on the current step whatever the brightness. Step 11 is the
+/// stock firmware's "normal" setting, 30 mA per lit sink. The drivers get
+/// hot at the top steps with many sinks lit.
+pub const MAX_CURRENT_STEP: u8 = 11;
 
 /// NTP server, resolved through the DHCP-supplied DNS.
 pub const NTP_SERVER: &str = "pool.ntp.org";
