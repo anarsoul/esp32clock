@@ -31,7 +31,7 @@ WIFI_SSID='…' WIFI_PASSWORD='…' TZ_OFFSET_MINUTES=-420 cargo run --release
 `cargo run` flashes with espflash and opens the monitor. Credentials and the
 default timezone are read at build time by `src/config.rs`; `build.rs` reruns
 the build when they change. The timezone, 12/24 hour, colour, brightness,
-alarm, alarm days and DHCP hostname are settings: saved in the `nvs` partition, editable
+alarm, alarm days, alarm melody and DHCP hostname are settings: saved in the `nvs` partition, editable
 from the buttons and from `http://<ip>/` (form) or `/api` (form-encoded keys,
 JSON back).
 `rust-version` must stay at 1.95 or higher or cargo's MSRV-aware resolver
@@ -51,7 +51,8 @@ picks an esp-rom-sys that esp-storage cannot build with.
 | `src/form.rs` | key=value parsing, JSON and the HTML page; pure logic |
 | `src/http.rs` | one-socket HTTP/1.0 server: `GET`/`POST` on `/` and `/api` |
 | `src/buttons.rs` | debounced short/long press events, plus the two-button hold |
-| `src/buzzer.rs` | LEDC PWM beeps and melodies on an open-drain pin |
+| `src/melody.rs` | alarm tunes as pitch and length data with tempo; pure |
+| `src/buzzer.rs` | LEDC PWM on an open-drain pin; plays a melody on command, looped or once, stops within a note |
 | `src/clock.rs` | Unix time = uptime + NTP offset; local time |
 | `src/net.rs` | Wi-Fi station, embassy-net, SNTP |
 | `src/config.rs` | build-time env vars and compile-time defaults |
@@ -100,8 +101,8 @@ repo; recreate it in a scratch crate by copying `aip33628.rs` and
 
 - `no_std`, no `alloc` use outside what esp-radio needs; the heap exists
   for the Wi-Fi driver.
-- Keep hardware out of `ui.rs`, `panel.rs`, `form.rs` and the record part of
-  `settings.rs` so they stay testable.
+- Keep hardware out of `ui.rs`, `panel.rs`, `form.rs`, `melody.rs` and the
+  record part of `settings.rs` so they stay testable.
 - Settings change only through `settings::update`; it is what wakes the
   display and the persist task. Bump the record version in `settings.rs`
   when the layout changes and keep reading the old one.

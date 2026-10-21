@@ -16,6 +16,7 @@ use embassy_time::{Duration, with_timeout};
 use embedded_io_async::Write;
 use log::{info, warn};
 
+use crate::buzzer;
 use crate::config::HTTP_PORT;
 use crate::form::{self, FormError};
 use crate::settings;
@@ -159,6 +160,16 @@ fn respond(out: &mut Response, req: &Request<'_>) -> core::fmt::Result {
             if let Err(e) = result {
                 warn!("http: form rejected: {e:?}");
             }
+            write!(out, "HTTP/1.0 303 See Other\r\nLocation: /\r\nConnection: close\r\n\r\n")
+        }
+        (Method::Post, "/play") => {
+            // Preview the sound chosen in the form without saving anything:
+            // the form is applied to a scratch copy and only its melody used.
+            let mut trial = settings::get();
+            if let Err(e) = form::apply(&mut trial, req.body, true) {
+                warn!("http: play form rejected: {e:?}");
+            }
+            buzzer::preview(trial.melody);
             write!(out, "HTTP/1.0 303 See Other\r\nLocation: /\r\nConnection: close\r\n\r\n")
         }
         (Method::Get, "/api") => {

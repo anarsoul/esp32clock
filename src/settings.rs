@@ -13,6 +13,7 @@ use embassy_sync::watch::{Receiver, Watch};
 use crate::config::{
     DEFAULT_ALARM, DEFAULT_BRIGHTNESS, DEFAULT_COLOR, DEFAULT_HOSTNAME, DEFAULT_TWELVE_HOUR, DEFAULT_TZ_OFFSET_MINUTES,
 };
+use crate::melody;
 use crate::panel::Rgb;
 
 /// Colours the top button cycles through.
@@ -110,6 +111,8 @@ pub struct Settings {
     pub hostname: Hostname,
     /// Days the alarm rings on: bit 0 Monday to bit 6 Sunday.
     pub alarm_days: u8,
+    /// Index into `melody::MELODIES`.
+    pub melody: usize,
 }
 
 /// Bytes in a stored record.
@@ -117,7 +120,7 @@ pub const RECORD_LEN: usize = 36;
 
 /// Stored record layout version. Bump when the layout changes and teach
 /// `from_record` the old one, or the user's settings are lost.
-const RECORD_VERSION: u8 = 4;
+const RECORD_VERSION: u8 = 5;
 
 /// Where the hostname sits in a version 3 record.
 const RECORD_HOSTNAME_LEN: usize = 9;
@@ -125,6 +128,9 @@ const RECORD_HOSTNAME: usize = 10;
 
 /// Where the alarm days sit in a version 4 record.
 const RECORD_ALARM_DAYS: usize = 34;
+
+/// Where the melody index sits in a version 5 record.
+const RECORD_MELODY: usize = 35;
 
 /// Day names, Monday first, for the page and the API.
 pub const DAY_NAMES: [&str; 7] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
@@ -150,6 +156,7 @@ impl Settings {
         tz_offset_minutes: DEFAULT_TZ_OFFSET_MINUTES,
         hostname: Hostname::DEFAULT,
         alarm_days: DAYS_ALL,
+        melody: 0,
     };
 
     pub fn color(&self) -> Rgb {
@@ -169,6 +176,7 @@ impl Settings {
             && (-TZ_LIMIT_MINUTES..=TZ_LIMIT_MINUTES).contains(&self.tz_offset_minutes)
             && self.alarm_days != 0
             && self.alarm_days & !DAYS_ALL == 0
+            && self.melody < melody::MELODIES.len()
     }
 
     /// Whether the alarm rings on `weekday` (0 Monday to 6 Sunday).
@@ -178,8 +186,7 @@ impl Settings {
 
     /// The flash record: version, colour, brightness, alarm hour, alarm
     /// minute, armed, twelve-hour, timezone offset as little-endian i16,
-    /// hostname length, hostname padded to 24 bytes, alarm days, one
-    /// spare byte.
+    /// hostname length, hostname padded to 24 bytes, alarm days, melody.
     pub fn to_record(&self) -> [u8; RECORD_LEN] {
         let tz = self.tz_offset_minutes.to_le_bytes();
         let mut r = [0u8; RECORD_LEN];
@@ -197,12 +204,14 @@ impl Settings {
         r[RECORD_HOSTNAME_LEN] = self.hostname.len;
         r[RECORD_HOSTNAME..RECORD_HOSTNAME + HOSTNAME_MAX].copy_from_slice(&self.hostname.bytes);
         r[RECORD_ALARM_DAYS] = self.alarm_days;
+        r[RECORD_MELODY] = self.melody as u8;
         r
     }
 
     /// Parse a flash record. Older versions lack the later fields, which
     /// take the defaults: version 1 (M5) stops after `armed`, version 2
-    /// (M6) after the timezone, version 3 (M6) after the hostname. `None`
+    /// (M6) after the timezone, version 3 (M6) after the hostname, version
+    /// 4 (M7) after the alarm days. `None`
     /// for an unknown version or a field out of range, so a bad record
     /// falls back to the defaults.
     pub fn from_record(r: &[u8]) -> Option<Settings> {
@@ -227,6 +236,9 @@ impl Settings {
         }
         if version >= 4 {
             s.alarm_days = *r.get(RECORD_ALARM_DAYS)?;
+        }
+        if version >= 5 {
+            s.melody = *r.get(RECORD_MELODY)? as usize;
         }
         if version > RECORD_VERSION {
             return None;

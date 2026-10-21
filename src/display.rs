@@ -5,7 +5,7 @@ use embassy_net::Stack;
 use embassy_time::{Duration, Instant, Timer};
 
 use crate::buttons;
-use crate::buzzer::{self, Beep};
+use crate::buzzer;
 use crate::config::MAX_CURRENT_STEP;
 use crate::panel::{Panel, Rgb, ScanImage, current_step_for};
 use crate::settings::{self, Settings};
@@ -15,14 +15,8 @@ use crate::{clock, scan};
 /// Step time of the waiting animation and of the blink.
 const BLINK_STEP: Duration = Duration::from_millis(250);
 
-/// How often the alarm pattern repeats while ringing.
-const RING_STEP: Duration = Duration::from_millis(1500);
-
 /// Component scale for the trailing dash, out of 256.
 const TRAIL_SCALE: u16 = 64;
-
-/// The alarm sound.
-const ALARM_BEEP: Beep = Beep { freq_hz: 2500, on_ms: 100, off_ms: 100, count: 4 };
 
 fn dimmed(c: Rgb) -> Rgb {
     let f = |v: u8| ((v as u16 * TRAIL_SCALE) >> 8) as u8;
@@ -117,7 +111,7 @@ pub async fn display_task(stack: Stack<'static>) -> ! {
     let mut ui = Ui::new();
     let mut changes = settings::receiver();
     let mut last: Option<ScanImage> = None;
-    let mut last_ring: Option<Instant> = None;
+    let mut was_ringing = false;
 
     loop {
         let now = Instant::now();
@@ -125,12 +119,14 @@ pub async fn display_task(stack: Stack<'static>) -> ! {
         let current = settings::get();
         ui.tick(&current, time, now);
 
-        if ui.ringing() && last_ring.is_none_or(|t| now - t >= RING_STEP) {
-            buzzer::beep(ALARM_BEEP);
-            last_ring = Some(now);
-        }
-        if !ui.ringing() {
-            last_ring = None;
+        // The buzzer loops the melody on its own; tell it only on the edges.
+        if ui.ringing() != was_ringing {
+            was_ringing = ui.ringing();
+            if was_ringing {
+                buzzer::ring(current.melody);
+            } else {
+                buzzer::stop();
+            }
         }
 
         let view = ui.view(&current, time, now.as_millis());

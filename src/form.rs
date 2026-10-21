@@ -1,6 +1,7 @@
 //! The settings as key=value pairs: parsing a form body or query string
 //! into changes, and the names the page and the API use. Pure code.
 
+use crate::melody;
 use crate::settings::{
     BRIGHTNESS_STEPS, DAY_NAMES, DAYS_ALL, DAYS_WEEKDAYS, DAYS_WEEKEND, HOSTNAME_MAX, Hostname, PALETTE_NAMES, Settings,
     TZ_LIMIT_MINUTES,
@@ -122,6 +123,7 @@ pub fn apply_one(s: &mut Settings, key: &str, value: &str) -> Result<(), FormErr
         }
         "hostname" => s.hostname = Hostname::new(value).ok_or(FormError::BadValue)?,
         "days" => s.alarm_days = parse_days(value).ok_or(FormError::BadValue)?,
+        "melody" => s.melody = melody::index_of(value).ok_or(FormError::BadValue)?,
         _ => return Err(FormError::UnknownKey),
     }
     Ok(())
@@ -166,7 +168,8 @@ pub fn write_json(out: &mut impl core::fmt::Write, s: &Settings) -> core::fmt::R
     write_days(out, s.alarm_days)?;
     writeln!(
         out,
-        "\",\"twelve_hour\":{},\"tz\":{},\"hostname\":\"{}\"}}",
+        "\",\"melody\":\"{}\",\"twelve_hour\":{},\"tz\":{},\"hostname\":\"{}\"}}",
+        melody::get(s.melody).name,
         s.twelve_hour,
         s.tz_offset_minutes,
         s.hostname.as_str()
@@ -189,6 +192,10 @@ button{font-size:1em;padding:.5em 1.5em;margin-top:1em}</style></head><body><h1>
     for (i, pct) in BRIGHTNESS_STEPS.iter().enumerate() {
         write!(out, "<option value={pct}{}>{pct} %</option>", if i == s.brightness { " selected" } else { "" })?;
     }
+    out.write_str("</select></label><label>Alarm sound <select name=melody>")?;
+    for (i, m) in melody::MELODIES.iter().enumerate() {
+        write!(out, "<option value={}{}>{}</option>", m.name, if i == s.melody { " selected" } else { "" }, m.label)?;
+    }
     writeln!(
         out,
         "</select></label><label>Alarm <input type=time name=alarm value={:02}:{:02}></label>\
@@ -197,7 +204,7 @@ button{font-size:1em;padding:.5em 1.5em;margin-top:1em}</style></head><body><h1>
 <label><input type=checkbox name=twelve_hour{}> 12 hour clock</label>\
 <label>Timezone, minutes east of UTC <input type=number name=tz min=-{lim} max={lim} step=15 value={}></label>\
 <label>Hostname, for the DHCP server <input type=text name=hostname maxlength={hmax} pattern=\"[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?\" value=\"{}\"></label>\
-<button>Save</button></form><p><small>Scriptable: <code>GET /api</code>, <code>POST /api</code> with the same fields.</small></p></body></html>",
+<button>Save</button> <button formaction=/play>Play</button></form><p><small>Scriptable: <code>GET /api</code>, <code>POST /api</code> with the same fields.</small></p></body></html>",
         s.alarm_hour,
         s.alarm_minute,
         if s.alarm_armed { " checked" } else { "" },

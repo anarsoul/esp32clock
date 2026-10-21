@@ -8,6 +8,7 @@ pub mod config;
 pub mod display;
 pub mod form;
 pub mod http;
+pub mod melody;
 pub mod net;
 pub mod panel;
 pub mod scan;

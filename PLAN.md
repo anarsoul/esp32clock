@@ -478,6 +478,7 @@ whichever embassy-net version it tracks. The parsing is in
 | `POST /` | applies the form, absent checkboxes mean off, redirects to `/` |
 | `GET /api` | JSON of the current settings |
 | `POST /api` | applies the given keys only, returns the JSON; 400 on a bad key or value |
+| `POST /play` | previews the melody chosen in the form once; saves nothing (M8) |
 
 Keys, as `application/x-www-form-urlencoded` on both routes so that
 `curl -d` and Home Assistant's `rest_command` can drive it without JSON:
@@ -491,6 +492,7 @@ Keys, as `application/x-www-form-urlencoded` on both routes so that
 | `twelve_hour` | same |
 | `tz` | minutes east of UTC, −840 to 840 |
 | `hostname` | 1 to 24 of `a-z`, `0-9`, `-`; sent to the DHCP server |
+| `melody` | alarm sound: `beeps`, `twinkle`, `ode`, `frere` (M8) |
 
 Changes go through `settings::update`, so the display redraws and the
 persist task writes exactly as for a button press.
@@ -593,6 +595,57 @@ response buffer grew from 2 KB to 2.5 KB.
 set the alarm one minute ahead, arm it: nothing rings, the degree mark is
 lit. Set `days=all`: it rings. `curl -d days=mon,wed http://<ip>/api`
 echoes `"days":"mon,wed"`; `days=none` and `days=` get a 400.
+
+### M8 — alarm melodies — DONE, verified on the panel 2026-10-21
+
+The alarm sound is a setting: the four beeps as before, or a tune.
+
+- **Data.** `src/melody.rs`, pure: a `Note` is a pitch in Hz (0 for a
+  rest) and a length in sixteenths; a `Melody` has a name for the API, a
+  label for the page, a tempo in beats per minute, the notes, and the
+  pause before it repeats. `Note::ms(bpm)` is the only arithmetic. A note
+  sounds for its length minus an articulation gap of one eighth of the
+  note, clamped to 15 to 60 ms, so repeated pitches stay distinct and the
+  beat is not stretched; rests are written out. Four melodies: `beeps`
+  (four 100 ms tones at 2.5 kHz, 100 ms apart, 800 ms pause, the M4
+  pattern), `twinkle` (Twinkle Twinkle Little Star, full verse, 120 bpm),
+  `ode` (Ode to Joy, first two phrases, 120 bpm), `frere` (Frère Jacques,
+  one round, 120 bpm). All public domain. The first cut put the tunes in
+  C with a top note of A6 (1760 Hz), and that note came out far louder
+  than the rest: the buzzer resonates near 2 kHz. Twinkle and Frère are
+  now in G, top note E6 (1319 Hz), Ode stays in C with G6 (1568 Hz) as
+  its top. If a pitch still stands out, the next step is a per-pitch duty
+  table in the buzzer, which lowers the drive near the resonance.
+- **Buzzer.** The request queue goes; a `Signal` carries one of `Ring
+  (melody)`, `Preview(melody)` or `Stop`. The task plays note by note and
+  between notes polls the signal, so a stop lands within one note. `Ring`
+  repeats with the melody's pause until stopped or replaced; `Preview`
+  plays once.
+- **Display.** Sends `Ring` when the UI enters `Ringing` and `Stop` when
+  it leaves, instead of re-queuing a beep every 1.5 s.
+- **Setting.** `melody`, an index into the melody table, default `beeps`.
+  Record version 5 stores it in the last spare byte at offset 35; a
+  version 4 record loads with `beeps`.
+- **Page and API.** Key `melody` with the melody name. The page gets an
+  "Alarm sound" select and a second submit button, "Play", which posts
+  the form to `/play`: the melody chosen in the select previews once and
+  the page reloads with nothing saved, so a sound can be auditioned
+  before Save commits the whole page. (First cut saved as well; the user
+  wanted the two separate.)
+
+**Checked on the host** (the melody module as is, plus the usual record
+and form harness): every note has a length, every tone sounds for its
+length minus 15 to 60 ms, a quarter at 120 bpm is 500 ms sounding 440,
+an eighth 250 sounding 219, the beep pattern is 700 ms as in M4, the
+tunes run 24 s (Twinkle), 16 s (Ode) and 16 s (Frère); a version 4
+record loads with `beeps`, an index past the table is rejected; the API
+name round-trips and an unknown one is refused; the page is 2127 bytes.
+
+**Verify on the panel.** Pick a tune on the page and press "Play": it
+plays once, in time, with audible separation between repeated notes, and
+the saved sound is unchanged until Save. Set the alarm a minute ahead: it rings the tune, repeats after the
+pause, and a press stops it mid-tune. `curl -d melody=ode http://<ip>/api`
+echoes `"melody":"ode"`; `melody=jingle` gets a 400.
 
 ## 6. Risks and how they are handled
 
