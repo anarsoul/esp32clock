@@ -122,13 +122,16 @@ impl Store {
     /// torn write the repair could not fix) is erased so that saving works.
     pub async fn load(&mut self) -> Option<Settings> {
         match self.map.fetch_item::<[u8; RECORD_LEN]>(&mut self.scratch.0, &KEY).await {
-            Ok(Some(record)) => {
-                let s = Settings::from_record(&record);
-                if s.is_none() {
-                    warn!("settings: stored record {record:?} not understood, using defaults");
+            Ok(Some(record)) => match Settings::from_record(&record) {
+                Some(s) => {
+                    info!("settings: loaded from flash");
+                    Some(s)
                 }
-                s
-            }
+                None => {
+                    warn!("settings: stored record {record:?} not understood, using defaults");
+                    None
+                }
+            },
             Ok(None) => {
                 info!("settings: nothing stored, using defaults");
                 None
