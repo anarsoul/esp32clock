@@ -125,7 +125,9 @@ fn log_status(controller: &WifiController<'static>, since: Instant) {
 /// Keep the station connected, and run DHCP only while it is. The stack
 /// starts with no IPv4 configuration; it is switched on `LINK_SETTLE`
 /// after each connect and off at each disconnect, so the first discover
-/// of every connection goes out on a link that can carry it.
+/// of every connection goes out on a link that can carry it. A run of
+/// `config::CONNECT_RESET_ATTEMPTS` failed connects, or one lasting
+/// `config::CONNECT_RESET_SECS`, resets the chip through `heal::reset`.
 #[embassy_executor::task]
 pub async fn wifi_task(mut controller: WifiController<'static>, stack: Stack<'static>) -> ! {
     if config::WIFI_SSID.is_empty() {
@@ -150,6 +152,12 @@ pub async fn wifi_task(mut controller: WifiController<'static>, stack: Stack<'st
         Err(e) => warn!("wifi: set_max_tx_power: {e:?}"),
     }
 
+    // Failed connects in a row, and when the run of them started. The
+    // driver avoids the access point that last dropped it and can keep
+    // trying another one that cannot hear the clock; only a reset clears
+    // that, so a run that reaches either limit ends in `heal::reset`.
+    let mut failures: u32 = 0;
+    let mut first_failure: Option<Instant> = None;
     loop {
         if let Err(e) = controller.set_config(&cfg) {
             error!("wifi: set_config: {e:?}");
@@ -159,9 +167,23 @@ pub async fn wifi_task(mut controller: WifiController<'static>, stack: Stack<'st
         log_candidates(&mut controller).await;
         info!("wifi: connecting to {}", config::WIFI_SSID);
         match controller.connect_async().await {
-            Ok(info) => info!("wifi: connected to {} channel {}", Bssid(info.bssid), info.channel),
+            Ok(info) => {
+                info!("wifi: connected to {} channel {}", Bssid(info.bssid), info.channel);
+                failures = 0;
+                first_failure = None;
+            }
             Err(e) => {
-                warn!("wifi: connect failed: {e:?}");
+                failures += 1;
+                let since = first_failure.get_or_insert_with(Instant::now).elapsed();
+                warn!(
+                    "wifi: connect failed: {e:?} (attempt {failures} of {}, {} s of {})",
+                    config::CONNECT_RESET_ATTEMPTS,
+                    since.as_secs(),
+                    config::CONNECT_RESET_SECS
+                );
+                if failures >= config::CONNECT_RESET_ATTEMPTS || since.as_secs() >= config::CONNECT_RESET_SECS {
+                    heal::reset(format_args!("no connection after {failures} attempts over {} s", since.as_secs())).await
+                }
                 Timer::after(RECONNECT_DELAY).await;
                 continue;
             }
@@ -273,7 +295,18 @@ pub fn probe_stats() -> (u32, u32, u32) {
     )
 }
 
-/// Ping the gateway every `PROBE_PERIOD` while the stack has an address.
+/// Room for one probe packet, request or reply: the payload, the 8-byte
+/// ICMP header and slack. A reply that does not fit is dropped as
+/// truncated, which would read as a failure.
+const PROBE_BUF: usize = config::PROBE_PAYLOAD_BYTES + 64;
+
+/// The probe payload; a pattern, the content does not matter. Static so
+/// the task's future stays small.
+static PROBE_PAYLOAD: [u8; config::PROBE_PAYLOAD_BYTES] = [0x5a; config::PROBE_PAYLOAD_BYTES];
+
+/// Ping the gateway every `PROBE_PERIOD` while the stack has an address,
+/// with a full-size frame (`config::PROBE_PAYLOAD_BYTES`) so the probe
+/// fails when page-sized frames fail, not only when everything does.
 /// Logs each failure and the recovery; the counts go in the heartbeat.
 /// A router that never answers ping shows up as a failure every period
 /// from the first minute, which is its own answer.
@@ -287,9 +320,9 @@ pub fn probe_stats() -> (u32, u32, u32) {
 pub async fn probe_task(stack: Stack<'static>) -> ! {
     let mut armed = false;
     let mut rx_meta = [IcmpPacketMetadata::EMPTY; 2];
-    let mut rx_buf = [0u8; 128];
+    let mut rx_buf = [0u8; PROBE_BUF];
     let mut tx_meta = [IcmpPacketMetadata::EMPTY; 2];
-    let mut tx_buf = [0u8; 128];
+    let mut tx_buf = [0u8; PROBE_BUF];
     let mut pinger = PingManager::new(stack, &mut rx_meta, &mut rx_buf, &mut tx_meta, &mut tx_buf);
     loop {
         stack.wait_config_up().await;
@@ -299,7 +332,7 @@ pub async fn probe_task(stack: Stack<'static>) -> ! {
         };
         let mut params = PingParams::new(gateway);
         params
-            .set_payload(b"esp32clock")
+            .set_payload(&PROBE_PAYLOAD)
             .set_count(1)
             .set_timeout(PROBE_TIMEOUT)
             .set_rate_limit(Duration::from_millis(0));
@@ -314,7 +347,8 @@ pub async fn probe_task(stack: Stack<'static>) -> ! {
                 if !armed {
                     armed = true;
                     info!(
-                        "probe: gateway {gateway} answers in {} ms; self-heal armed at {} failures",
+                        "probe: gateway {gateway} answers a {}-byte ping in {} ms; self-heal armed at {} failures",
+                        config::PROBE_PAYLOAD_BYTES,
                         rtt.as_millis(),
                         config::PROBE_RESET_FAILURES
                     );

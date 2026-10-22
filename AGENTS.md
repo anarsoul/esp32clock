@@ -35,8 +35,9 @@ sets the runner and `ESP_LOG=info`. For a network debugging run set
 `ESP_LOG='info,embassy_net=debug,esp_radio=debug'` on the command line
 (it overrides the config, and esp-println compiles the filter in); the
 extra lines are DHCP state and driver events, not packets. Every log
-line carries the uptime in ms. `scripts/watch-clock.sh <ip>` pings and
-fetches `/api` from the host every 30 s for the other side of the story.
+line carries the uptime in ms. `scripts/watch-clock.sh <ip>` sends a
+full-size ping and fetches `/api` from the host every 30 s for the other
+side of the story.
 
 Credentials and the default timezone are read at build time by `src/config.rs`; `build.rs` reruns the build when they
 change. The timezone, 12/24 hour, colour, brightness, alarm, alarm days,
@@ -65,8 +66,16 @@ MSRV-aware resolver picks an esp-rom-sys that esp-storage cannot build with.
 Any press ends ringing or the IP display. Set mode times out after 15 s,
 ringing after 120 s. Self-heal: once the gateway has answered a ping, ten
 failed probes in a row (five minutes) with the link still up blank the
-panel and reset the chip; the boot line and the heartbeat carry the count
-since power-up (`config::PROBE_RESET_FAILURES`). An alarm missed by up to
+panel and reset the chip (`config::PROBE_RESET_FAILURES`). The probe is
+a full-size ping (`config::PROBE_PAYLOAD_BYTES`, 1400 bytes) because a
+marginal uplink passes short frames while page-sized ones fail; so do ten
+failed connects in a row or three minutes of them
+(`config::CONNECT_RESET_ATTEMPTS`, `CONNECT_RESET_SECS`), because the
+driver avoids the access point that last dropped it and only a reset
+clears that. The boot line and the heartbeat carry the count since
+power-up. The time survives a software reset: it is carried as an
+offset from the RTC timer, which keeps running, so the panel shows the
+time again before Wi-Fi is up. An alarm missed by up to
 10 minutes across a power cut rings on the first valid time after boot;
 after a software reset the alarm last rung-and-ended or skipped within
 15 minutes is not rung again, while one cut off mid-ring comes back.
@@ -82,17 +91,17 @@ after a software reset the alarm last rung-and-ended or skipped within
 | `src/ui.rs` | mode state machine, pure logic; edits the settings it is handed; alarm due check, missed-alarm grace with `suppress_alarm` seed, consumes `skip_next` |
 | `src/settings.rs` | `Settings`, palette and brightness tables, `Hostname`, shared `Watch` with change signal, versioned flash record |
 | `src/storage.rs` | nvs partition lookup, `sequential-storage` map over `esp-storage`, debounced persist task that compares records, not structs |
-| `src/heal.rs` | last-resort reset: blanks the panel through `scan::stop`, counts itself in the `carry` record, logs, reboots |
+| `src/heal.rs` | last-resort reset: blanks the panel through `scan::stop`, counts itself and the time in the `carry` record, logs, reboots |
 | `src/form.rs` | key=value parsing, all-or-nothing `apply` on a copy, JSON and the HTML page with its error notice and the read-only `Status` line; pure logic |
 | `src/http.rs` | HTTP/1.0 server, `LISTENERS` sockets each in its own task: `GET`/`POST` on `/` and `/api`, `POST /play`; a refused form redirects to `/?error=…`; per-listener state and counters for the heartbeat |
 | `src/buttons.rs` | debounced short/long press events, plus the two-button hold |
 | `src/melody.rs` | alarm tunes as pitch and length data with tempo; pure |
-| `src/carry.rs` | RTC-RAM record used only after a software reset (`CoreSw`/`Cpu0Sw`; anything else zeroes it at boot): self-heal count and time, the skip flag, the alarm last handled |
+| `src/carry.rs` | RTC-RAM record used only after a software reset (`CoreSw`/`Cpu0Sw`; anything else zeroes it at boot): self-heal count and time, the skip flag, the alarm last handled, the clock as an offset from the RTC timer |
 | `src/buzzer.rs` | LEDC PWM on an open-drain pin; plays a melody on command, looped or once, stops within a note |
-| `src/clock.rs` | Unix time = uptime + NTP offset; local time with weekday |
-| `src/net.rs` | Wi-Fi station with all-channel scan and transmit-power ceiling, minute RSSI line; DHCP switched on 500 ms after each connect and off at disconnect; link and address monitor, gateway ping probe with the self-heal trigger, SNTP, DHCP renew on hostname change |
+| `src/clock.rs` | Unix time = uptime + NTP offset; local time with weekday; `carry_time`/`restore_carried` move the time across a software reset via the RTC timer, refreshed by the heartbeat |
+| `src/net.rs` | Wi-Fi station with all-channel scan and transmit-power ceiling, minute RSSI line, connect failure budget that ends in `heal::reset`; DHCP switched on 500 ms after each connect and off at disconnect; link and address monitor, gateway ping probe with the self-heal trigger, SNTP, DHCP renew on hostname change |
 | `src/config.rs` | build-time env vars and compile-time defaults |
-| `src/bin/main.rs` | pin setup, SPI2 quad + DMA, executors, task spawning, panic reset hook, log timestamps, reset reason at boot, minute heartbeat log |
+| `src/bin/main.rs` | pin setup, SPI2 quad + DMA, executors, task spawning, panic reset hook, log timestamps, reset reason and carried time at boot, minute heartbeat log |
 
 ## Hardware facts that bite
 
@@ -107,10 +116,17 @@ after a software reset the alarm last rung-and-ended or skipped within
 - **Current:** `IS` comes from brightness alone, capped at step 11
   (`MAX_CURRENT_STEP`). Never derive it from how much is lit, and never park
   the panel all-white at high current; the drivers get hot.
-- **Wi-Fi power:** `WIFI_MAX_TX_POWER_QDBM` is 44 (11 dBm) because the
-  enclosure costs a few dB and esp-radio's default did not reach the
-  access point. The SuperMini antenna is unstable near 20 dBm; raise it in
-  small steps and let the user confirm from inside the case.
+- **Wi-Fi power:** `WIFI_MAX_TX_POWER_QDBM` is 68, which the driver
+  rounds to its 16 dBm level (the level table is in the constant's
+  comment; the boot log prints the setting). The access point hears the
+  clock about 20 dB below what the clock hears of it, so the uplink is
+  the side that fails, and the clock's own RSSI line looks fine while
+  pages and lease renewals are lost. 14 and 16 dBm each gained a full
+  step at the access point; 18 and 20 dBm read louder at the near AP
+  but quieter at the far one, with slower probes and failed
+  associations, which is the SuperMini antenna mismatch. Measure any
+  change with the AP's signal figure for the clock, from inside the
+  case, not with the clock's RSSI.
 - **First frame after connect:** the driver reports the station
   connected before it can pass a frame, so a DHCP discover sent at that
   instant is lost and smoltcp retries only after 10 s. The stack starts

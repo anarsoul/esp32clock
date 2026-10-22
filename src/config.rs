@@ -50,10 +50,23 @@ pub const MAX_CURRENT_STEP: u8 = 11;
 /// Ceiling on Wi-Fi transmit power, in quarter dBm, 8 to 84. esp-radio
 /// starts at 20 (5 dBm), which does not reach a far access point. 34
 /// (8.5 dBm) worked on the bench but not inside the clock's case, which
-/// costs a few dB; 44 (11 dBm) does. ESP32-C3 SuperMini
-/// boards have an antenna that makes settings near 20 dBm unstable, so
-/// go up in small steps.
-pub const WIFI_MAX_TX_POWER_QDBM: i8 = 44;
+/// costs a few dB; 44 (11 dBm) connects and holds, but the access point
+/// hears the clock 21 dB below what the clock hears of it, and the real
+/// clock sat 7 dB above the AP's noise floor. The driver rounds the
+/// setting down to a level: 44 is 11 dBm, 52 is 13, 56 is 14, 60 is 15,
+/// 66 to 71 are 16, 72 to 79 are 18, 80 to 84 are 20 (the table in
+/// esp-wifi-sys's `esp_wifi_set_max_tx_power` doc), so the boot log's
+/// "max tx power" is the setting, not the level. 56 (14 dBm) and 68
+/// (16 dBm) each read a full step better at the AP (-59, -55, -52 dBm)
+/// with clean connects. 80 (20 dBm) read -46 but the link got worse: the
+/// gateway round trip doubled, the first connect needed three attempts
+/// and the far AP could not complete an association in 16 tries. The
+/// ESP32-C3 SuperMini antenna is mismatched enough that full power
+/// radiates louder and decodes worse. 72 (18 dBm) was already past the
+/// knee: the near AP read -47 but jumping, the far AP read -73 against
+/// -70 at 68, the probe took 70 ms and association took five tries. 68
+/// is the ceiling.
+pub const WIFI_MAX_TX_POWER_QDBM: i8 = 68;
 
 /// Frames the Wi-Fi driver queues for the network stack before it drops
 /// new ones. esp-radio's default of 5 overflowed on bursts of LAN
@@ -68,6 +81,24 @@ pub const WIFI_RX_QUEUE_FRAMES: usize = 32;
 /// five minutes. The first-answer condition keeps a router that never
 /// answers ping from rebooting the clock every five minutes.
 pub const PROBE_RESET_FAILURES: u32 = 10;
+
+/// Payload of each gateway probe. A page is two full-size TCP segments,
+/// and a marginal uplink passes short frames long after full ones start
+/// failing, so a small ping said "fine" while the page crawled. This
+/// makes the probe frame the size of a page segment: 1400 + 28 bytes of
+/// headers, under the driver's 1492-byte MTU with margin.
+pub const PROBE_PAYLOAD_BYTES: usize = 1400;
+
+/// Consecutive failed connects after which the station is reset, and
+/// the span from the first failure of the run that does the same. The
+/// driver avoids the access point that last dropped it and will keep
+/// trying another that cannot hear the clock; a reset clears that. It
+/// fires whether or not a scan showed a candidate, so with every access
+/// point down the clock resets every `CONNECT_RESET_SECS` until one is
+/// back, which costs a dark blink and nothing else now that the time is
+/// carried across the reset.
+pub const CONNECT_RESET_ATTEMPTS: u32 = 10;
+pub const CONNECT_RESET_SECS: u64 = 180;
 
 /// NTP server, resolved through the DHCP-supplied DNS.
 pub const NTP_SERVER: &str = "pool.ntp.org";

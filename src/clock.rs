@@ -3,18 +3,61 @@
 //! The uptime counter runs off the crystal, so between syncs the drift is a
 //! few tens of milliseconds per hour at most. The offset is replaced, not
 //! slewed, on every sync; a jump of that size is invisible on a HH:MM display.
+//!
+//! Across a software reset the uptime restarts but the RTC timer does
+//! not, so the time is carried in the `carry` record as Unix time minus
+//! RTC time (`carry_time`) and set again from it at boot
+//! (`restore_carried`). Only the reboot itself, a few seconds, runs on the
+//! RTC slow clock; after that the crystal takes over again.
 
-use core::cell::Cell;
+use core::cell::{Cell, RefCell};
 
 use critical_section::Mutex;
 use embassy_time::{Duration, Instant};
+use esp_hal::rtc_cntl::Rtc;
 
-use crate::settings;
+use crate::{carry, settings};
 
 const SECS_PER_DAY: i64 = 86_400;
 
 /// Microseconds to add to the uptime to get Unix time. `None` until synced.
 static OFFSET_US: Mutex<Cell<Option<i64>>> = Mutex::new(Cell::new(None));
+
+/// The RTC timer, for the time carried across a software reset.
+static RTC: Mutex<RefCell<Option<Rtc<'static>>>> = Mutex::new(RefCell::new(None));
+
+/// Hand over the RTC timer. Call once at boot, before `restore_carried`.
+pub fn init(rtc: Rtc<'static>) {
+    critical_section::with(|cs| RTC.borrow(cs).replace(Some(rtc)));
+}
+
+/// Microseconds on the RTC timer since power-up, if `init` has run.
+fn rtc_micros() -> Option<i64> {
+    critical_section::with(|cs| {
+        RTC.borrow(cs).borrow().as_ref().map(|rtc| rtc.time_since_power_up().as_micros() as i64)
+    })
+}
+
+/// Write the current time into the carried record as an offset from the
+/// RTC timer, so the next software reset starts with it. Does nothing
+/// before the first sync.
+pub fn carry_time() {
+    if let (Some(unix_us), Some(rtc_us)) = (unix_micros(), rtc_micros()) {
+        carry::update(|c| c.time_offset_us = Some(unix_us - rtc_us));
+    }
+}
+
+/// Set the clock from the offset carried across a software reset, if
+/// there is one. Returns whether the time is now known.
+pub fn restore_carried() -> bool {
+    match (carry::get().time_offset_us, rtc_micros()) {
+        (Some(offset), Some(rtc_us)) => {
+            set_unix_micros(rtc_us + offset);
+            true
+        }
+        _ => false,
+    }
+}
 
 /// Local time of day.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

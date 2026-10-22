@@ -1,7 +1,8 @@
 //! Deliberate reset as a last resort: the panel is blanked first and the
 //! reset is counted in the record `carry` keeps across a software reset,
 //! so the boot log, the heartbeat and the page can say it happened even
-//! when nobody was watching the serial port at the time.
+//! when nobody was watching the serial port at the time. The time goes
+//! across in the same record, so a heal does not cost the display.
 
 use embassy_time::{Duration, Timer};
 use log::error;
@@ -31,6 +32,9 @@ pub async fn reset(reason: core::fmt::Arguments<'_>) -> ! {
         c.heals = n;
         c.last_heal_unix = clock::unix_secs();
     });
+    // The time goes over as an offset from the RTC timer, which keeps
+    // running through the reset, so the panel shows it again at once.
+    clock::carry_time();
     // Let the log line leave the serial port.
     Timer::after(Duration::from_millis(200)).await;
     esp_hal::system::software_reset()

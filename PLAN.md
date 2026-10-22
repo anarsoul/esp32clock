@@ -1071,6 +1071,174 @@ add, so the counters are plain load-and-store with one writer each.
 **Done when.** The user has a capture that falls in one row of the
 table above, and the entry below this one records what it was.
 
+### What the capture showed (after M8) — DONE, verified on the panel 2026-10-22
+
+Eleven hours of the spare board on the bench produced no fault of its
+own: no disconnect, no `RX QUEUE FULL`, flat heap, every probe answered
+except the ones the router rule dropped. Kicking the station from the
+near access point three times with hostapd's `del_client` did:
+
+- After each kick the driver tried only the far AP for about a minute,
+  although its own all-channel scan listed the near one at -38 dBm and
+  the far one at -77. ESP-IDF avoids the AP that just disconnected it
+  for a few attempts. Those attempts died with
+  `DisassociatedDueToInactivity`, `AuthenticationExpired` and
+  `Class3FrameFromNonAssociatedStation`, which all mean the far AP did
+  not hear the board. Once it did succeed and the board sat on the far
+  AP for 223 s, reported connected at -77 dBm, with DHCP taking 30 s,
+  one gateway answer in seven probes, five connections accepted and none
+  served, and the host unable to ping it. That is the original symptom
+  reproduced: connected and dead, with no firmware state machine at
+  fault. Five probes had failed when it was kicked off; the self-heal
+  would have reset it after ten and the fresh scan would have picked the
+  near AP.
+- The AP side explains it. Luci on the near AP shows the spare board at
+  -59 dBm against -38 heard the other way: the board's 11 dBm ceiling
+  and antenna put its uplink 21 dB below the downlink. The far AP, heard
+  at -77, therefore hears the board around -98, under its -90 noise
+  floor; it can never hold these boards. The real clock reads -84/-91
+  on the near AP: a 7 dB margin, which is the decoding limit of the
+  6 Mbit/s rate that OpenWrt's default (`legacy_rates 0`) makes the
+  lowest one. Downlink fine, uplink lossy in bursts: lease renewals and
+  page replies vanish while the driver reports connected. That is the
+  primary cause on the real clock; the self-heal is the backstop.
+
+**Next steps, in order.**
+
+1. Transmit ceiling up one step, 44 to 56 (14 dBm), on the spare board
+   first. Measure: the Luci signal figure for the board on the near AP
+   (was -59), the board's own `rssi` line (was -38 to -43, should not
+   move), and whether the connect and the probes stay clean. A gain of
+   less than 3 dB at the AP means the antenna is saturating and the
+   next step is not worth taking; a full step earns a try at 68
+   (17 dBm). Then the same on the real clock, read from inside the case.
+   Measured: 56 read -55 at the AP (a full step from -59), board RSSI
+   still -38, connect and probes clean. 68 read -52, again a full step,
+   board RSSI -39, connect clean; after a kick the far AP, which could
+   not hear the board at 44, heard it at -70 and held it, slow (gateway
+   108 ms, a page in 1.2 s) and unstable, with DHCP taking 135 s there
+   against 20 ms on the near AP. 80 (20 dBm) read -46 at the near AP,
+   two steps' worth, and the link got worse everywhere: the first
+   connect after a clean boot tried the far AP twice and took 24 s, the
+   gateway probe on the near AP went from 41 to 86 ms, and after a kick
+   the far AP, which hears the board louder than at 68, failed 16
+   associations in a row with `Class3FrameFromNonAssociatedStation` and
+   `HandshakeTimeout`: frames arriving but not decoding. That is the
+   SuperMini antenna mismatch at full power. Correction from the
+   esp-wifi-sys doc table: the driver rounds the setting down to a
+   level, and 68 is 16 dBm, not 17; 72 to 79 are 18 dBm, 80 is 20. So
+   the series was 11, 14, 16, 20 dBm, and 72 (18 dBm) is the one
+   untested level between the last good one and the bad one. Measured:
+   the near AP read -47 jumping to -52, the far AP -73 against -70 at
+   68, the first probe 70 ms against 41, the first connect fine but the
+   far AP took five tries after a kick, DHCP 80 s there, pages in 1.0
+   to 1.4 s. More drive, a quieter far AP: past the knee. 68 (16 dBm) is
+   the ceiling, verified by the user on the AP side; the guide's
+   hardware section says so. On the real clock, in its case, 68 moved
+   the near AP's reading from -84/-91 to -76/-90 with dips to -78: an
+   8 dB gain, 14 dB above the noise floor against 7 before, clear of
+   the 6 Mbit/s decoding limit with margin. The smoltcp DHCP lines never appeared:
+   smoltcp logs only with its own `log` feature, which embassy-net does
+   not enable; turning it on is the next thing to do before another
+   far-AP session, since DHCP there took 30 to 135 s at every power.
+
+   Probe size. On the far AP at 18 dBm the probe passed every time while
+   pages loaded in chunks over 1 to 1.4 s: a 10-byte ping on a marginal
+   uplink says nothing about 1.5 KB frames, and a page is two of those.
+   The probe payload is now `config::PROBE_PAYLOAD_BYTES`, 1400 bytes
+   (1428 with headers, under the 1492 MTU), the ICMP buffers hold one
+   such packet each (a reply that does not fit is dropped as truncated),
+   the payload is a static so the task's future stays small, and the
+   armed line names the size. `scripts/watch-clock.sh` pings with the
+   same payload. The 2 s timeout stays: a page segment that takes longer
+   than that is a failed page in practice. Verify: `probe: gateway
+   10.1.1.1 answers a 1400-byte ping in N ms` on the near AP with N near
+   the old 12 to 40 ms; on the far AP expect failures to appear where
+   the small ping passed and the page crawled.
+2. On the AP: `legacy_rates '1'` lets the clock fall back to 1 Mbit/s,
+   about 10 dB more uplink margin than 6 Mbit/s OFDM, at some airtime
+   cost. No firmware change.
+3. Pick the AP ourselves: `net::wifi_task` already scans before each
+   connect; pin the strongest candidate's BSSID in `StationConfig`
+   (`with_bssid`) and fall through to the next on failure. Removes the
+   driver's avoidance from the choice, so a kick or an AP reboot does
+   not strand the clock on an AP that cannot hear it.
+4. Re-select after three consecutive probe failures with the link up:
+   scan while connected, reconnect to a candidate at least 10 dB
+   stronger if there is one. Turns the five-minute reset into a one to
+   two minute reconnect; the reset stays for the case no AP can hear
+   the board, where it also rescans every five minutes until the near
+   AP returns.
+
+The esp-radio `WIFI_TX_INFLIGHT` leak noted above remains unproven on
+hardware and stays in the backlog. BSSID pinning (items 3 and 4) was
+set aside by the user in favour of the two changes below.
+
+### Heal when the station cannot connect, and keep the time across a heal (after M8) — DONE, verified on the panel 2026-10-22
+
+**Problem.** The self-heal lives in the probe task, which waits for an
+address and checks `is_link_up`, so a station that is not associated is
+never healed: the reconnect loop in `net::wifi_task` had no failure
+budget. The 20 dBm run showed the case it misses: after a kick the
+driver tried the far AP sixteen times in 200 s and never fell back to
+the near one at -38 dBm. The driver avoids the AP that last dropped it,
+that state lives in the radio library, and a reset is what clears it.
+
+A reset also costs the time. The clock is Embassy uptime plus an NTP
+offset in RAM, so after a software reset the panel sweeps until the
+next sync, which with no Wi-Fi may be a long time. The RTC timer is
+the fix: esp-hal documents that any reset other than power-up leaves it
+running, and it is read through `Rtc::time_since_power_up` with the
+slow-clock calibration applied.
+
+**Design.**
+
+- `config::CONNECT_RESET_ATTEMPTS` (10) and `CONNECT_RESET_SECS` (180).
+  `wifi_task` counts consecutive failed `connect_async` calls and notes
+  the time of the first failure in the run; when either limit is
+  reached it calls `heal::reset` with the count and the span in the
+  reason. A successful connect clears both. The user chose this over a
+  candidate test: the heal fires whether or not the scan showed an AP,
+  so with every AP down the clock resets every three minutes until one
+  is back. With the time carried that costs a dark blink and nothing
+  else; before the first sync after a power-up the panel was sweeping
+  anyway.
+- `carry::Carried` gains `time_offset_us: Option<i64>`, two more words
+  in the record: Unix microseconds minus RTC microseconds at the moment
+  it was written. `clock::init` takes the `Rtc` built from
+  `peripherals.RTC_TIMER` in `main`; `clock::carry_time` writes the
+  offset, `clock::restore_carried` sets the clock from it at boot and
+  returns whether it did. `heal::reset` writes the offset just before
+  the reset, and the minute heartbeat in `main` refreshes it so a panic
+  reset, which cannot run async code, also carries the time to within a
+  minute of RTC drift. The record keeps its software-reset-only policy,
+  so a flasher or power reset still starts without a time.
+- Between the write and the restore the elapsed time comes from the RTC
+  slow clock, about 5 s of reboot; after the restore the clock runs on
+  the crystal again, and the next NTP sync replaces the offset as
+  always. Error across a heal: well under a second.
+
+**Verify.** Flash, let it sync, then kick the station from the near AP
+and block it on the far one (or power the far one off and ban the board
+on the near one): expect `wifi: connect failed … (attempt N of 10)`
+lines and, at the tenth or at 180 s, `heal: no connection after N
+attempts over S s …`, the panel going dark, and a boot line with
+`carried over Carried { …, time_offset_us: Some(…) }` followed by
+`clock: time carried over the reset, local time HH:MM:SS` before any
+Wi-Fi line, with the panel showing the time at once. `/api` then shows
+`heals` one higher. For the panic path, nothing to do by hand; the
+heartbeat line keeps the offset fresh.
+
+**Verified 2026-10-22** on the spare board in one run: a kick sent the
+station to the far AP after five failed attempts, counted as `attempt 5
+of 10, 35 s of 180` without firing; on the far AP all ten 1400-byte
+probes failed while the host's small `/api` fetches were served, the
+heal fired at 300 s, the boot line read `CoreSw` with `heals: 1` and a
+time offset, the clock printed 16:51:04 at 260 ms into the boot and NTP
+said 16:51:09 5.2 s later, and the fresh scan took the near AP first
+try. The connect budget's own reset is exercised by the same code path
+and was not forced to fire; the arithmetic in the log lines is right.
+
 ### Review backlog (2026-10-21)
 
 Found in the same review, not yet done, in rough order of value:

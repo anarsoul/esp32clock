@@ -19,6 +19,7 @@ use esp_hal::gpio::{DriveMode, Input, InputConfig, Level, Output, OutputConfig, 
 use esp_hal::interrupt::Priority;
 use esp_hal::ledc::Ledc;
 use esp_hal::rng::Rng;
+use esp_hal::rtc_cntl::Rtc;
 use esp_hal::spi::Mode;
 use esp_hal::spi::master::{Config as SpiConfig, Spi};
 use esp_hal::time::Rate;
@@ -31,7 +32,7 @@ use static_cell::StaticCell;
 
 use esp32clock::buzzer;
 use esp32clock::settings::Settings;
-use esp32clock::{buttons, carry, display, heal, http, net, scan, settings, storage};
+use esp32clock::{buttons, carry, clock, display, heal, http, net, scan, settings, storage};
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
 esp_bootloader_esp_idf::esp_app_desc!();
@@ -144,6 +145,14 @@ async fn main(spawner: Spawner) -> ! {
     } else {
         info!("boot: reset reason {reason:?}, RTC carry-over discarded");
     }
+    // The RTC timer ran through the reset; with a carried offset the
+    // clock is known before Wi-Fi is even started.
+    clock::init(Rtc::new(peripherals.RTC_TIMER));
+    if clock::restore_carried()
+        && let Some(t) = clock::now()
+    {
+        info!("clock: time carried over the reset, local time {:02}:{:02}:{:02}", t.hour, t.minute, t.second);
+    }
     info!("settings: {:?}", settings::get());
 
     // The drivers discard anything sent in the first 200 us after power-up.
@@ -192,6 +201,9 @@ async fn main(spawner: Spawner) -> ! {
     info!("running");
     loop {
         Timer::after(Duration::from_secs(60)).await;
+        // Keep the carried time fresh for a panic reset, which cannot
+        // write it on the way down.
+        clock::carry_time();
         let g = scan::take_gap_stats();
         let (sent, failed, streak) = net::probe_stats();
         info!(

@@ -1,7 +1,8 @@
 //! State carried across a software reset in RTC fast RAM: the self-heal
-//! count and time, and the volatile alarm state a reboot would otherwise
-//! lose (the skip-next flag, and which alarm was last handled so the
-//! missed-alarm grace does not ring it again).
+//! count and time, the wall clock as an offset from the RTC timer, and
+//! the volatile alarm state a reboot would otherwise lose (the skip-next
+//! flag, and which alarm was last handled so the missed-alarm grace does
+//! not ring it again).
 //!
 //! The record is used only after a software reset, which is what the
 //! self-heal and the panic handler do. Any other reset reason, power-on,
@@ -16,9 +17,9 @@ use esp_hal::rtc_cntl::SocResetReason;
 /// reset reason, against a reset that skipped the persistent-RAM zeroing.
 const MARK: u32 = 0x4341_5252; // "CARR"
 
-/// `[mark, heals, last heal unix, skip, handled unix, handled minute]`.
-/// A zero time means none.
-const WORDS: usize = 6;
+/// `[mark, heals, last heal unix, skip, handled unix, handled minute,
+/// time offset low, time offset high]`. A zero time or offset means none.
+const WORDS: usize = 8;
 
 #[esp_hal::ram(unstable(rtc_fast, persistent))]
 static mut RECORD: [u32; WORDS] = [0; WORDS];
@@ -38,6 +39,10 @@ pub struct Carried {
     /// The alarm last rung and ended, or used up by the skip flag: the Unix
     /// time that happened and the alarm's minute of the day.
     pub handled: Option<(i64, u16)>,
+    /// Unix microseconds minus RTC-timer microseconds when last written;
+    /// the RTC timer runs through a software reset, so this gives the
+    /// time back at boot. See `clock::restore_carried`.
+    pub time_offset_us: Option<i64>,
 }
 
 fn read_raw() -> [u32; WORDS] {
@@ -60,6 +65,10 @@ fn decode(v: [u32; WORDS]) -> Carried {
         last_heal_unix: (v[2] != 0).then_some(v[2] as i64),
         skip_next: v[3] != 0,
         handled: (v[4] != 0).then_some((v[4] as i64, v[5] as u16)),
+        time_offset_us: {
+            let offset = (v[6] as u64 | (v[7] as u64) << 32) as i64;
+            (offset != 0).then_some(offset)
+        },
     }
 }
 
@@ -73,6 +82,8 @@ fn encode(c: &Carried) -> [u32; WORDS] {
         c.skip_next as u32,
         handled_at as u32,
         handled_minute as u32,
+        c.time_offset_us.unwrap_or(0) as u64 as u32,
+        (c.time_offset_us.unwrap_or(0) as u64 >> 32) as u32,
     ]
 }
 
