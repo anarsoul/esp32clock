@@ -1117,3 +1117,321 @@ Found in the same review, not yet done, in rough order of value:
 | `half_duplex_write_buffer` rejects 2447-byte transfer | limit is 32 KB on C3; buffer is one descriptor; also tested with blocking `half_duplex_write` fallback |
 | esp-rtos / esp-hal version mismatch | start from esp-generate pinned set, bump only if it builds |
 | thermal: too many sinks at high IS | IS fixed from brightness (step 5 initially), never all-white for long |
+
+## 7. Roadmap (2026-10-22)
+
+Next work, in priority order: over-the-air updates first, then
+Wi-Fi provisioning from an access point, then the two sensors the board
+already carries. Each entry is the design as planned; it gets the
+measured facts and the "verified" mark the way the milestones above
+did, and the review backlog stays separate. The hardware facts came
+from `3rdparty/HU-058_ESPHome/docs/hardware.md` (socket pinout), the
+adapter board's schematic in `adapter/adapter/adapter.kicad_sch` (an
+ESP32-C3-Zero on a 2×8 header into the 8051 socket) and the esp-hal,
+esp-radio and esp-bootloader-esp-idf sources in the registry.
+
+### M9 — OTA updates — planned
+
+**Why first.** The clock lives in its case with no USB reachable, and
+every fix since M8 has meant opening it. An update over the LAN turns
+that into a `curl`.
+
+**Flash layout.** The 4 MB flash today carries espflash's default
+table: `nvs` at 0x9000 (24 KB), `phy_init` at 0xF000, one `factory`
+app at 0x10000 of 4032 KB. The release image is about 830 KB (text
+820 KB, data 10 KB), so two slots fit with room to double. New
+`partitions.csv`, checked in and passed to espflash from the runner
+line in `.cargo/config.toml` (`--partition-table partitions.csv`):
+
+| label | type | offset | size |
+| --- | --- | --- | --- |
+| nvs | data/nvs | 0x9000 | 0x6000 |
+| phy_init | data/phy | 0xF000 | 0x1000 |
+| otadata | data/ota | 0x10000 | 0x2000 |
+| ota_0 | app/ota_0 | 0x20000 | 0x1E0000 |
+| ota_1 | app/ota_1 | 0x200000 | 0x1E0000 |
+
+`nvs` keeps its offset so saved settings survive the repartition. The
+one-time USB flash with the new table erases `otadata`
+(`--erase-parts otadata`); all-ones `otadata` with no `factory` boots
+`ota_0`, which is where espflash puts the image. The bootloader is
+espflash's prebuilt one, and the crate docs warn it "might not"
+support OTA. ESP-IDF bootloaders have always booted from `otadata`,
+so the expectation is that it works; it is the first thing to verify,
+and if the boot log keeps loading from 0x20000 after a slot switch,
+the fallback is building the bootloader from ESP-IDF with
+`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` and pointing espflash at it
+with `--bootloader`.
+
+**Upload.** `POST /ota` with the raw application binary as the body
+(`espflash save-image --chip esp32c3 … app.bin`, then
+`curl --data-binary @app.bin http://<ip>/ota`). The request head is
+parsed as today; the body is streamed, not buffered: the handler
+reads the socket into a 4 KB sector buffer and, per full sector,
+erases and writes it into the slot that `OtaUpdater::next_partition`
+hands back (`esp_bootloader_esp_idf::ota_updater`, over the same
+`esp-storage` flash the settings use). `Content-Length` is required
+and must be at most the slot size; the first sector is checked for
+the image magic (0xE9) and the app descriptor magic before anything
+is erased, and a body that ends short leaves the slot half written
+and `otadata` untouched, so the running image stays the boot image.
+On the last sector the handler calls `activate_next_partition`,
+answers `200` with the slot name and byte count, and resets through
+`heal::reset` after the response is flushed. One upload at a time: a
+static busy flag makes a second listener answer `503`.
+
+**The scan during the write.** Flash writes run with interrupts off,
+and 830 KB is about 200 sector erases of tens of ms each: the panel
+would blink dark for the whole upload and the last latched row could
+sit lit at full current between sectors. The upload therefore starts
+by stopping the scan through `scan::stop` (the transfer ends on its
+blanking frame, same as the heal path), so the panel is dark from
+the first byte to the reboot. That is the honest display for "do not
+unplug". Expected wall time: the TCP side with 1 KB socket buffers
+over Wi-Fi is the limit, somewhere between ten and forty seconds;
+measure it. Wi-Fi frames dropped while interrupts are off are
+covered by TCP retransmission.
+
+**Rollback without bootloader support.** The bootloader falls back
+to the other slot on its own only if the selected image fails its
+checksum. A new image that boots and then panics or loses the network
+is on the firmware. The `carry` record gains an `ota_pending`
+counter: set to 1 by the upload, bumped on every software reset while
+non-zero, cleared when the new image reaches "good" (defined as the
+first gateway probe answered, or the first HTTP request served, so a
+board with a dead router can still be updated). If it reaches 3 the
+boot path switches `otadata` back to the previous slot and resets.
+A power cut zeroes the carry record, which is the right default: the
+user pulled the plug, the user decides.
+
+**Visible state.** `build.rs` exports `git describe --always --dirty`
+as `FIRMWARE_VERSION`; `/api` gains the read-only keys `version` and
+`slot` (`ota_0`/`ota_1`), the page status line shows both, and the
+boot line logs them. The page-size check on the host runs again
+(worst case was 2529 bytes with headers against the 4096 buffer).
+`scripts/ota.sh <ip> [app.bin]` builds the image and posts it.
+
+**Security.** The upload is as open as the settings form: anyone on
+the LAN can post. That is the existing trust boundary and stays so;
+a build-time `OTA_TOKEN` checked as a query string is a one-line
+addition if the LAN ever becomes shared.
+
+**Touches.** `partitions.csv`, `.cargo/config.toml`, `build.rs`,
+`src/ota.rs` (slot lookup, sector writer, activate, the pending
+counter), `src/http.rs` (`POST /ota`, streaming body, busy flag),
+`src/carry.rs`, `src/form.rs` (`Status` version and slot),
+`src/bin/main.rs` (boot-time rollback check, log line), `scripts/`.
+
+**Host checks.** The head parser with a `Content-Length` of a few
+hundred KB; the sector writer over `sequential-storage`'s mock flash
+with a body that ends short, one that is exactly a sector multiple
+and one that is not; the carry record round trip with the counter.
+
+**Verify on the panel.** Flash once over USB with the new table and
+read the boot log: `otadata` listed, app loaded from 0x20000. Post an
+image with a changed version string: the panel goes dark, the curl
+returns the slot and size, the clock reboots within a minute and
+`/api` shows the new version and `ota_1`. Post again: back to
+`ota_0`. Post a truncated file: `4xx`, the clock keeps running the
+old image after the dark period, and `/api` still shows it. Flash an
+image that panics after boot: three resets later the boot log shows
+the previous slot and the version in `/api` is the old one.
+
+### M10 — Wi-Fi provisioning from an access point — planned
+
+**Scope.** Credentials become a stored setting instead of a build-time
+constant, and a clock that has none raises its own network so the
+user can give it one from a phone. While it is an access point
+there is no internet, so no time and no alarm: the panel says so and
+waits. The build-time `WIFI_SSID`/`WIFI_PASSWORD` stay as the seed
+for a board whose record has no credentials yet, and may be empty.
+
+**Mode decision at boot, not at run time.** esp-radio
+1.0.0-beta.1 accepts `Config::AccessPointStation` but its receive
+path has a comment saying AP+STA is not supported yet, so the clock is
+either a station or an access point for one boot. `main.rs` decides
+before it builds the stack: access point if the record has no SSID or
+if the carry record's `boot_ap` flag is set by the button hold below;
+station otherwise. One
+`StackResources` serves whichever interface runs, so a second stack
+costs no RAM. The HTTP listeners are spawned on the stack that exists.
+
+**Getting into and out of it.** Exactly two things start the access
+point: a record with no SSID, and both buttons held for 10 seconds
+(the existing both-button hold, extended; the 2 s IP display still
+fires first and is harmless), which sets `boot_ap` in the carry
+record and resets through `heal::reset`. Nothing else does: a station
+that cannot associate keeps retrying forever, as today, so a router
+that is off for an hour or a wrong password never flips a clock on
+the wall into an access point by itself. A wrong password is
+therefore a blank clock until the user holds the buttons and enters
+it again; the station log line says `wrong password` or `no such
+network` from the disconnect reason to make that diagnosable over
+USB. The access point has no timeout: it stays up until credentials
+are saved, which clears the flag and resets into station mode, or
+until power is cut, which zeroes the carry record and so boots the
+station again if the record has an SSID.
+
+**The access point.** SSID `esp32clock-<last two MAC bytes>`, WPA2
+with the build-time `AP_PASSWORD` (default `esp32clock`, documented),
+channel 1, address 192.168.4.1/24 static. embassy-net has no DHCP
+server, and a phone will not talk to an access point that does not
+give it an address, so the clock answers DHCP itself: a UDP task that
+offers and acknowledges one of eight addresses in 192.168.4.2–.9
+with a one-hour lease, discover/request only, about 150 lines in
+`src/dhcpd.rs`, with `edge-dhcp` as the alternative if the hand-written
+one proves fiddly. A captive-portal DNS (every A query answered with
+192.168.4.1, so the phone opens the page by itself) is the second
+step once the plain flow works; until then the address is in the
+docs and on the panel.
+
+**The page in this mode.** `GET /` serves the provisioning form:
+SSID (32 bytes), password (64 bytes), timezone and hostname, the
+rest of the settings hidden since there is nothing to show for them.
+A scan list is not possible without AP+STA; the user types the SSID.
+`POST /` applies through the existing all-or-nothing path and
+answers with a page that says "rebooting into <ssid>"; the password
+is write-only, never in the page or JSON, and `/api` reports only
+whether one is set (`wifi_configured`). `form::apply` decodes values
+into 32 bytes today, so the value buffer grows to 64 for the password;
+the page-size check runs again.
+
+**Record.** `RECORD_VERSION` 6 adds `ssid` (32 bytes plus length) and
+`password` (64 plus length), `RECORD_LEN` about 134; the storage
+scratch buffer is 128 and grows with it. Version 5 records read as
+"no credentials" and fall back to the build-time seed, so an updated
+board keeps joining its network with no visit.
+
+**Panel.** Clock mode is unreachable without time. A new `Ui` mode
+`Provision` shows `AP` on the left pair and the hour digits blank,
+colon off, and both-long shows the fixed address as the IP display
+does; any other press is ignored. A station that is waiting the 3
+minutes shows the usual blank-until-synced face, so the only new
+face is `AP`.
+
+**Touches.** `settings.rs` (fields, validity, record v6, two
+`RECEIVERS` unchanged), `storage.rs` (scratch size), `form.rs`
+(keys, the provisioning page, write-only password), `http.rs` (serve
+the provisioning page when in AP mode), `net.rs` (AP config, the
+disconnect-reason log line, the DHCP server task), `dhcpd.rs`, `carry.rs`
+(`boot_ap`), `ui.rs`/`display.rs` (`Provision` mode), `buttons.rs`
+(10 s hold), `main.rs` (the boot decision), `config.rs`
+(`AP_PASSWORD`), `StackResources` (+2 UDP for DHCP and
+DNS), CLAUDE.md controls table.
+
+**Host checks.** Record v5 → v6 migration and round trip with the
+longest credentials; the provisioning page size; the DHCP
+discover/offer/request/ack byte layout against a captured phone
+exchange (any laptop `tcpdump` on a hotspot gives one); `Ui` in
+`Provision` ignoring presses except the hold.
+
+**Verify on the panel.** Flash with empty credentials: the panel
+shows `AP`, a phone sees `esp32clock-xxxx`, gets an address, opens
+192.168.4.1, saves the home network, and the clock reboots and syncs.
+Save a wrong password: the clock stays blank, the USB log says why,
+and it never shows `AP` on its own. Power the router off with the
+clock running: it reconnects when the router returns without ever
+showing `AP`. Hold both buttons 10 s on a working clock: `AP`; cut
+the power: back to the clock.
+
+### M11 — NTC thermometer and light sensor — planned
+
+**Hardware.** The adapter schematic already wires both sensors, and
+the pull-ups live on the adapter, not on the clock board:
+
+| adapter net | socket pin | clock part | adapter part | C3 pin |
+| --- | --- | --- | --- | --- |
+| R_T | J1 pin 3 | NTC R4 to ground | R2 10 kΩ to 3V3 | GPIO0 (ADC1 ch 0) |
+| R_P | J1 pin 4 | LDR R3 to ground | R1 10 kΩ to 3V3 | GPIO1 (ADC1 ch 1) |
+
+The clock board's own R1 and R2 pull up to **+5 V** and are left off;
+only the NTC at R4 and the LDR at R3 are fitted. That matters because
+the C3's ADC reads reliably only up to about 2.5 V at 11 dB
+attenuation and the pin's absolute maximum is 3.6 V: from 5 V a
+10 kΩ NTC would already sit at 2.5 V at room temperature. From 3.3 V
+it gives 1.65 V at 25 °C, 2.5 V near 0 °C and 1.1 V at 40 °C, so a
+room never clips, and a dark LDR clipping at the top is harmless.
+GPIO0 and GPIO1 are also the right pins for another reason: only
+ADC1 (GPIO0–4) works with Wi-Fi on, GPIO3 and 4 are the buttons,
+GPIO5 is the buzzer on ADC2, and GPIO2 is a strapping pin that a
+divider at mid-rail could pull the wrong way at reset. Neither GPIO0
+nor GPIO1 is a strapping pin on the C3. Section 4's pin table and
+CLAUDE.md's pin facts gain both lines.
+
+The NTC's part number is not in the reference; 10 kΩ at 25 °C with
+B = 3950 is what these kits ship, and the conversion gets a
+`NTC_BETA` build-time override plus a one-point offset setting if
+the user's thermometer disagrees.
+
+**Sampling.** `sensors.rs` holds the pure part: millivolts to tenths
+of a degree by the B equation in fixed point (a 64-entry table over
+the usable range with linear interpolation, no floats), and
+millivolts to a 0–100 light index. One thread-mode `sensor_task`
+owns the `Adc<ADC1>` converter and both `AdcPin`s, because
+`read_oneshot` borrows the converter mutably and the pins are typed
+to it; ADC1 is a single converter behind a five-way input mux, so
+the two channels are read one after the other, each conversion a
+few tens of microseconds. The task reads both once a second through
+esp-hal's oneshot ADC with the line calibration scheme (`AdcCalLine`,
+supported on the C3), averages 8 samples per reading, keeps an
+exponential average of about 10 s, and publishes temperature, light
+and the dark flag into shared cells with this task as the single
+writer (load-and-store like the counters); the display task and
+`http::status` only read them. The scan is untouched: ADC reads are
+microseconds in thread mode.
+
+**Temperature on the panel.** A setting `temp_show` (off, every 30 s,
+every 60 s) shows the temperature for 3 s between clock faces: two
+digits, the degree mark and `C` or `F` (`temp_unit`) in the last
+digit, matching what the stock firmware did with the same mark. The
+degree mark doubles as the armed indicator in the clock face; that
+stays, the temperature face is distinct enough. Below −9 °C the face
+shows `-9`; the status keys carry the real value. The `Ui` gets a
+`Temp` face driven by the tick, not a mode, so presses keep their
+clock-mode meaning during it.
+
+**Light on the brightness.** One boolean setting, `dim_in_dark`,
+labelled "Dim in the dark" on the page (key `dim`). When it is on
+and the room is dark, the panel runs at the lowest brightness step;
+otherwise it runs at the brightness the user chose. Dark is the
+10 s light average below `DARK_BELOW` and it ends when the average
+rises above `DARK_ABOVE`, two constants in `config.rs` a comfortable
+gap apart (a room light switching on has to clear the gap, so a
+candle or a passing car does not flip it), with the first numbers
+guessed and tuned on the panel from the heartbeat millivolts. The
+user's brightness step is untouched by all this: the bottom short
+press still cycles it, the record stores it, and the display task
+substitutes the lowest step at draw time while dark is set. A user
+who has chosen the lowest step sees no difference. The current step
+`IS` still comes from the step actually drawn, cap and all.
+
+**Exposed.** Read-only `temp_c` (tenths, signed), `temp_f`, `light`
+(0–100) and `dark` (true while the panel is dimmed) in `/api`, and
+the same on the web page: the status line grows a second line,
+`temperature 23.4 °C (74.1 °F), light 62 %, dimmed`,
+with `no sensor` for a reading pinned at either rail (an unfitted
+NTC reads the pull-up, an unfitted LDR reads ground), so a board
+without the parts says so instead of showing nonsense. They go
+through `form::Status` like the uptime, so `form.rs` stays free of
+hardware. The heartbeat logs the raw millivolts for calibration.
+Page-size check again.
+
+**Record.** `RECORD_VERSION` 7 (or 6 if M10 slips): `temp_show`,
+`temp_unit`, `temp_offset`, `dim_in_dark`.
+
+**Touches.** `sensors.rs`, a `sensor_task` in `display.rs` or its own
+file, `main.rs` (ADC1 and the two pins), `settings.rs`, `form.rs`,
+`ui.rs` (the face), `display.rs` (the dark substitution), `panel.rs` (the `A`, `P`, `C` and `F`
+glyphs are already in the font), CLAUDE.md pins table.
+
+**Host checks.** The B-equation table at 0, 25 and 40 °C against a
+calculator; the dark flag never chatters on a noisy light level
+hovering at either threshold; the `Temp`
+face layout through `Panel::render`.
+
+**Verify on the panel.** Heartbeat millivolts near 1650 at room
+temperature with the NTC in free air; the status line within 1 °C of
+a thermometer after the offset; with the setting on, a hand over the
+LDR drops the panel to the lowest step within about 10 s and
+uncovering restores the chosen step; lights off in the evening dims
+it once and it stays dim until morning, with no flicker at dusk.
