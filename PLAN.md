@@ -647,6 +647,11 @@ the saved sound is unchanged until Save. Set the alarm a minute ahead: it rings 
 pause, and a press stops it mid-tune. `curl -d melody=ode http://<ip>/api`
 echoes `"melody":"ode"`; `melody=jingle` gets a 400.
 
+Ode to Joy was later transposed from C to G: its top note G6
+(1568 Hz) sat near the buzzer's resonance and rang out louder than the
+rest. Down a fourth it spans G5 to D6, in the same key as the other
+tunes. Verified on the panel 2026-10-21.
+
 ### Wi-Fi reach (after M8) — DONE, verified on the panel 2026-10-21
 
 A far access point at -78 dBm kept failing with `AuthenticationExpired`
@@ -669,7 +674,7 @@ lists both APs (-71 and -83 dBm) with the driver picking the stronger.
 Inside the enclosure 8.5 dBm was not enough; the ceiling went to 44
 (11 dBm), which connects and holds with the clock in its case.
 
-### Missed alarm after a power cut (after M8)
+### Missed alarm after a power cut (after M8) — DONE, verified on the panel 2026-10-21
 
 The alarm fires in `Ui::tick` on the tick where the local minute equals
 the alarm minute. A power cut across that minute loses it: the clock
@@ -686,7 +691,7 @@ buttons within seconds of power-up, in which case the grace check is
 skipped: whoever is at the buttons is awake. No settings or record
 change; the grace is a constant in `ui.rs`.
 
-### Skip the next alarm (after M8)
+### Skip the next alarm (after M8) — DONE, verified on the panel 2026-10-21
 
 A volatile flag for holidays: `Settings::skip_next`, set from a checkbox
 on the page (`skip` in the form and the API, `"skip"` in the JSON). It
@@ -703,7 +708,7 @@ settings mutably and the display loop runs it through
 missed-alarm check on boot goes through the same gate, where the flag is
 always false. No panel indication of the flag yet.
 
-### Form posts are all or nothing (after M8)
+### Form posts are all or nothing (after M8) — DONE, verified on the panel 2026-10-21
 
 A code review found that `POST /` ran `form::apply` on the live
 settings inside `settings::update`. `apply` turns the three checkbox
@@ -731,6 +736,10 @@ headers, of the 2560-byte response buffer.
 Save: the page comes back with the notice, and the alarm stays armed and
 the clock in the mode it was. Correct the time and Save: the notice is
 gone and the values stick.
+`scripts/verify-form-post.sh <ip>` runs the same checks over curl, plus
+the unknown-key path, and puts the settings back afterwards; it passed
+against a host mock of the server and flagged a mock with the old bug,
+then passed on the panel.
 
 ### Review backlog (2026-10-21)
 
