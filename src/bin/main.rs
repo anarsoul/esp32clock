@@ -11,7 +11,7 @@ extern crate alloc;
 
 use embassy_executor::Spawner;
 use embassy_net::StackResources;
-use embassy_time::{Duration, Timer};
+use embassy_time::{Duration, Instant, Timer};
 use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
 use esp_hal::dma_tx_buffer;
@@ -23,7 +23,7 @@ use esp_hal::spi::Mode;
 use esp_hal::spi::master::{Config as SpiConfig, Spi};
 use esp_hal::time::Rate;
 use esp_hal::timer::timg::TimerGroup;
-use esp_radio::wifi::{Interface, WifiController};
+use esp_radio::wifi::{ControllerConfig, Interface, WifiController};
 use esp_rtos::embassy::InterruptExecutor;
 use esp_storage::FlashStorage;
 use log::info;
@@ -31,7 +31,7 @@ use static_cell::StaticCell;
 
 use esp32clock::buzzer;
 use esp32clock::settings::Settings;
-use esp32clock::{buttons, display, http, net, scan, settings, storage};
+use esp32clock::{buttons, display, heal, http, net, scan, settings, storage};
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
 esp_bootloader_esp_idf::esp_app_desc!();
@@ -45,6 +45,14 @@ esp_bootloader_esp_idf::esp_app_desc!();
 pub extern "Rust" fn custom_halt() -> ! {
     esp_hal::delay::Delay::new().delay_millis(500);
     esp_hal::system::software_reset()
+}
+
+/// Stamp every log line with the uptime in milliseconds (esp-println's
+/// `timestamp` feature), so a capture is a timeline on its own. Read
+/// straight from the system timer, which runs from before `esp_hal::init`.
+#[unsafe(no_mangle)]
+pub extern "Rust" fn _esp_println_timestamp() -> u64 {
+    esp_hal::time::Instant::now().duration_since_epoch().as_millis()
 }
 
 /// Display wires, as GPIO numbers, for the idle pull-downs.
@@ -130,6 +138,11 @@ async fn main(spawner: Spawner) -> ! {
         stored = store.load().await;
     }
     settings::init(stored.unwrap_or(Settings::DEFAULT));
+    info!(
+        "boot: reset reason {:?}, self-heal resets since power-up {}",
+        esp_hal::system::reset_reason(),
+        heal::count()
+    );
     info!("settings: {:?}", settings::get());
 
     // The drivers discard anything sent in the first 200 us after power-up.
@@ -137,18 +150,17 @@ async fn main(spawner: Spawner) -> ! {
 
     // Wi-Fi station and the network stack on top of it. Built before the
     // display task, which asks the stack for the IP to show.
-    let controller = WifiController::new(peripherals.WIFI, Default::default()).expect("wifi init");
+    let wifi_config = ControllerConfig::default().with_rx_queue_size(esp32clock::config::WIFI_RX_QUEUE_FRAMES);
+    let controller = WifiController::new(peripherals.WIFI, wifi_config).expect("wifi init");
     let station = Interface::station();
     let rng = Rng::new();
     let seed = (rng.random() as u64) << 32 | rng.random() as u64;
-    // DNS, SNTP, the HTTP listeners, and headroom.
-    static RESOURCES: StaticCell<StackResources<8>> = StaticCell::new();
-    let (stack, runner) = embassy_net::new(
-        station,
-        net::dhcp_config(&settings::get().hostname),
-        RESOURCES.init(StackResources::new()),
-        seed,
-    );
+    // DHCP, DNS, SNTP, the gateway probe, the HTTP listeners, and headroom.
+    // No IPv4 configuration yet: the Wi-Fi task starts DHCP once the
+    // station is connected and the link has settled.
+    static RESOURCES: StaticCell<StackResources<10>> = StaticCell::new();
+    let (stack, runner) =
+        embassy_net::new(station, embassy_net::Config::default(), RESOURCES.init(StackResources::new()), seed);
 
     // The scan task restarts the DMA transfer the moment one ends. In the
     // thread-mode executor a Wi-Fi task can hold it off for hundreds of
@@ -166,10 +178,12 @@ async fn main(spawner: Spawner) -> ! {
         spawner.spawn(storage::persist_task(store, stored).expect("spawn persist"));
     }
 
-    spawner.spawn(net::wifi_task(controller).expect("spawn wifi"));
+    spawner.spawn(net::wifi_task(controller, stack).expect("spawn wifi"));
     spawner.spawn(net::net_task(runner).expect("spawn net"));
     spawner.spawn(net::ntp_task(stack).expect("spawn ntp"));
     spawner.spawn(net::hostname_task(stack).expect("spawn hostname"));
+    spawner.spawn(net::monitor_task(stack).expect("spawn monitor"));
+    spawner.spawn(net::probe_task(stack).expect("spawn probe"));
     for i in 0..http::LISTENERS {
         spawner.spawn(http::http_task(stack, i).expect("spawn http"));
     }
@@ -178,12 +192,20 @@ async fn main(spawner: Spawner) -> ! {
     loop {
         Timer::after(Duration::from_secs(60)).await;
         let g = scan::take_gap_stats();
+        let (sent, failed, streak) = net::probe_stats();
         info!(
-            "alive, heap free {} bytes; scan restart gap avg {} us, max {} us over {} transfers",
+            "alive {} s, heap free {} bytes; scan restart gap avg {} us, max {} us over {} transfers; \
+             gateway probes {} sent, {} failed, {} failing now; self-heal resets {}",
+            Instant::now().as_secs(),
             esp_alloc::HEAP.free(),
             g.sum_us / g.transfers.max(1) as u64,
             g.max_us,
-            g.transfers
+            g.transfers,
+            sent,
+            failed,
+            streak,
+            heal::count()
         );
+        http::log_status();
     }
 }

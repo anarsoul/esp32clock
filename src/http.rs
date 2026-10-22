@@ -9,6 +9,7 @@
 //! real request.
 
 use core::fmt::Write as _;
+use core::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 
 use embassy_net::Stack;
 use embassy_net::tcp::TcpSocket;
@@ -36,6 +37,79 @@ const TIMEOUT: Duration = Duration::from_secs(5);
 /// A client that has connected but not sent its request within this long
 /// is dropped, so an idle speculative connection frees its socket.
 const HEAD_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Where a listener is in its loop, for the heartbeat. Three listeners
+/// stuck in the same place is the shape of a wedged server.
+#[derive(Clone, Copy)]
+#[repr(u8)]
+enum State {
+    Waiting = 0,
+    Reading = 1,
+    Writing = 2,
+    Closing = 3,
+}
+
+impl State {
+    fn name(raw: u8) -> &'static str {
+        match raw {
+            0 => "waiting",
+            1 => "reading",
+            2 => "writing",
+            3 => "closing",
+            _ => "?",
+        }
+    }
+}
+
+/// One listener's state and counts; written by its task, read by the
+/// heartbeat.
+struct Listener {
+    state: AtomicU8,
+    accepted: AtomicU32,
+    served: AtomicU32,
+    head_timeouts: AtomicU32,
+}
+
+impl Listener {
+    const fn new() -> Self {
+        Listener {
+            state: AtomicU8::new(State::Waiting as u8),
+            accepted: AtomicU32::new(0),
+            served: AtomicU32::new(0),
+            head_timeouts: AtomicU32::new(0),
+        }
+    }
+
+    fn set(&self, state: State) {
+        self.state.store(state as u8, Ordering::Relaxed);
+    }
+}
+
+/// The target has no atomic add; each counter has one writer, so a plain
+/// read-modify-write is safe.
+fn bump(counter: &AtomicU32) {
+    counter.store(counter.load(Ordering::Relaxed).wrapping_add(1), Ordering::Relaxed);
+}
+
+static LISTENER: [Listener; LISTENERS] = [const { Listener::new() }; LISTENERS];
+
+/// One line per heartbeat: each listener's state and its counts of
+/// connections accepted, requests served and heads that never arrived.
+pub fn log_status() {
+    let mut line = heapless::String::<160>::new();
+    for (i, l) in LISTENER.iter().enumerate() {
+        let _ = write!(
+            line,
+            "{}L{i} {} {}/{}/{}",
+            if i == 0 { "" } else { ", " },
+            State::name(l.state.load(Ordering::Relaxed)),
+            l.accepted.load(Ordering::Relaxed),
+            l.served.load(Ordering::Relaxed),
+            l.head_timeouts.load(Ordering::Relaxed),
+        );
+    }
+    info!("http: {line} (accepted/served/head timeouts)");
+}
 
 /// A fixed buffer with `core::fmt::Write`; overflow is an error, not a
 /// truncation, so a page that outgrows it is noticed.
@@ -244,26 +318,40 @@ pub async fn http_task(stack: Stack<'static>, index: usize) -> ! {
     if index == 0 {
         info!("http: serving on port {HTTP_PORT}");
     }
+    let me = &LISTENER[index];
     loop {
+        me.set(State::Waiting);
         let mut socket = TcpSocket::new(stack, &mut rx, &mut tx);
         socket.set_timeout(Some(TIMEOUT));
         if let Err(e) = socket.accept(HTTP_PORT).await {
-            warn!("http: accept: {e:?}");
+            warn!("http: L{index} accept: {e:?}");
             continue;
         }
-        let req = with_timeout(HEAD_TIMEOUT, read_request(&mut socket, &mut request)).await.ok().flatten();
+        bump(&me.accepted);
+        me.set(State::Reading);
+        let req = match with_timeout(HEAD_TIMEOUT, read_request(&mut socket, &mut request)).await {
+            Ok(req) => req,
+            Err(_) => {
+                bump(&me.head_timeouts);
+                info!("http: L{index} no request within {} s", HEAD_TIMEOUT.as_secs());
+                None
+            }
+        };
         if let Some(req) = req {
-            info!("http: {:?} {}", req.method, req.path);
+            info!("http: L{index} {:?} {}", req.method, req.path);
             let mut out = Response::new();
             if respond(&mut out, &req).is_err() {
                 warn!("http: response did not fit");
                 out = Response::new();
                 let _ = status_line(&mut out, "500 Internal Server Error", "text/plain");
             }
+            me.set(State::Writing);
             if let Err(e) = socket.write_all(out.as_bytes()).await {
-                warn!("http: write: {e:?}");
+                warn!("http: L{index} write: {e:?}");
             }
+            bump(&me.served);
         }
+        me.set(State::Closing);
         socket.close();
         let _ = socket.flush().await;
     }

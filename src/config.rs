@@ -55,6 +55,20 @@ pub const MAX_CURRENT_STEP: u8 = 11;
 /// go up in small steps.
 pub const WIFI_MAX_TX_POWER_QDBM: i8 = 44;
 
+/// Frames the Wi-Fi driver queues for the network stack before it drops
+/// new ones. esp-radio's default of 5 overflowed on bursts of LAN
+/// broadcasts (eight frames in 3 ms were seen), which cost the DHCP offer
+/// and a 10 s retry at boot. The queue holds references to the driver's
+/// own buffers, so a slot costs a few bytes of heap.
+pub const WIFI_RX_QUEUE_FRAMES: usize = 32;
+
+/// Consecutive gateway probe failures, with the link still up and after
+/// the gateway has answered at least once since boot, before the firmware
+/// blanks the panel and resets itself. Probes are 30 s apart, so 10 is
+/// five minutes. The first-answer condition keeps a router that never
+/// answers ping from rebooting the clock every five minutes.
+pub const PROBE_RESET_FAILURES: u32 = 10;
+
 /// NTP server, resolved through the DHCP-supplied DNS.
 pub const NTP_SERVER: &str = "pool.ntp.org";
 

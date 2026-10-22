@@ -1,8 +1,11 @@
 //! Wi-Fi station, network stack and SNTP sync.
 
 use core::net::{IpAddr, SocketAddr};
+use core::sync::atomic::{AtomicU32, Ordering};
 
 use embassy_net::dns::DnsQueryType;
+use embassy_net::icmp::ping::{PingManager, PingParams};
+use embassy_net::icmp::PacketMetadata as IcmpPacketMetadata;
 use embassy_net::udp::{PacketMetadata, UdpSocket};
 use embassy_net::{ConfigV4, DhcpConfig, IpAddress, Runner, Stack};
 use embassy_futures::select::{Either, select};
@@ -16,18 +19,48 @@ use sntpc_net_embassy::UdpSocketWrapper;
 use sntpc_time_embassy::EmbassyTimestampGenerator;
 
 use crate::settings::Hostname;
-use crate::{clock, config, settings};
+use crate::{clock, config, heal, settings};
 
 const NTP_PORT: u16 = 123;
 const LOCAL_PORT: u16 = 12345;
 const NTP_TIMEOUT: Duration = Duration::from_secs(5);
 const RECONNECT_DELAY: Duration = Duration::from_secs(5);
 
+/// How often the station logs its signal while connected.
+const STATUS_PERIOD: Duration = Duration::from_secs(60);
+
+/// How often the gateway is pinged while the stack has an address, and
+/// how long one reply may take. The probe is the only thing that can
+/// tell a station the driver still calls connected from one that
+/// actually passes traffic.
+const PROBE_PERIOD: Duration = Duration::from_secs(30);
+const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Wait after the driver reports the station connected before DHCP
+/// starts. The driver says connected before it can pass a frame, so a
+/// discover sent at that moment is lost and smoltcp waits its full
+/// `discover_timeout`, 10 s, before the next. Half a second was found
+/// enough on another project with the same driver.
+const LINK_SETTLE: Duration = Duration::from_millis(500);
+
+/// Port of the throwaway socket in `poke`.
+const POKE_PORT: u16 = 12346;
+
 /// Quiet time after a hostname change before DHCP is renewed. The renewal
 /// drops the address until the new lease arrives, which resets any open
 /// connection, so the page's response and the redirect that follows it
 /// must be done first.
 const RENEW_SETTLE: Duration = Duration::from_secs(3);
+
+/// A MAC address for the log.
+struct Bssid([u8; 6]);
+
+impl core::fmt::Display for Bssid {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let b = self.0;
+        write!(f, "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", b[0], b[1], b[2], b[3], b[4], b[5])
+    }
+}
 
 /// Build the station configuration from the build-time credentials.
 ///
@@ -68,20 +101,33 @@ async fn log_candidates(controller: &mut WifiController<'static>) {
         Ok(aps) if aps.is_empty() => warn!("wifi: scan found no AP for {}", config::WIFI_SSID),
         Ok(aps) => {
             for ap in aps {
-                let b = ap.bssid;
-                info!(
-                    "wifi: candidate {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} channel {} rssi {}",
-                    b[0], b[1], b[2], b[3], b[4], b[5], ap.channel, ap.signal_strength
-                );
+                info!("wifi: candidate {} channel {} rssi {}", Bssid(ap.bssid), ap.channel, ap.signal_strength);
             }
         }
         Err(e) => warn!("wifi: scan failed: {e:?}"),
     }
 }
 
-/// Keep the station connected. Reconnects after any disconnect.
+/// The signal and the AP as the driver sees them, once a minute while
+/// connected. Both come from the last beacon received, so a station that
+/// has stopped hearing its AP shows a stale RSSI here and a failing
+/// gateway probe at the same time.
+fn log_status(controller: &WifiController<'static>, since: Instant) {
+    let up = since.elapsed().as_secs();
+    match (controller.rssi(), controller.ap_info()) {
+        (Ok(rssi), Ok(ap)) => {
+            info!("wifi: up {up} s, rssi {rssi} dBm, bssid {} channel {}", Bssid(ap.bssid), ap.channel)
+        }
+        (rssi, ap) => warn!("wifi: up {up} s, rssi {rssi:?}, ap {ap:?}"),
+    }
+}
+
+/// Keep the station connected, and run DHCP only while it is. The stack
+/// starts with no IPv4 configuration; it is switched on `LINK_SETTLE`
+/// after each connect and off at each disconnect, so the first discover
+/// of every connection goes out on a link that can carry it.
 #[embassy_executor::task]
-pub async fn wifi_task(mut controller: WifiController<'static>) -> ! {
+pub async fn wifi_task(mut controller: WifiController<'static>, stack: Stack<'static>) -> ! {
     if config::WIFI_SSID.is_empty() {
         error!("wifi: WIFI_SSID was not set at build time, staying offline");
         loop {
@@ -113,19 +159,67 @@ pub async fn wifi_task(mut controller: WifiController<'static>) -> ! {
         log_candidates(&mut controller).await;
         info!("wifi: connecting to {}", config::WIFI_SSID);
         match controller.connect_async().await {
-            Ok(info) => info!("wifi: connected, channel {}", info.channel),
+            Ok(info) => info!("wifi: connected to {} channel {}", Bssid(info.bssid), info.channel),
             Err(e) => {
                 warn!("wifi: connect failed: {e:?}");
                 Timer::after(RECONNECT_DELAY).await;
                 continue;
             }
         }
-        match controller.wait_for_disconnect_async().await {
-            Ok(info) => warn!("wifi: disconnected: {:?}", info.reason),
-            Err(e) => warn!("wifi: disconnect wait failed: {e:?}"),
+        let since = Instant::now();
+        Timer::after(LINK_SETTLE).await;
+        start_dhcp(stack);
+        loop {
+            // The disconnect wait subscribes to the driver's events anew
+            // each time, so an event that lands while the status line is
+            // being written is missed; the next wait then sees the station
+            // already disconnected and returns the error at once.
+            match select(controller.wait_for_disconnect_async(), Timer::after(STATUS_PERIOD)).await {
+                Either::First(Ok(info)) => {
+                    warn!(
+                        "wifi: disconnected from {} after {} s: {:?}, rssi {}",
+                        Bssid(info.bssid),
+                        since.elapsed().as_secs(),
+                        info.reason,
+                        info.rssi
+                    );
+                    break;
+                }
+                Either::First(Err(e)) => {
+                    warn!("wifi: disconnect wait failed after {} s: {e:?}", since.elapsed().as_secs());
+                    break;
+                }
+                Either::Second(()) => log_status(&controller, since),
+            }
         }
+        stop_dhcp(stack);
         Timer::after(RECONNECT_DELAY).await;
     }
+}
+
+/// Start DHCP with the current hostname. The runner is poked because
+/// embassy-net does not wake it for a configuration change, and with
+/// nothing else pending it would send the discover only when the next
+/// packet happened to arrive.
+fn start_dhcp(stack: Stack<'static>) {
+    stack.set_config_v4(dhcp_config(&settings::get().hostname));
+    poke(stack);
+}
+
+/// Drop DHCP and the address with it.
+fn stop_dhcp(stack: Stack<'static>) {
+    stack.set_config_v4(ConfigV4::None);
+}
+
+/// Wake the stack runner. Any socket operation does; a bind on a
+/// throwaway UDP socket is the cheapest.
+fn poke(stack: Stack<'static>) {
+    let mut rx_meta = [PacketMetadata::EMPTY; 1];
+    let mut rx_buf = [0u8; 1];
+    let mut tx_meta = [PacketMetadata::EMPTY; 1];
+    let mut tx_buf = [0u8; 1];
+    let mut socket = UdpSocket::new(stack, &mut rx_meta, &mut rx_buf, &mut tx_meta, &mut tx_buf);
+    let _ = socket.bind(POKE_PORT);
 }
 
 /// Drive the network stack.
@@ -134,18 +228,128 @@ pub async fn net_task(mut runner: Runner<'static, Interface>) -> ! {
     runner.run().await
 }
 
+/// Log every change of the link and of the address, so a lost lease
+/// with the link still up, or a link that bounced, is on record with
+/// its time.
+#[embassy_executor::task]
+pub async fn monitor_task(stack: Stack<'static>) -> ! {
+    loop {
+        stack.wait_link_up().await;
+        info!("net: link up");
+        loop {
+            stack.wait_config_up().await;
+            if let Some(cfg) = stack.config_v4() {
+                info!("net: ip {} gateway {:?} dns {:?}", cfg.address, cfg.gateway, cfg.dns_servers);
+            }
+            match select(stack.wait_link_down(), stack.wait_config_down()).await {
+                Either::First(()) => {
+                    warn!("net: link down");
+                    break;
+                }
+                Either::Second(()) => warn!("net: config down, link still up"),
+            }
+        }
+    }
+}
+
+// Written by `probe_task` alone and read by the heartbeat; the target has
+// no atomic add, so they are bumped with a load and a store.
+static PROBE_SENT: AtomicU32 = AtomicU32::new(0);
+static PROBE_FAILED: AtomicU32 = AtomicU32::new(0);
+static PROBE_STREAK: AtomicU32 = AtomicU32::new(0);
+
+/// Gateway probes so far: sent, failed, and failed in a row right now.
+fn bump(counter: &AtomicU32) -> u32 {
+    let v = counter.load(Ordering::Relaxed).wrapping_add(1);
+    counter.store(v, Ordering::Relaxed);
+    v
+}
+
+pub fn probe_stats() -> (u32, u32, u32) {
+    (
+        PROBE_SENT.load(Ordering::Relaxed),
+        PROBE_FAILED.load(Ordering::Relaxed),
+        PROBE_STREAK.load(Ordering::Relaxed),
+    )
+}
+
+/// Ping the gateway every `PROBE_PERIOD` while the stack has an address.
+/// Logs each failure and the recovery; the counts go in the heartbeat.
+/// A router that never answers ping shows up as a failure every period
+/// from the first minute, which is its own answer.
+///
+/// Self-heal: once the gateway has answered at least once, a run of
+/// `config::PROBE_RESET_FAILURES` failures while the driver still reports
+/// the link up means the station is connected but passes no traffic, and
+/// the only thing known to clear that is a reset (`heal::reset`). With
+/// the link down nothing is done: the Wi-Fi task is already reconnecting.
+#[embassy_executor::task]
+pub async fn probe_task(stack: Stack<'static>) -> ! {
+    let mut armed = false;
+    let mut rx_meta = [IcmpPacketMetadata::EMPTY; 2];
+    let mut rx_buf = [0u8; 128];
+    let mut tx_meta = [IcmpPacketMetadata::EMPTY; 2];
+    let mut tx_buf = [0u8; 128];
+    let mut pinger = PingManager::new(stack, &mut rx_meta, &mut rx_buf, &mut tx_meta, &mut tx_buf);
+    loop {
+        stack.wait_config_up().await;
+        let Some(gateway) = stack.config_v4().and_then(|c| c.gateway) else {
+            Timer::after(PROBE_PERIOD).await;
+            continue;
+        };
+        let mut params = PingParams::new(gateway);
+        params
+            .set_payload(b"esp32clock")
+            .set_count(1)
+            .set_timeout(PROBE_TIMEOUT)
+            .set_rate_limit(Duration::from_millis(0));
+        bump(&PROBE_SENT);
+        match pinger.ping(&params).await {
+            Ok(rtt) => {
+                let streak = PROBE_STREAK.load(Ordering::Relaxed);
+                PROBE_STREAK.store(0, Ordering::Relaxed);
+                if streak > 0 {
+                    info!("probe: gateway {gateway} back after {streak} failures, rtt {} ms", rtt.as_millis());
+                }
+                if !armed {
+                    armed = true;
+                    info!(
+                        "probe: gateway {gateway} answers in {} ms; self-heal armed at {} failures",
+                        rtt.as_millis(),
+                        config::PROBE_RESET_FAILURES
+                    );
+                }
+            }
+            Err(e) => {
+                bump(&PROBE_FAILED);
+                let streak = bump(&PROBE_STREAK);
+                warn!("probe: gateway {gateway} unreachable: {e:?} ({streak} in a row)");
+                if armed && streak >= config::PROBE_RESET_FAILURES && stack.is_link_up() {
+                    heal::reset(format_args!(
+                        "gateway {gateway} unreachable for {streak} probes ({} s) with the link up",
+                        streak as u64 * PROBE_PERIOD.as_secs()
+                    ))
+                    .await
+                }
+            }
+        }
+        Timer::after(PROBE_PERIOD).await;
+    }
+}
+
 /// DHCP with our name as option 12, so a router that publishes DHCP
 /// names in its DNS resolves it.
-pub fn dhcp_config(hostname: &Hostname) -> embassy_net::Config {
+fn dhcp_config(hostname: &Hostname) -> ConfigV4 {
     let mut cfg = DhcpConfig::default();
     // The hostname is validated shorter than the option, so this cannot fail.
     cfg.hostname = heapless::String::try_from(hostname.as_str()).ok();
-    embassy_net::Config::dhcpv4(cfg)
+    ConfigV4::Dhcp(cfg)
 }
 
 /// Re-run DHCP with the new name once the hostname setting has changed
 /// and stayed put for `RENEW_SETTLE`. The lease restarts; the address
-/// normally comes back the same.
+/// normally comes back the same. With the link down there is nothing to
+/// renew: the next connect starts DHCP with the current name anyway.
 #[embassy_executor::task]
 pub async fn hostname_task(stack: Stack<'static>) -> ! {
     let mut rx = settings::receiver();
@@ -159,10 +363,10 @@ pub async fn hostname_task(stack: Stack<'static>) -> ! {
             }
         }
         if next != current {
-            info!("net: hostname {} -> {}, renewing dhcp", current.as_str(), next.as_str());
             current = next;
-            if let ConfigV4::Dhcp(cfg) = dhcp_config(&current).ipv4 {
-                stack.set_config_v4(ConfigV4::Dhcp(cfg));
+            if stack.is_link_up() {
+                info!("net: hostname changed to {}, renewing dhcp", current.as_str());
+                start_dhcp(stack);
             }
         }
     }
@@ -214,9 +418,6 @@ async fn query_ntp(stack: Stack<'static>) -> Result<i64, &'static str> {
 pub async fn ntp_task(stack: Stack<'static>) -> ! {
     loop {
         stack.wait_config_up().await;
-        if let Some(cfg) = stack.config_v4() {
-            info!("net: ip {}", cfg.address);
-        }
         match query_ntp(stack).await {
             Ok(unix_us) => {
                 clock::set_unix_micros(unix_us);

@@ -17,10 +17,12 @@
 //! last COM pair lit for longer than the other three.
 
 use core::cell::Cell;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use critical_section::Mutex;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
+use embassy_sync::signal::Signal;
 use embassy_time::{Instant, Timer};
 use esp_hal::Async;
 use esp_hal::dma::DmaTxBuf;
@@ -159,6 +161,23 @@ static FREE: Channel<CriticalSectionRawMutex, TransferBuf, 1> = Channel::new();
 /// A filled buffer waiting for the scan task to swap it in.
 static READY: Channel<CriticalSectionRawMutex, TransferBuf, 1> = Channel::new();
 
+/// Set to end the scan at the next transfer boundary.
+static STOP: AtomicBool = AtomicBool::new(false);
+
+/// Raised by the scan task once it has stopped.
+static STOPPED: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+/// Stop the scan with the panel blank. Returns once the transfer in
+/// flight has ended, on its blanking frame, and no other will start; the
+/// wires then rest on their pull-downs. There is no restart: this is for
+/// a deliberate reset, which must not land mid-transfer or the row the
+/// drivers had latched stays lit at full current until the firmware is
+/// back. Takes up to one transfer, about 3 ms.
+pub async fn stop() {
+    STOP.store(true, Ordering::Release);
+    STOPPED.wait().await;
+}
+
 /// Give the publisher its spare buffer. Call once, before any `publish`.
 pub fn init_spare(buf: DmaTxBuf) {
     FREE.try_send(TransferBuf(buf)).ok().expect("spare buffer slot taken");
@@ -229,6 +248,11 @@ pub async fn scan_task(hw: ScanHardware) -> ! {
         transfer.wait_for_done().await;
         (spi, buf) = transfer.wait();
         ended_at = Some(Instant::now());
+
+        if STOP.load(Ordering::Acquire) {
+            STOPPED.signal(());
+            match core::future::pending::<core::convert::Infallible>().await {}
+        }
 
         if let Ok(next) = READY.try_receive() {
             let done = core::mem::replace(&mut buf, next.0);

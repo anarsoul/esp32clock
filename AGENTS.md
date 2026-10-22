@@ -31,8 +31,14 @@ WIFI_SSID='…' WIFI_PASSWORD='…' TZ_OFFSET_MINUTES=-420 cargo run --release
 ```
 
 `cargo run` flashes with espflash and opens the monitor; `.cargo/config.toml`
-sets the runner and `ESP_LOG=info`. Credentials and the default timezone are
-read at build time by `src/config.rs`; `build.rs` reruns the build when they
+sets the runner and `ESP_LOG=info`. For a network debugging run set
+`ESP_LOG='info,embassy_net=debug,esp_radio=debug'` on the command line
+(it overrides the config, and esp-println compiles the filter in); the
+extra lines are DHCP state and driver events, not packets. Every log
+line carries the uptime in ms. `scripts/watch-clock.sh <ip>` pings and
+fetches `/api` from the host every 30 s for the other side of the story.
+
+Credentials and the default timezone are read at build time by `src/config.rs`; `build.rs` reruns the build when they
 change. The timezone, 12/24 hour, colour, brightness, alarm, alarm days,
 alarm melody and DHCP hostname are settings: saved in the `nvs` partition,
 editable from the buttons and from `http://<ip>/` (form) or `/api`
@@ -53,7 +59,10 @@ MSRV-aware resolver picks an esp-rom-sys that esp-storage cannot build with.
 | both long | show the IP, one octet at a time, twice |
 
 Any press ends ringing or the IP display. Set mode times out after 15 s,
-ringing after 120 s. An alarm missed by up to 10 minutes across a power
+ringing after 120 s. Self-heal: once the gateway has answered a ping, ten
+failed probes in a row (five minutes) with the link still up blank the
+panel and reset the chip; the boot line and the heartbeat carry the count
+since power-up (`config::PROBE_RESET_FAILURES`). An alarm missed by up to 10 minutes across a power
 cut rings on the first valid time after boot.
 
 ## Layout
@@ -62,20 +71,21 @@ cut rings on the first valid time after boot.
 | --- | --- |
 | `src/aip33628.rs` | frame format, bit-reversed current table, quad-nibble waveform encoder; pure `core` |
 | `src/panel.rs` | COM/SEG map, font, per-position colour, gamma and brightness tables, `Panel::render` → `ScanImage` |
-| `src/scan.rs` | cycle/transfer builder, double-buffered DMA scan task, restart-gap statistics |
+| `src/scan.rs` | cycle/transfer builder, double-buffered DMA scan task, restart-gap statistics, `stop` on a blank frame before a deliberate reset |
 | `src/display.rs` | UI loop: tick, button or settings change → `ui` → draw → publish; rings the alarm; shows the IP |
 | `src/ui.rs` | mode state machine, pure logic; edits the settings it is handed; alarm due check, missed-alarm grace, consumes `skip_next` |
 | `src/settings.rs` | `Settings`, palette and brightness tables, `Hostname`, shared `Watch` with change signal, versioned flash record |
 | `src/storage.rs` | nvs partition lookup, `sequential-storage` map over `esp-storage`, debounced persist task that compares records, not structs |
+| `src/heal.rs` | last-resort reset: blanks the panel through `scan::stop`, counts itself in RTC RAM across the reset, logs, reboots |
 | `src/form.rs` | key=value parsing, all-or-nothing `apply` on a copy, JSON and the HTML page with its error notice; pure logic |
-| `src/http.rs` | HTTP/1.0 server, `LISTENERS` sockets each in its own task: `GET`/`POST` on `/` and `/api`, `POST /play`; a refused form redirects to `/?error=…` |
+| `src/http.rs` | HTTP/1.0 server, `LISTENERS` sockets each in its own task: `GET`/`POST` on `/` and `/api`, `POST /play`; a refused form redirects to `/?error=…`; per-listener state and counters for the heartbeat |
 | `src/buttons.rs` | debounced short/long press events, plus the two-button hold |
 | `src/melody.rs` | alarm tunes as pitch and length data with tempo; pure |
 | `src/buzzer.rs` | LEDC PWM on an open-drain pin; plays a melody on command, looped or once, stops within a note |
 | `src/clock.rs` | Unix time = uptime + NTP offset; local time with weekday |
-| `src/net.rs` | Wi-Fi station with all-channel scan and transmit-power ceiling, embassy-net, SNTP, DHCP renew on hostname change |
+| `src/net.rs` | Wi-Fi station with all-channel scan and transmit-power ceiling, minute RSSI line; DHCP switched on 500 ms after each connect and off at disconnect; link and address monitor, gateway ping probe with the self-heal trigger, SNTP, DHCP renew on hostname change |
 | `src/config.rs` | build-time env vars and compile-time defaults |
-| `src/bin/main.rs` | pin setup, SPI2 quad + DMA, executors, task spawning, panic reset hook, minute heartbeat log |
+| `src/bin/main.rs` | pin setup, SPI2 quad + DMA, executors, task spawning, panic reset hook, log timestamps, reset reason at boot, minute heartbeat log |
 
 ## Hardware facts that bite
 
@@ -94,6 +104,13 @@ cut rings on the first valid time after boot.
   enclosure costs a few dB and esp-radio's default did not reach the
   access point. The SuperMini antenna is unstable near 20 dBm; raise it in
   small steps and let the user confirm from inside the case.
+- **First frame after connect:** the driver reports the station
+  connected before it can pass a frame, so a DHCP discover sent at that
+  instant is lost and smoltcp retries only after 10 s. The stack starts
+  with no IPv4 config and `net::wifi_task` enables DHCP `LINK_SETTLE`
+  after the connect. embassy-net does not wake its runner on a config
+  change; `net::poke` (a throwaway UDP bind) does, and must follow any
+  `set_config_v4`.
 - **Flash writes** run with interrupts off, so the scan stalls: a record
   write is invisible, a sector erase is a brief dark blink. That is why the
   persist task debounces and skips writes that would not change the record.
@@ -113,6 +130,11 @@ cut rings on the first valid time after boot.
   dark. Keep it.
 - `Instant - Duration` panics when uptime is shorter than the duration. Use
   `Option<Instant>` for "last time X happened".
+- Never reset the chip while a transfer is in flight: the row the drivers
+  last latched stays lit at full current until the firmware is back. A
+  deliberate reset goes through `heal::reset`, which waits for
+  `scan::stop` (the transfer ends on its blanking frame) first. The panic
+  path in `custom_halt` cannot do this and is the one exception.
 
 ## Sizes that bite
 
@@ -124,9 +146,13 @@ cut rings on the first valid time after boot.
 - `settings::RECEIVERS` is the number of `Watch` receivers (display,
   persist, hostname). Add one when a new task subscribes, or `receiver()`
   panics at boot.
-- `StackResources<8>` in `main.rs` covers DNS, SNTP and the HTTP listeners
-  with headroom; adding sockets means raising it.
+- `StackResources<10>` in `main.rs` covers DHCP, DNS, SNTP, the gateway
+  probe and the HTTP listeners with headroom; adding sockets means raising it.
 - `HOSTNAME_MAX` (24) stays under embassy-net's 32-byte DHCP option.
+- `config::WIFI_RX_QUEUE_FRAMES` (32) is the driver's receive queue;
+  esp-radio's default of 5 dropped bursts of LAN broadcasts, visible as
+  `RX QUEUE FULL` with `esp_radio=debug`. The stack answers ping only
+  because embassy-net's `auto-icmp-echo-reply` feature is on.
 
 ## Verifying without a board
 
@@ -147,6 +173,10 @@ each check under its milestone.
 
 - `no_std`, no `alloc` use outside what esp-radio needs; the heap exists
   for the Wi-Fi driver.
+- The target is riscv32imc: atomics have load and store only, no
+  `fetch_add` or `swap`. Counters shared with the heartbeat have one
+  writer and are bumped with a load and a store; anything with more than
+  one writer goes behind `critical_section`.
 - Keep hardware out of `ui.rs`, `panel.rs`, `form.rs`, `melody.rs`,
   `aip33628.rs` and the record part of `settings.rs` so they stay testable.
 - Settings change only through `settings::update`; it is what wakes the

@@ -27,9 +27,11 @@ esp-radio = { version = "1.0.0-beta.1", features = [
 ] }
 esp-alloc = { version = "0.11.0", features = ["esp32c3"] }
 embassy-net = { version = "0.9.1", features = [
+  "auto-icmp-echo-reply",
   "dhcpv4",
   "dhcpv4-hostname",
   "dns",
+  "icmp",
   "log",
   "medium-ethernet",
   "proto-ipv4",
@@ -54,7 +56,7 @@ esp-backtrace = { version = "0.20.0", features = [
   "panic-handler",
   "println",
 ] }
-esp-println = { version = "0.18.0", features = ["esp32c3", "log-04"] }
+esp-println = { version = "0.18.0", features = ["esp32c3", "log-04", "timestamp"] }
 
 critical-section = "1.2.0"
 esp32c3          = "0.33"

@@ -7,6 +7,7 @@ pub mod clock;
 pub mod config;
 pub mod display;
 pub mod form;
+pub mod heal;
 pub mod http;
 pub mod melody;
 pub mod net;

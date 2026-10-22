@@ -741,6 +741,263 @@ the unknown-key path, and puts the settings back afterwards; it passed
 against a host mock of the server and flagged a mock with the old bug,
 then passed on the panel.
 
+### Wi-Fi drops out after a while (after M8) — debugging plan, 2026-10-22
+
+The clock loses the network at some point: the page stops opening, and
+it is not known whether it still answers ping. Nothing in the log says
+why, because the log only covers connect and disconnect, and the IP is
+printed once an hour at the NTP sync. The plan is to instrument a
+spare ESP32-C3 on USB, leave it running until it fails, and read the
+failure against a host-side probe log. No fix is attempted until the
+logs say which of the hypotheses below it is.
+
+**What the stack does today, as read from the sources.** esp-radio
+1.0.0-beta.1 starts the station with power save `None`, so modem
+sleep and its beacon-timeout bugs are out. A disconnect reaches
+`wifi_task` as an event with a reason code and it reconnects after
+5 s; the embassy-net link follows the driver's connected state, and the
+stack restarts DHCP itself on link down and up. What nobody watches:
+the IP after a reconnect, a DHCP renewal that fails with the link up,
+and a station the driver still calls connected while no traffic
+passes.
+
+**Hypotheses, in the order the logs will separate them.**
+
+1. *Link drops and comes back with another address.* The log shows
+   `disconnected` and `connected`; the browser is on the old IP.
+2. *Link drops and the reconnect keeps failing.* Repeated
+   `connect failed` with a reason; RSSI before the drop tells whether
+   it is range.
+3. *DHCP lease lost with the link up.* The renewal gets no answer, the
+   stack drops its config and sits in discover; link up, config down.
+4. *Connected but deaf.* The driver reports connected, the AP has long
+   dropped the station or the receive path stalled; no beacon timeout
+   fires. Only an active probe can see this.
+5. *Network fine, HTTP wedged.* Ping and the gateway probe pass, all
+   three listeners are stuck in some socket state, accept never
+   returns.
+6. *Reboot.* Panic, watchdog or brownout; the uptime in the heartbeat
+   restarts and the boot banner shows the reset reason.
+7. *Thread executor starved.* A task spins and `net_task` never
+   polls. The panel keeps scanning (interrupt executor) but the minute
+   heartbeat stops.
+
+**Observed so far.** When it failed, the router's lease table still
+showed the clock's old lease, not refreshed. That rules out 1, and says
+no DHCP exchange happened around the failure: a reboot (6) or a clean
+reconnect would both have renewed it. 2 stays only as a reconnect that
+never completes.
+
+**Device-side traces, in place since 2026-10-22.** All at `info` so the
+normal build keeps them; none in the scan path.
+
+- Timestamps on every log line: esp-println's `timestamp` feature,
+  with `_esp_println_timestamp` defined in `main.rs` as the embassy
+  uptime in ms. Turns the capture into a timeline by itself.
+- Boot: `esp_hal::system::reset_reason()` next to `settings:`.
+- `wifi_task`: instead of waiting on the disconnect alone, `select`
+  it against a minute timer and log `wifi: up <s>, rssi <dBm>`
+  from `controller.rssi()`, with the BSSID and channel from
+  `ap_info()` so a roam between the two APs is visible. The
+  disconnect line keeps the reason; the `connected` line gains the
+  BSSID.
+- `net::monitor_task`: logs every transition. `wait_link_up` →
+  `net: link up`; `wait_config_up` → `net: ip <addr> gw <gw>
+  dns <dns>`; then `select(wait_link_down, wait_config_down)` and log
+  which one fired. Separates hypotheses 1 to 3 at a glance.
+- `net::probe_task`: every 30 s with the config up, ping the gateway
+  once with embassy-net's `PingManager` (`icmp` feature, one more
+  socket in `StackResources`, raise it to 10). Log only failures,
+  recoveries and a running count in the heartbeat. A probe that fails
+  while `wifi` still reports connected is hypothesis 4.
+- `http_task`: three atomics per listener (accepted, served, head
+  timeouts) and a state byte (waiting, reading, writing, closing),
+  printed in the heartbeat as `http: L0 waiting 12/11/1 …`. Three
+  listeners stuck in `closing` or `writing` is hypothesis 5 and says
+  where. `accept` errors and head timeouts logged at `info` for the
+  debug run.
+- Heartbeat: add uptime seconds, so a reboot shows even if the boot
+  banner scrolled off, and the probe and HTTP counters above.
+- Log filter for the debug flash: `ESP_LOG=info,embassy_net=debug,
+  esp_radio=debug` on the `cargo run` line; esp-println parses
+  per-target levels at build time. embassy-net's `log` feature then
+  prints DHCP state changes and esp-radio prints every event it
+  receives. If the esp-radio events do not explain a disconnect, the
+  `print-logs-from-driver` feature prints the closed driver's own
+  messages; it is noisy, so only as a second round.
+
+**Host-side capture.** `scripts/watch-clock.sh <ip>`: every 30 s, one
+`ping -c1 -W2` and one `curl --max-time 5 /api`, each result on a line
+with the host time. The serial monitor goes through `tee` into a file
+on the same machine, so the device uptime stamps and the host clock
+line up at the first `alive` line. Run both until the page fails, then:
+
+| device log says | host log says | it is |
+| --- | --- | --- |
+| `disconnected`, `connected`, `net: ip` with a new address | ping to the old IP fails | 1, ruled out by the router's lease table |
+| `disconnected`, `connect failed …` repeating | both fail | 2 |
+| `net: config down`, link still up, DHCP discover in the debug lines | both fail | 3 |
+| `wifi: up` lines continue, `probe: gateway unreachable` | both fail | 4 |
+| probe fine, `http:` listeners stuck in one state | ping ok, curl times out | 5 |
+| uptime restarts, boot banner with a reset reason | both fail briefly | 6 |
+| `alive` lines stop, panel still scanning | both fail | 7 |
+
+Also worth doing once it has failed, before power-cycling: check the
+router's client list for the clock, and `arping` it from the host; a
+station the AP has forgotten answers neither.
+
+**Not in this round.** Any self-healing: a forced reconnect after N
+probe failures, a reboot after the config has been down for ten
+minutes. Those are the fixes for 4 and 3 and belong after the logs
+have picked one. The `StackResources` bump and the `icmp` feature cost
+about 1 KB of RAM; the probe socket is reused, not reopened.
+
+**First capture, 2026-10-22.** The spare board, ten minutes in, found
+two things before any failure:
+
+- *Ping never worked.* The host's ping failed from the first probe
+  while `/api` answered in 30 ms. smoltcp answers echo requests only
+  with its `auto-icmp-echo-reply` feature, which embassy-net exposes
+  under the same name and does not enable by default. It is on now,
+  so ping is a usable check from the host and the router.
+- *The driver's receive queue overflowed in bursts.* With
+  `esp_radio=debug` the driver printed `RX QUEUE FULL` eight times in
+  3 ms shortly after connecting, then in pairs now and then. The
+  queue is esp-radio's `ControllerConfig::rx_queue_size`, 5 frames by
+  default; the driver's receive thread delivers a burst of LAN
+  broadcasts faster than the thread-mode executor gets to run the
+  stack, and everything past the fifth frame is dropped. The DHCP
+  offer was one casualty: the link came up at 5 s and the address
+  arrived at 15 s, smoltcp's discover retry. The queue is now
+  `config::WIFI_RX_QUEUE_FRAMES`, 32, the same as the driver's dynamic
+  receive buffers. Whether it is also the long-run failure is open: a
+  queue that fills and stays full would be hypothesis 7 with a cause,
+  and the debug line's timestamps will show it.
+- *The first DHCP discover is lost whatever the queue.* The user knows
+  this one from another project on the same driver: the station
+  reports connected before it can pass a frame, the stack sends its
+  discover at that instant, and smoltcp waits its 10 s
+  `discover_timeout` before the next. The workaround there was to
+  build the stack only after the connect plus 500 ms. Here every task
+  takes the stack at boot, so the same delay is applied the other way
+  round: the stack starts with no IPv4 configuration, `wifi_task`
+  switches DHCP on `LINK_SETTLE` (500 ms) after each connect and off at
+  each disconnect. That also covers reconnects, where embassy-net
+  would otherwise restart DHCP at the link-up instant. embassy-net
+  does not wake its runner for a configuration change, so a throwaway
+  UDP bind follows the switch (`net::poke`); the hostname renewal uses
+  the same path and skips the renew while the link is down.
+
+Both verified on the spare board 2026-10-22: DHCP switched on at
+5.39 s after boot and the address was up at 5.40 s, 20 ms later;
+no `RX QUEUE FULL` in the first minutes; ping and `/api` answer from
+the host; gateway probes pass; RSSI -42 dBm on the near AP. The
+long-run failure is still to be captured.
+
+**Review finding, 2026-10-22: a way for the stack to go deaf while
+connected.** The user reported that during the outage the clock kept
+ticking and the buttons worked, so the thread executor was alive and the
+stack's runner was being polled; the question was what could leave it
+asleep. Reading esp-radio 1.0.0-beta.1 (`src/wifi/mod.rs`, unchanged on
+upstream main as of today, no changelog entry):
+
+- `WifiTxToken::consume_token` increments `WIFI_TX_INFLIGHT`, then
+  `esp_wifi_send_data` returns early, *without* the decrement, when the
+  station state is no longer `Connected` at that instant. The token was
+  handed out a few microseconds earlier on `link_state() == Up`, so a
+  disconnect event landing in that window leaks one slot.
+- The counter is never reset: not on `StationDisconnected`, not in
+  `stop`, not in `WifiController::new`. The only decrements are the
+  driver's tx-done callback and an `esp_wifi_internal_tx` error.
+- `can_send()` is `inflight < tx_queue_size` (3), and the embassy-net
+  driver's `receive` goes through `rx_token()`, which returns `None`
+  unless `can_send()`. After three leaks neither direction works.
+- embassy-net then sees `transmit` return `None` every poll, marks
+  `tx_exhausted` and does not arm smoltcp's timer. The runner wakes on
+  each incoming frame, cannot take it, and sleeps again; the queue
+  fills and every further frame is a dropped `RX QUEUE FULL`. The
+  driver still reports connected, DHCP renewals never go out, the lease
+  on the router simply ages. A reconnect does not help, since the
+  counter survives it; only a reset does.
+
+Whether a frame the driver accepted and then dropped at a disconnect
+gets its tx-done callback is a property of the closed blob and could
+not be checked; if not, every disconnect with traffic pending is
+another leak and three disconnects are enough.
+
+What the capture would show: `wifi: disconnected` lines earlier in the
+log, then `probe: gateway unreachable` every 30 s with `wifi: up` lines
+continuing, and with `esp_radio=debug` a continuous `RX QUEUE FULL`.
+
+Proposed fix, in two layers, not yet done:
+
+1. Patch esp-radio through `[patch.crates-io]` (a local copy or a fork):
+   decrement on the early return in `esp_wifi_send_data`, reset the
+   counter on `StationDisconnected` and in `stop`, and stop gating
+   `rx_token` on `can_send` (upstream's newer `xarxa` driver path
+   already does not). Offer it upstream.
+2. In the firmware, a self-heal that does not depend on knowing the
+   cause: the gateway probe failing for five minutes while the driver
+   reports connected logs the fact and resets. Settings are in flash
+   and the time is back within seconds of the reboot. Hypotheses 3 and
+   4 both end there. **Done 2026-10-22, awaiting a bench check:**
+   - `probe_task` arms itself on the first gateway answer since boot
+     (`probe: gateway answers …; self-heal armed`), so a router that
+     never answers ping cannot reboot-loop the clock. Then
+     `config::PROBE_RESET_FAILURES` (10, five minutes) consecutive
+     failures with `stack.is_link_up()` call `heal::reset`. Link down
+     is left to the Wi-Fi task's reconnect.
+   - `heal::reset` logs `heal: <reason>; self-heal reset N since
+     power-up: blanking the panel and rebooting`, then waits for
+     `scan::stop`: the scan task raises a flag check after each
+     transfer's `wait()`, and the transfer ends on the blanking frame,
+     so the panel is dark and the wires rest on their pull-downs when
+     the task parks itself. The user asked for this: a reset
+     mid-transfer leaves the row the drivers last latched lit at full
+     current until the firmware is back. Then the count goes to RTC
+     fast RAM (`#[ram(unstable(rtc_fast, persistent))]`, with a mark
+     word against a skipped zeroing), 200 ms for the serial port, and
+     `software_reset`.
+   - The boot line reads `boot: reset reason Some(CoreSw), self-heal
+     resets since power-up N` and the heartbeat ends with `self-heal
+     resets N`, so a heal that happened with nobody on the serial port
+     is still on record until the next power cut.
+
+   Bench check, on the spare board with the monitor attached: drop the
+   router's echo replies to the board for six minutes. On OpenWrt
+   (fw4): `nft insert rule inet fw4 output ip daddr 10.1.1.31 icmp type
+   echo-reply drop`, or with iptables `iptables -I OUTPUT -d 10.1.1.31
+   -p icmp --icmp-type echo-reply -j DROP`. Expect `probe: gateway
+   unreachable … (1 in a row)` every 30 s, at the tenth the `heal:`
+   line, the panel dark with no lit row during the reboot, then the
+   boot line with `CoreSw` and count 1, and the heartbeat carrying 1.
+   Remove the rule; the count stays until a power cut. A panic reset
+   still goes through `custom_halt` and does not blank first.
+
+**Running it.** Flash the spare board with the debug filter and keep
+the monitor in a file; start the watch script against the address the
+board logs:
+
+```
+ESP_LOG='info,embassy_net=debug,esp_radio=debug' WIFI_SSID='…' WIFI_PASSWORD='…' \
+  TZ_OFFSET_MINUTES=-420 cargo run --release 2>&1 | tee clock-serial.log
+scripts/watch-clock.sh <ip> | tee clock-watch.log
+```
+
+The first minute should show `boot: reset reason`, the candidates, a
+`connected to <bssid>` line, `net: link up`, `net: ip … gateway …`, and
+then every minute a `wifi: up … rssi …` line, an `alive … gateway
+probes …` line and an `http: L0 waiting …` line. The address should
+now arrive about half a second after `wifi: connected`, and `RX QUEUE
+FULL` should be rare or gone. The gateway probes
+should count up with no failures; if the router never answers ping,
+every probe fails from the start, which is the time to swap the probe
+target for another box on the LAN. The riscv32imc target has no atomic
+add, so the counters are plain load-and-store with one writer each.
+
+**Done when.** The user has a capture that falls in one row of the
+table above, and the entry below this one records what it was.
+
 ### Review backlog (2026-10-21)
 
 Found in the same review, not yet done, in rough order of value:
