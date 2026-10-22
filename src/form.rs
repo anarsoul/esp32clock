@@ -7,6 +7,52 @@ use crate::settings::{
     TZ_LIMIT_MINUTES,
 };
 
+/// Read-only status shown under the form and in the JSON. Not settings:
+/// a posted status key is refused as unknown like any other.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Status {
+    pub uptime_secs: u64,
+    /// Self-heal resets since power-up.
+    pub heals: u32,
+    /// When the last self-heal happened, if one did and the time was known.
+    pub last_heal: Option<HealStamp>,
+}
+
+/// The time of a self-heal, converted by the caller so this module stays
+/// free of the clock.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct HealStamp {
+    pub unix_secs: i64,
+    /// 0 is Monday, 6 is Sunday.
+    pub weekday: u8,
+    pub hour: u8,
+    pub minute: u8,
+    /// Seconds since it happened, if the time is known now.
+    pub ago_secs: Option<i64>,
+}
+
+const WEEKDAY_LABELS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+/// A span of seconds as `3 d 4 h 12 min`, dropping leading zero parts;
+/// seconds only under a minute.
+struct Span(i64);
+
+impl core::fmt::Display for Span {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let s = self.0.max(0);
+        let (d, h, m) = (s / 86_400, s % 86_400 / 3600, s % 3600 / 60);
+        if d > 0 {
+            write!(f, "{d} d {h} h {m} min")
+        } else if h > 0 {
+            write!(f, "{h} h {m} min")
+        } else if m > 0 {
+            write!(f, "{m} min")
+        } else {
+            write!(f, "{s} s")
+        }
+    }
+}
+
 /// What a bad key or value looks like to the caller.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum FormError {
@@ -156,8 +202,9 @@ pub fn apply(s: &mut Settings, body: &[u8], checkboxes_absent_off: bool) -> Resu
     Ok(())
 }
 
-/// The settings as JSON.
-pub fn write_json(out: &mut impl core::fmt::Write, s: &Settings) -> core::fmt::Result {
+/// The settings as JSON, followed by the read-only status keys `uptime`
+/// (seconds), `heals` and `last_heal` (Unix seconds or null).
+pub fn write_json(out: &mut impl core::fmt::Write, s: &Settings, st: &Status) -> core::fmt::Result {
     write!(
         out,
         "{{\"color\":\"{}\",\"brightness\":{},\"alarm\":\"{:02}:{:02}\",\"armed\":{},\"days\":\"",
@@ -168,20 +215,43 @@ pub fn write_json(out: &mut impl core::fmt::Write, s: &Settings) -> core::fmt::R
         s.alarm_armed,
     )?;
     write_days(out, s.alarm_days)?;
-    writeln!(
+    write!(
         out,
-        "\",\"skip\":{},\"melody\":\"{}\",\"twelve_hour\":{},\"tz\":{},\"hostname\":\"{}\"}}",
+        "\",\"skip\":{},\"melody\":\"{}\",\"twelve_hour\":{},\"tz\":{},\"hostname\":\"{}\",\"uptime\":{},\"heals\":{},\"last_heal\":",
         s.skip_next,
         melody::get(s.melody).name,
         s.twelve_hour,
         s.tz_offset_minutes,
-        s.hostname.as_str()
-    )
+        s.hostname.as_str(),
+        st.uptime_secs,
+        st.heals,
+    )?;
+    match st.last_heal {
+        Some(h) => writeln!(out, "{}}}", h.unix_secs),
+        None => writeln!(out, "null}}"),
+    }
+}
+
+/// The status line under the form.
+fn write_status(out: &mut impl core::fmt::Write, st: &Status) -> core::fmt::Result {
+    write!(out, "<p><small>Up {}. Self-heal resets since power-up: {}", Span(st.uptime_secs as i64), st.heals)?;
+    if let Some(h) = st.last_heal {
+        write!(out, ", last {} {:02}:{:02}", WEEKDAY_LABELS[h.weekday as usize % 7], h.hour, h.minute)?;
+        if let Some(ago) = h.ago_secs {
+            write!(out, " ({} ago)", Span(ago))?;
+        }
+    }
+    out.write_str(".</small></p>")
 }
 
 /// The settings page. `error` is why the last form post was refused, if
 /// it was; the page then says so above the form.
-pub fn write_page(out: &mut impl core::fmt::Write, s: &Settings, error: Option<FormError>) -> core::fmt::Result {
+pub fn write_page(
+    out: &mut impl core::fmt::Write,
+    s: &Settings,
+    st: &Status,
+    error: Option<FormError>,
+) -> core::fmt::Result {
     out.write_str(
         "<!doctype html><html><head><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\">\
 <title>Clock</title><style>body{font-family:sans-serif;max-width:22em;margin:2em auto;padding:0 1em}\
@@ -215,7 +285,7 @@ button{font-size:1em;padding:.5em 1.5em;margin-top:1em}p.err{color:#b00}</style>
 <label><input type=checkbox name=twelve_hour{}> 12 hour clock</label>\
 <label>Timezone, minutes east of UTC <input type=number name=tz min=-{lim} max={lim} step=15 value={}></label>\
 <label>Hostname, for the DHCP server <input type=text name=hostname maxlength={hmax} pattern=\"[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?\" value=\"{}\"></label>\
-<button>Save</button> <button formaction=/play>Play</button></form><p><small>Scriptable: <code>GET /api</code>, <code>POST /api</code> with the same fields.</small></p></body></html>",
+<button>Save</button> <button formaction=/play>Play</button></form>",
         s.alarm_hour,
         s.alarm_minute,
         if s.alarm_armed { " checked" } else { "" },
@@ -226,6 +296,10 @@ button{font-size:1em;padding:.5em 1.5em;margin-top:1em}p.err{color:#b00}</style>
         s.hostname.as_str(),
         lim = TZ_LIMIT_MINUTES,
         hmax = HOSTNAME_MAX,
+    )?;
+    write_status(out, st)?;
+    out.write_str(
+        "<p><small>Scriptable: <code>GET /api</code>, <code>POST /api</code> with the same fields.</small></p></body></html>",
     )
 }
 

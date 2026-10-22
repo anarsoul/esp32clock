@@ -3,6 +3,7 @@
 use embassy_futures::select::{Either3, select3};
 use embassy_net::Stack;
 use embassy_time::{Duration, Instant, Timer};
+use log::info;
 
 use crate::buttons;
 use crate::buzzer;
@@ -10,7 +11,7 @@ use crate::config::MAX_CURRENT_STEP;
 use crate::panel::{Panel, Rgb, ScanImage, current_step_for};
 use crate::settings::{self, Settings};
 use crate::ui::{Field, IP_STEP, Ui, View};
-use crate::{clock, scan};
+use crate::{carry, clock, scan};
 
 /// Step time of the waiting animation and of the blink.
 const BLINK_STEP: Duration = Duration::from_millis(250);
@@ -103,6 +104,19 @@ fn draw(panel: &mut Panel, view: View, settings: &Settings, ip: Option<[u8; 4]>,
     }
 }
 
+/// How long after an alarm was handled a software reset still counts it
+/// as handled: the missed-alarm grace plus the ringing timeout, with room.
+const HANDLED_WINDOW_SECS: i64 = 15 * 60;
+
+/// Remember, across a software reset, that today's alarm has been dealt
+/// with. Needs the time; without it there is no grace to suppress either.
+fn record_handled(s: &Settings) {
+    if let Some(unix) = clock::unix_secs() {
+        let minute = s.alarm_hour as u16 * 60 + s.alarm_minute as u16;
+        carry::update(|c| c.handled = Some((unix, minute)));
+    }
+}
+
 /// Run the UI: wait for a tick, a button or a settings change from
 /// elsewhere, update, draw, ring. `stack` is only asked for the IP.
 #[embassy_executor::task]
@@ -113,14 +127,38 @@ pub async fn display_task(stack: Stack<'static>) -> ! {
     let mut last: Option<ScanImage> = None;
     let mut was_ringing = false;
 
+    // Volatile alarm state from before a software reset. The skip flag
+    // goes straight back into the settings; the handled alarm is applied
+    // once the time is known, since it is only meaningful near it.
+    let carried = carry::get();
+    let mut carried_skip = carried.skip_next;
+    if carried.skip_next {
+        settings::update(|s| s.skip_next = true);
+        let _ = changes.try_changed();
+        info!("display: skip-next alarm carried over the reset");
+    }
+    let mut seed_handled = carried.handled;
+
     loop {
         let now = Instant::now();
         let time = clock::now();
+        if let (Some((at, minute)), Some(unix)) = (seed_handled, clock::unix_secs()) {
+            seed_handled = None;
+            if unix - at <= HANDLED_WINDOW_SECS {
+                ui.suppress_alarm(minute);
+                info!("display: alarm {:02}:{:02} handled {} s before the reset, not ringing it again", minute / 60, minute % 60, unix - at);
+            }
+        }
         // The tick only writes the settings to use up a skipped alarm.
         if settings::update(|s| ui.tick(s, time, now)) {
             let _ = changes.try_changed();
+            record_handled(&settings::get());
         }
         let current = settings::get();
+        if current.skip_next != carried_skip {
+            carried_skip = current.skip_next;
+            carry::update(|c| c.skip_next = carried_skip);
+        }
 
         // The buzzer loops the melody on its own; tell it only on the edges.
         if ui.ringing() != was_ringing {
@@ -129,6 +167,11 @@ pub async fn display_task(stack: Stack<'static>) -> ! {
                 buzzer::ring(current.melody);
             } else {
                 buzzer::stop();
+                // Rung and ended, by a press or the timeout: do not ring it
+                // again should a reset follow within the grace. A reset
+                // while still ringing leaves this unset on purpose, so the
+                // grace brings the alarm back after the reboot.
+                record_handled(&current);
             }
         }
 

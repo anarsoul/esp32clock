@@ -42,9 +42,13 @@ Credentials and the default timezone are read at build time by `src/config.rs`; 
 change. The timezone, 12/24 hour, colour, brightness, alarm, alarm days,
 alarm melody and DHCP hostname are settings: saved in the `nvs` partition,
 editable from the buttons and from `http://<ip>/` (form) or `/api`
-(form-encoded keys, JSON back). `skip_next` (page checkbox, key `skip`) is
+(form-encoded keys, JSON back). The page ends with a read-only status
+line, and the JSON with the read-only keys `uptime` (seconds), `heals`
+(self-heal resets since power-up) and `last_heal` (Unix seconds or
+null); posting them is refused as an unknown key. `skip_next` (page checkbox, key `skip`) is
 the one setting the record does not store: it skips one alarm and is cleared
-by it or by a reboot. `POST /play` previews the melody chosen in the form
+by it or by a power cut; a software reset (self-heal, panic) carries it over
+in RTC RAM, see `src/carry.rs`. `POST /play` previews the melody chosen in the form
 without saving. `rust-version` must stay at 1.95 or higher or cargo's
 MSRV-aware resolver picks an esp-rom-sys that esp-storage cannot build with.
 
@@ -62,8 +66,10 @@ Any press ends ringing or the IP display. Set mode times out after 15 s,
 ringing after 120 s. Self-heal: once the gateway has answered a ping, ten
 failed probes in a row (five minutes) with the link still up blank the
 panel and reset the chip; the boot line and the heartbeat carry the count
-since power-up (`config::PROBE_RESET_FAILURES`). An alarm missed by up to 10 minutes across a power
-cut rings on the first valid time after boot.
+since power-up (`config::PROBE_RESET_FAILURES`). An alarm missed by up to
+10 minutes across a power cut rings on the first valid time after boot;
+after a software reset the alarm last rung-and-ended or skipped within
+15 minutes is not rung again, while one cut off mid-ring comes back.
 
 ## Layout
 
@@ -72,15 +78,16 @@ cut rings on the first valid time after boot.
 | `src/aip33628.rs` | frame format, bit-reversed current table, quad-nibble waveform encoder; pure `core` |
 | `src/panel.rs` | COM/SEG map, font, per-position colour, gamma and brightness tables, `Panel::render` → `ScanImage` |
 | `src/scan.rs` | cycle/transfer builder, double-buffered DMA scan task, restart-gap statistics, `stop` on a blank frame before a deliberate reset |
-| `src/display.rs` | UI loop: tick, button or settings change → `ui` → draw → publish; rings the alarm; shows the IP |
-| `src/ui.rs` | mode state machine, pure logic; edits the settings it is handed; alarm due check, missed-alarm grace, consumes `skip_next` |
+| `src/display.rs` | UI loop: tick, button or settings change → `ui` → draw → publish; rings the alarm; shows the IP; seeds and records the carried alarm state |
+| `src/ui.rs` | mode state machine, pure logic; edits the settings it is handed; alarm due check, missed-alarm grace with `suppress_alarm` seed, consumes `skip_next` |
 | `src/settings.rs` | `Settings`, palette and brightness tables, `Hostname`, shared `Watch` with change signal, versioned flash record |
 | `src/storage.rs` | nvs partition lookup, `sequential-storage` map over `esp-storage`, debounced persist task that compares records, not structs |
-| `src/heal.rs` | last-resort reset: blanks the panel through `scan::stop`, counts itself in RTC RAM across the reset, logs, reboots |
-| `src/form.rs` | key=value parsing, all-or-nothing `apply` on a copy, JSON and the HTML page with its error notice; pure logic |
+| `src/heal.rs` | last-resort reset: blanks the panel through `scan::stop`, counts itself in the `carry` record, logs, reboots |
+| `src/form.rs` | key=value parsing, all-or-nothing `apply` on a copy, JSON and the HTML page with its error notice and the read-only `Status` line; pure logic |
 | `src/http.rs` | HTTP/1.0 server, `LISTENERS` sockets each in its own task: `GET`/`POST` on `/` and `/api`, `POST /play`; a refused form redirects to `/?error=…`; per-listener state and counters for the heartbeat |
 | `src/buttons.rs` | debounced short/long press events, plus the two-button hold |
 | `src/melody.rs` | alarm tunes as pitch and length data with tempo; pure |
+| `src/carry.rs` | RTC-RAM record used only after a software reset (`CoreSw`/`Cpu0Sw`; anything else zeroes it at boot): self-heal count and time, the skip flag, the alarm last handled |
 | `src/buzzer.rs` | LEDC PWM on an open-drain pin; plays a melody on command, looped or once, stops within a note |
 | `src/clock.rs` | Unix time = uptime + NTP offset; local time with weekday |
 | `src/net.rs` | Wi-Fi station with all-channel scan and transmit-power ceiling, minute RSSI line; DHCP switched on 500 ms after each connect and off at disconnect; link and address monitor, gateway ping probe with the self-heal trigger, SNTP, DHCP renew on hostname change |
@@ -138,9 +145,9 @@ cut rings on the first valid time after boot.
 
 ## Sizes that bite
 
-- `http::RESPONSE_BUF` (2560) holds the whole page plus headers, and
-  overflow is a 500, not a truncation. The page is within about 150 bytes
-  of it; measure on the host after adding a field or label, or raise it.
+- `http::RESPONSE_BUF` (4096) holds the whole page plus headers, and
+  overflow is a 500, not a truncation. The worst-case page is 2529 bytes
+  with headers; measure on the host after adding a field or label.
 - `form::apply` decodes each key into 16 bytes and each value into 32;
   longer input is reported as a bad key or value before parsing.
 - `settings::RECEIVERS` is the number of `Watch` receivers (display,
@@ -188,6 +195,8 @@ each check under its milestone.
   every older version, `form::apply_one`, `write_json` and `write_page`,
   the `PLAN.md` entry, and a page-size check. A field that must not
   persist, like `skip_next`, is left out of the record on purpose.
+  Read-only status goes in `form::Status`, built in `http::status`, so
+  `form.rs` stays clockless and the host check still builds.
 - Tables copied from the reference docs (`BLOCKS`, `SEGMAP`, `COM_SEQ`,
   `IS_WIRE`) are verbatim; cite `3rdparty/HU-058_ESPHome/docs/` when
   changing anything near them.

@@ -31,7 +31,7 @@ use static_cell::StaticCell;
 
 use esp32clock::buzzer;
 use esp32clock::settings::Settings;
-use esp32clock::{buttons, display, heal, http, net, scan, settings, storage};
+use esp32clock::{buttons, carry, display, heal, http, net, scan, settings, storage};
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
 esp_bootloader_esp_idf::esp_app_desc!();
@@ -138,11 +138,12 @@ async fn main(spawner: Spawner) -> ! {
         stored = store.load().await;
     }
     settings::init(stored.unwrap_or(Settings::DEFAULT));
-    info!(
-        "boot: reset reason {:?}, self-heal resets since power-up {}",
-        esp_hal::system::reset_reason(),
-        heal::count()
-    );
+    let (reason, kept) = carry::init();
+    if kept {
+        info!("boot: reset reason {reason:?}, software reset: carried over {:?}", carry::get());
+    } else {
+        info!("boot: reset reason {reason:?}, RTC carry-over discarded");
+    }
     info!("settings: {:?}", settings::get());
 
     // The drivers discard anything sent in the first 200 us after power-up.

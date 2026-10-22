@@ -149,6 +149,15 @@ impl Ui {
         }
     }
 
+    /// Treat the alarm at this minute of the day as already handled: it
+    /// neither rings on that minute nor through the boot-time grace. Seeded
+    /// from the state carried across a software reset, so an alarm that
+    /// rang and was dismissed, or was used up by the skip flag, just before
+    /// a self-heal does not ring again after it.
+    pub fn suppress_alarm(&mut self, minute: u16) {
+        self.fired_minute = Some(minute);
+    }
+
     /// Advance timeouts and the alarm trigger. `time` is `None` before the
     /// first sync. `settings` is only written to consume `skip_next`.
     pub fn tick(&mut self, settings: &mut Settings, time: Option<LocalTime>, now: Instant) {
@@ -177,7 +186,7 @@ impl Ui {
                     // have eaten the alarm.
                     let due = match alarm_age(settings, t) {
                         Some(0) => self.fired_minute != Some(minute),
-                        Some(age) => !self.had_time && age <= MISSED_ALARM_GRACE,
+                        Some(age) => !self.had_time && age <= MISSED_ALARM_GRACE && self.fired_minute != Some(alarm),
                         None => false,
                     };
                     if due {

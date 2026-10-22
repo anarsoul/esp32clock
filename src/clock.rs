@@ -53,18 +53,28 @@ pub fn is_synced() -> bool {
     critical_section::with(|cs| OFFSET_US.borrow(cs).get()).is_some()
 }
 
-/// Local time of day, if synced, in the timezone from the settings.
-pub fn now() -> Option<LocalTime> {
-    let unix_s = unix_micros()?.div_euclid(1_000_000);
+/// Unix time in whole seconds, if synced.
+pub fn unix_secs() -> Option<i64> {
+    Some(unix_micros()?.div_euclid(1_000_000))
+}
+
+/// Local time of day for a Unix time in seconds, in the timezone from the
+/// settings.
+pub fn local_time(unix_s: i64) -> LocalTime {
     let tz_minutes = settings::get().tz_offset_minutes as i64;
     let local = unix_s + tz_minutes * 60;
     let local_s = local.rem_euclid(SECS_PER_DAY);
-    Some(LocalTime {
+    LocalTime {
         hour: (local_s / 3600) as u8,
         minute: (local_s % 3600 / 60) as u8,
         second: (local_s % 60) as u8,
         weekday: weekday_of_days(local.div_euclid(SECS_PER_DAY)),
-    })
+    }
+}
+
+/// Local time of day, if synced, in the timezone from the settings.
+pub fn now() -> Option<LocalTime> {
+    Some(local_time(unix_secs()?))
 }
 
 /// How long until the wall clock ticks over to the next whole second. Falls

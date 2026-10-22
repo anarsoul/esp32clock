@@ -972,7 +972,80 @@ Proposed fix, in two layers, not yet done:
    line, the panel dark with no lit row during the reboot, then the
    boot line with `CoreSw` and count 1, and the heartbeat carrying 1.
    Remove the rule; the count stays until a power cut. A panic reset
-   still goes through `custom_halt` and does not blank first.
+   still goes through `custom_halt` and does not blank first. Done and
+   passed, see the bench test entry below.
+
+**Self-heal bench test, 2026-10-22, passed on the spare board** (the
+user confirmed the panel goes dark through the reboot with no row left
+lit, so the blank-first path is verified) with the
+router dropping its echo replies (`nft` table `healtest`): probe failures
+every 32 s (30 s period plus the 2 s timeout), the tenth at 325.8 s of
+uptime followed at once by `heal: gateway 10.1.1.1 unreachable for 10
+probes (300 s) with the link up; self-heal reset 1 since power-up:
+blanking the panel and rebooting`, then a boot with `reset reason
+Some(CoreSw), software reset: carried over Carried { heals: 1,
+last_heal_unix: Some(1792693762), skip_next: true, handled: None }`
+and `display: skip-next alarm carried over the reset`; the skip box had
+been ticked before the test. The two flasher resets before it read
+`CoreUsbUart, RTC carry-over discarded`, so the hard-reset gate holds.
+Heap flat at 54080 bytes throughout. A second round on the same board,
+rule removed for 14 minutes (28 probes passed) then re-added, healed
+again at 1135.8 s of that boot, and the next boot read `heals: 2,
+last_heal_unix: Some(1792694898), skip_next: true`, so the record
+accumulates across repeated software resets. With the rule left in
+place the next boot's first probe fails and the watchdog stays
+disarmed, as designed: the real clock (`martin-clock`, 10.1.1.60)
+showed exactly that, `heals: 1` from its own test and no second
+reboot while its rule stayed. One thing the host-side watch log
+shows that is not a fault: the first ping after every boot fails while
+`/api` answers, because smoltcp has no neighbour entry for the host
+yet, drops the echo reply and sends an ARP request instead of queueing
+the reply; the next ping, 30 s later, succeeds. Linux would queue the
+packet, smoltcp by design does not.
+
+**Alarm state across a self-heal, 2026-10-22.** The user asked whether
+the skip-next flag survives a self-heal. It did not: it was RAM only,
+and a reboot also re-arms the missed-alarm grace, which would have rung
+an alarm dismissed or skipped minutes before the reset. Now `carry.rs`
+owns one RTC-RAM record, `[mark, heals, last heal, skip, handled unix,
+handled minute]`, and `carry::init` at boot keeps it only when the
+reset reason is a software reset (`CoreSw` or `Cpu0Sw`) and the mark
+is present; power-on, brown-out, watchdog and the flasher's reset zero
+it, and the boot line says `software reset: carried over …` or
+`RTC carry-over discarded` (the user asked for the hard-reset gate
+explicitly). The display task puts the carried skip flag back into the
+settings at start, writes the flag whenever it changes, and records
+the alarm as handled when ringing ends or the skip flag is used up;
+on the first valid time after boot, if that was within 15 minutes, it
+seeds `Ui::suppress_alarm`, and the grace check now also respects the
+seeded minute. A reset while still ringing records nothing on
+purpose, so the grace brings that alarm back. Checked on the host with
+a scratch crate of `ui.rs`: the grace rings an unhandled alarm, skips a
+handled one, the alarm minute itself stays quiet when handled, a seed
+for another minute does not suppress, a carried skip flag is used up by
+the grace, the next day's alarm still rings, and the normal path is
+unchanged. Verify on the panel: tick "skip the next alarm", run the
+heal bench test, and the page should show the box still ticked after
+the reboot; dismiss a ringing alarm and heal within ten minutes, and it
+must stay quiet.
+
+**Status on the page, 2026-10-22.** The clock in its case has no serial
+port, so the counter is shown where it can be read: the page ends with
+`Up 3 d 4 h 12 min. Self-heal resets since power-up: 1, last Wed 03:14
+(5 h ago).` and the JSON gains `uptime` (seconds), `heals` and
+`last_heal` (Unix seconds or null). The RTC record is now
+`[mark, count, unix time of the last reset]`, 0 for the time when the
+clock was not synced. `form::Status` carries values the HTTP layer has
+already converted (`clock::local_time` is the new pure conversion
+`now` also uses), so `form.rs` stays free of the clock and the host
+check still builds. A posted `heals` key is refused as unknown.
+`RESPONSE_BUF` went to 4096 as the backlog asked. Checked on the host
+with the scratch crate: worst case (24-char hostname, custom day list,
+every checkbox, the notice, a 46296-day uptime and a last heal) is
+2426 bytes, 2529 with headers; the plain page 2364; the JSON 243.
+Verify on the panel: the page shows the line with the uptime counting,
+`curl /api` ends with `"uptime":…,"heals":0,"last_heal":null`, and
+after a self-heal both show 1 and the time.
 
 **Running it.** Flash the spare board with the debug filter and keep
 the monitor in a file; start the watch script against the address the
@@ -1013,10 +1086,6 @@ Found in the same review, not yet done, in rough order of value:
   value buffer in `form::apply` is one byte short of
   `mon, tue, wed, thu, fri, sat, sun`, so the API answers "bad value"
   before the trim runs. Raise the buffer to 40 or so.
-- **Page buffer headroom.** The worst-case page plus headers is 2409 of
-  the 2560-byte `RESPONSE_BUF`. One more select or a longer label tips
-  it into the 500 path. Raise it to 4096, about 4.5 KB more across the
-  three listeners.
 - **First wake of a fresh watch receiver.** embassy-sync starts a
   receiver at id 0 and `settings::init` bumps the watch to 1, so the
   first `changed()` returns at once. `persist_task` swallows that with

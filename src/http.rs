@@ -19,8 +19,8 @@ use log::{info, warn};
 
 use crate::buzzer;
 use crate::config::HTTP_PORT;
-use crate::form::{self, FormError};
-use crate::settings;
+use crate::form::{self, FormError, HealStamp, Status};
+use crate::{clock, heal, settings};
 
 /// Connections served at once, each with its own buffers and task.
 pub const LISTENERS: usize = 3;
@@ -29,7 +29,7 @@ const RX_BUF: usize = 1024;
 const TX_BUF: usize = 1024;
 const REQUEST_BUF: usize = 1536;
 const BODY_MAX: usize = 512;
-const RESPONSE_BUF: usize = 2560;
+const RESPONSE_BUF: usize = 4096;
 
 /// A client that stalls this long mid-transfer is dropped.
 const TIMEOUT: Duration = Duration::from_secs(5);
@@ -246,12 +246,28 @@ fn error_from_query(query: &str) -> Option<FormError> {
     })
 }
 
+/// The read-only status for the page and the JSON.
+fn status() -> Status {
+    let now = clock::unix_secs();
+    let last_heal = heal::last_unix().map(|t| {
+        let local = clock::local_time(t);
+        HealStamp {
+            unix_secs: t,
+            weekday: local.weekday,
+            hour: local.hour,
+            minute: local.minute,
+            ago_secs: now.map(|n| n - t),
+        }
+    });
+    Status { uptime_secs: embassy_time::Instant::now().as_secs(), heals: heal::count(), last_heal }
+}
+
 /// Build the response for one request.
 fn respond(out: &mut Response, req: &Request<'_>) -> core::fmt::Result {
     match (req.method, req.path) {
         (Method::Get, "/") => {
             status_line(out, "200 OK", "text/html; charset=utf-8")?;
-            form::write_page(out, &settings::get(), error_from_query(req.query))
+            form::write_page(out, &settings::get(), &status(), error_from_query(req.query))
         }
         (Method::Post, "/") => {
             // All or nothing: the form is applied to a copy and committed
@@ -280,7 +296,7 @@ fn respond(out: &mut Response, req: &Request<'_>) -> core::fmt::Result {
         }
         (Method::Get, "/api") => {
             status_line(out, "200 OK", "application/json")?;
-            form::write_json(out, &settings::get())
+            form::write_json(out, &settings::get(), &status())
         }
         (Method::Post, "/api") => {
             // Validate on a copy first so a bad pair changes nothing.
@@ -289,7 +305,7 @@ fn respond(out: &mut Response, req: &Request<'_>) -> core::fmt::Result {
                 Ok(()) => {
                     settings::update(|s| *s = trial);
                     status_line(out, "200 OK", "application/json")?;
-                    form::write_json(out, &trial)
+                    form::write_json(out, &trial, &status())
                 }
                 Err(e) => {
                     status_line(out, "400 Bad Request", "text/plain")?;
