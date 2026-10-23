@@ -1,5 +1,5 @@
 fn main() {
-    for var in ["WIFI_SSID", "WIFI_PASSWORD", "TZ_OFFSET_MINUTES", "OTA_TOKEN"] {
+    for var in ["WIFI_SSID", "WIFI_PASSWORD", "TZ_OFFSET_MINUTES", "OTA_TOKEN", "MAX_CURRENT_STEP"] {
         println!("cargo:rerun-if-env-changed={var}");
     }
     firmware_version();

@@ -1643,6 +1643,34 @@ and in curl alike; the right PIN went through as before. A client
 that claims more length than it sends still ends in the socket
 timeout and a reset, as recorded under M9.
 
+### Brightness ceiling (after M9c) — DONE, verified on the bench 2026-10-22
+
+Quick presses on the brightness button reset the board. A read of the
+whole path (button channel, `settings::update`, the two-buffer DMA
+hand-off, the debounced flash write under esp-storage's
+interrupt-disabling lock) found nothing that could panic, and the
+serial logs held no panic text. Capping the current step at 5 made it
+rock stable; 75 % and 100 % (steps 8 and 15 before the cap) reset it.
+The firmware had run at a ceiling of 11 since M3, and the resets began
+when the transmit ceiling went to 16 dBm, so the board's supply is the
+limit: a step from 10 % to 100 % is about 2.5 to 40 mA on every lit
+sink at once, a transient of the order of an ampere on the 5 V rail,
+with the radio now taking its share. `MAX_CURRENT_STEP` is a build-time
+variable (`build.rs` reruns on it, a const assert holds it to 0..=15)
+with the default at 5, which the user finds bright enough; a board with
+a stiffer supply can be built with a higher one. The page then still
+offered 75 % and 100 %, which drew the same as 50 %, so
+`settings::BRIGHTNESS_STEPS` is now the prefix of the five choices
+whose current step is within the ceiling, computed at compile time
+(three by default); the button cycle, the page's select and the API's
+accepted values follow it, and `from_record` moves a stored step the
+build does not offer to the brightest one rather than dropping the
+record. The record layout is unchanged. Not done, and worth
+doing if the ceiling ever goes back up: slew the step one at a time
+over a few frames so the brightness button changes the load gradually,
+and log the reset reason prominently so a `SysBrownOut` is told apart
+from a panic at a glance.
+
 ### M10 — Wi-Fi provisioning from an access point — planned
 
 **Scope.** Credentials become a stored setting instead of a build-time

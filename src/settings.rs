@@ -12,9 +12,10 @@ use embassy_sync::watch::{Receiver, Watch};
 
 use crate::config::{
     DEFAULT_ALARM, DEFAULT_BRIGHTNESS, DEFAULT_COLOR, DEFAULT_HOSTNAME, DEFAULT_TWELVE_HOUR, DEFAULT_TZ_OFFSET_MINUTES,
+    MAX_CURRENT_STEP,
 };
 use crate::melody;
-use crate::panel::Rgb;
+use crate::panel::{Rgb, current_step_for};
 
 /// Colours the top button cycles through.
 pub const PALETTE: [Rgb; 8] = [
@@ -31,8 +32,36 @@ pub const PALETTE: [Rgb; 8] = [
 /// Names of the palette entries, for the page and the API.
 pub const PALETTE_NAMES: [&str; 8] = ["red", "orange", "yellow", "green", "cyan", "blue", "magenta", "white"];
 
-/// Brightness steps the bottom button cycles through, in percent.
-pub const BRIGHTNESS_STEPS: [u8; 5] = [10, 25, 50, 75, 100];
+/// Every brightness the firmware knows, in percent, ascending. A stored
+/// brightness is an index into this list, whatever the build's ceiling.
+const BRIGHTNESS_CHOICES: [u8; 5] = [10, 25, 50, 75, 100];
+
+/// How many of the choices stay within `config::MAX_CURRENT_STEP`. The
+/// list is ascending and the current table monotonic, so they are a
+/// prefix. 10 % is step 1, so any ceiling from 1 up keeps at least one.
+const fn brightness_count() -> usize {
+    let mut n = 0;
+    while n < BRIGHTNESS_CHOICES.len() && current_step_for(BRIGHTNESS_CHOICES[n]) <= MAX_CURRENT_STEP {
+        n += 1;
+    }
+    n
+}
+
+/// Brightness steps the bottom button cycles through and the page and
+/// the API offer, in percent: the choices whose current step is within
+/// the build's ceiling. Anything above it would draw the same as the
+/// last one, so it is not offered.
+pub const BRIGHTNESS_STEPS: [u8; brightness_count()] = {
+    let mut out = [0u8; brightness_count()];
+    let mut i = 0;
+    while i < out.len() {
+        out[i] = BRIGHTNESS_CHOICES[i];
+        i += 1;
+    }
+    out
+};
+
+const _: () = assert!(!BRIGHTNESS_STEPS.is_empty(), "no brightness step within MAX_CURRENT_STEP");
 
 /// Timezone offsets this far either side of UTC are accepted, in minutes.
 pub const TZ_LIMIT_MINUTES: i16 = 14 * 60;
@@ -152,7 +181,12 @@ impl Settings {
     /// The compile-time defaults.
     pub const DEFAULT: Settings = Settings {
         color: DEFAULT_COLOR,
-        brightness: DEFAULT_BRIGHTNESS,
+        // The brightest offered step when the ceiling is below the default.
+        brightness: if DEFAULT_BRIGHTNESS < BRIGHTNESS_STEPS.len() {
+            DEFAULT_BRIGHTNESS
+        } else {
+            BRIGHTNESS_STEPS.len() - 1
+        },
         alarm_hour: DEFAULT_ALARM.0,
         alarm_minute: DEFAULT_ALARM.1,
         alarm_armed: false,
@@ -247,6 +281,13 @@ impl Settings {
         }
         if version > RECORD_VERSION {
             return None;
+        }
+        // A record saved by a build with a higher ceiling may name a step
+        // this build does not offer: land on the brightest one instead of
+        // throwing the whole record away. Anything past the full list is
+        // still a bad record.
+        if s.brightness < BRIGHTNESS_CHOICES.len() && s.brightness >= BRIGHTNESS_STEPS.len() {
+            s.brightness = BRIGHTNESS_STEPS.len() - 1;
         }
         s.is_valid().then_some(s)
     }

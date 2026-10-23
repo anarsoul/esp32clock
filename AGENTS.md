@@ -28,6 +28,7 @@ generator with DMA; see `PLAN.md` for the full design and its history.
 cargo build --release
 cargo clippy --release
 WIFI_SSID='…' WIFI_PASSWORD='…' TZ_OFFSET_MINUTES=-420 OTA_TOKEN='…' cargo run --release
+MAX_CURRENT_STEP=8 cargo build --release   # optional: raise the drive-current ceiling (default 5)
 OTA_TOKEN='…' scripts/ota.sh <ip>      # later updates, over the LAN
 scripts/ota.sh                          # just the image file, for http://<ip>/update
 ```
@@ -154,9 +155,16 @@ answered or an HTTP request served bumps it, and the third such boot
   the `esp32c3` PAC in `main.rs`.
 - **Buttons:** GPIO4 is the upper button, GPIO3 the lower. No board
   pull-ups; the internal ones are used.
-- **Current:** `IS` comes from brightness alone, capped at step 11
-  (`MAX_CURRENT_STEP`). Never derive it from how much is lit, and never park
-  the panel all-white at high current; the drivers get hot.
+- **Current:** `IS` comes from brightness alone, capped at
+  `MAX_CURRENT_STEP`, a build-time variable, default step 5 (the 50 %
+  step, about 15 mA per sink); `settings::BRIGHTNESS_STEPS` is cut at
+  the cap, so the button, the page and the API offer 10, 25 and 50 % by
+  default and a stored higher step lands on the brightest one offered.
+  With the transmit ceiling at 16 dBm the
+  board browns out on a quick step to 75 % or 100 % at the old cap of
+  11; the supply, not the firmware, is the limit (2026-10-22). Never
+  derive the current from how much is lit, and never park the panel
+  all-white at high current; the drivers get hot.
 - **Wi-Fi power:** `WIFI_MAX_TX_POWER_QDBM` is 68, which the driver
   rounds to its 16 dBm level (the level table is in the constant's
   comment; the boot log prints the setting). The access point hears the

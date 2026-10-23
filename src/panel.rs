@@ -149,8 +149,8 @@ const BRIGHTNESS_STEP: [u8; 101] = [
 ];
 
 /// Current step (0..=15) for a brightness in percent.
-pub fn current_step_for(percent: u8) -> u8 {
-    BRIGHTNESS_STEP[percent.min(100) as usize]
+pub const fn current_step_for(percent: u8) -> u8 {
+    BRIGHTNESS_STEP[if percent > 100 { 100 } else { percent as usize }]
 }
 
 /// Seven segment font, bit 0 = A through bit 6 = G.

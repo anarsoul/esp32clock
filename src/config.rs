@@ -8,7 +8,9 @@
 //! ```
 //!
 //! `OTA_TOKEN` is the fourth: a firmware update over the LAN must carry
-//! it, and a build without one has no update path at all.
+//! it, and a build without one has no update path at all. `MAX_CURRENT_STEP`
+//! is the fifth, optional: the ceiling on the panel's drive current, for a
+//! supply that cannot carry the top steps.
 //!
 //! `build.rs` re-runs the build when any of them changes.
 
@@ -58,17 +60,31 @@ pub const DEFAULT_TWELVE_HOUR: bool = false;
 /// Index into `settings::PALETTE` at boot. 1 is orange.
 pub const DEFAULT_COLOR: usize = 1;
 
-/// Index into `settings::BRIGHTNESS_STEPS` at boot. 2 is 50 %.
+/// Index into `settings::BRIGHTNESS_STEPS` at boot. 2 is 50 %. A ceiling
+/// that leaves fewer steps than that lands on the brightest one offered.
 pub const DEFAULT_BRIGHTNESS: usize = 2;
 
 /// Alarm time at boot, disarmed. These are only the defaults; the saved
 /// settings in flash take precedence once the user has changed them.
 pub const DEFAULT_ALARM: (u8, u8) = (7, 0);
 
-/// Ceiling on the current step whatever the brightness. Step 11 is the
-/// stock firmware's "normal" setting, 30 mA per lit sink. The drivers get
-/// hot at the top steps with many sinks lit.
-pub const MAX_CURRENT_STEP: u8 = 11;
+/// Ceiling on the current step (1 to 15) whatever the brightness, from
+/// `MAX_CURRENT_STEP` at build time. Brightness steps above the one that
+/// maps to it are not offered, since they would all draw the same (see
+/// `settings::BRIGHTNESS_STEPS`). Step 11 is the stock firmware's
+/// "normal" setting, 30 mA per lit sink, and the drivers get hot above
+/// it; the firmware ran there until the transmit ceiling went up, after
+/// which a quick step to 75 % or 100 % brightness browned the board out
+/// (2026-10-22). The default is 5, the 50 % step, about 15 mA per sink:
+/// stable, and bright enough. A better supply can raise it.
+pub const MAX_CURRENT_STEP: u8 = {
+    let step = match option_env!("MAX_CURRENT_STEP") {
+        Some(s) => parse_i32(s),
+        None => 5,
+    };
+    assert!(step >= 1 && step <= 15, "MAX_CURRENT_STEP must be 1 to 15");
+    step as u8
+};
 
 /// Ceiling on Wi-Fi transmit power, in quarter dBm, 8 to 84. esp-radio
 /// starts at 20 (5 dBm), which does not reach a far access point. 34
@@ -146,11 +162,11 @@ const fn parse_i32(s: &str) -> i32 {
         neg = b[0] == b'-';
         i = 1;
     }
-    assert!(i < b.len(), "TZ_OFFSET_MINUTES must be an integer");
+    assert!(i < b.len(), "TZ_OFFSET_MINUTES and MAX_CURRENT_STEP must be integers");
     let mut v: i32 = 0;
     while i < b.len() {
         let c = b[i];
-        assert!(c >= b'0' && c <= b'9', "TZ_OFFSET_MINUTES must be an integer");
+        assert!(c >= b'0' && c <= b'9', "TZ_OFFSET_MINUTES and MAX_CURRENT_STEP must be integers");
         v = v * 10 + (c - b'0') as i32;
         i += 1;
     }
