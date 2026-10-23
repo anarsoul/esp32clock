@@ -7,7 +7,16 @@
 //! write is well under a millisecond and invisible; a sector erase is tens
 //! of milliseconds, a brief dark blink, and happens once per few hundred
 //! changes.
+//!
+//! There is one flash handle for the whole firmware, `with_flash`, shared
+//! with the firmware updater. A second `FlashStorage` is not an option:
+//! its constructor sizes the flash with a chip-ID command over SPI1, and
+//! once the first handle has used the flash that read comes back 0, so
+//! every operation on the second handle fails its bounds check.
 
+use core::cell::RefCell;
+
+use critical_section::Mutex as CsMutex;
 use embassy_futures::select::{Either, select};
 use embassy_time::{Duration, Timer};
 use embedded_storage::nor_flash::{NorFlash as BlockingNorFlash, ReadNorFlash as BlockingReadNorFlash};
@@ -26,10 +35,30 @@ const KEY: u8 = 0;
 /// Quiet time after the last change before it is written.
 const SETTLE: Duration = Duration::from_secs(2);
 
-/// `esp-storage`'s blocking flash behind the async traits
-/// `sequential-storage` is written against. Each call completes before it
-/// returns; nothing is awaited.
-struct AsyncFlash(FlashStorage<'static>);
+/// The one flash handle. Taken for one blocking operation at a time,
+/// never across an await, by the settings map here and by `ota`.
+static FLASH: CsMutex<RefCell<Option<FlashStorage<'static>>>> = CsMutex::new(RefCell::new(None));
+
+/// Hand the flash handle in. Call once, before `Store::open` and
+/// `ota::init`.
+pub fn init_flash(flash: FlashStorage<'static>) {
+    critical_section::with(|cs| *FLASH.borrow_ref_mut(cs) = Some(flash));
+}
+
+/// Run one blocking flash operation. The operation already runs with
+/// interrupts off inside `esp-storage`; the critical section here only
+/// serialises access to the handle.
+///
+/// # Panics
+/// Before `init_flash`.
+pub fn with_flash<R>(f: impl FnOnce(&mut FlashStorage<'static>) -> R) -> R {
+    critical_section::with(|cs| f(FLASH.borrow_ref_mut(cs).as_mut().expect("flash handle not initialised")))
+}
+
+/// The shared flash behind the async traits `sequential-storage` is
+/// written against. Each call completes before it returns; nothing is
+/// awaited.
+struct AsyncFlash;
 
 impl ErrorType for AsyncFlash {
     type Error = FlashStorageError;
@@ -39,11 +68,11 @@ impl ReadNorFlash for AsyncFlash {
     const READ_SIZE: usize = <FlashStorage<'static> as BlockingReadNorFlash>::READ_SIZE;
 
     async fn read(&mut self, offset: u32, bytes: &mut [u8]) -> Result<(), Self::Error> {
-        BlockingReadNorFlash::read(&mut self.0, offset, bytes)
+        with_flash(|f| BlockingReadNorFlash::read(f, offset, bytes))
     }
 
     fn capacity(&self) -> usize {
-        BlockingReadNorFlash::capacity(&self.0)
+        with_flash(|f| BlockingReadNorFlash::capacity(f))
     }
 }
 
@@ -52,11 +81,11 @@ impl NorFlash for AsyncFlash {
     const ERASE_SIZE: usize = <FlashStorage<'static> as BlockingNorFlash>::ERASE_SIZE;
 
     async fn erase(&mut self, from: u32, to: u32) -> Result<(), Self::Error> {
-        BlockingNorFlash::erase(&mut self.0, from, to)
+        with_flash(|f| BlockingNorFlash::erase(f, from, to))
     }
 
     async fn write(&mut self, offset: u32, bytes: &[u8]) -> Result<(), Self::Error> {
-        BlockingNorFlash::write(&mut self.0, offset, bytes)
+        with_flash(|f| BlockingNorFlash::write(f, offset, bytes))
     }
 }
 
@@ -85,27 +114,29 @@ pub struct Store {
 impl Store {
     /// Read the partition table and open the map over the `nvs` partition.
     /// `None`, with the reason logged, when there is no usable partition;
-    /// settings then live in RAM only.
-    pub fn open(mut flash: FlashStorage<'static>) -> Option<Store> {
+    /// settings then live in RAM only. Needs `init_flash` first.
+    pub fn open() -> Option<Store> {
         let mut table_buf = [0u8; partitions::PARTITION_TABLE_MAX_LEN];
-        let table = match partitions::read_partition_table(&mut flash, &mut table_buf) {
-            Ok(t) => t,
-            Err(e) => {
-                error!("settings: cannot read the partition table: {e:?}");
-                return None;
+        let entry = with_flash(|flash| {
+            let table = match partitions::read_partition_table(flash, &mut table_buf) {
+                Ok(t) => t,
+                Err(e) => {
+                    error!("settings: cannot read the partition table: {e:?}");
+                    return None;
+                }
+            };
+            match table.find_partition(PartitionType::Data(DataPartitionSubType::Nvs)) {
+                Ok(Some(e)) => Some(e),
+                Ok(None) => {
+                    error!("settings: no nvs partition, settings will not persist");
+                    None
+                }
+                Err(e) => {
+                    error!("settings: partition table: {e:?}");
+                    None
+                }
             }
-        };
-        let entry = match table.find_partition(PartitionType::Data(DataPartitionSubType::Nvs)) {
-            Ok(Some(e)) => e,
-            Ok(None) => {
-                error!("settings: no nvs partition, settings will not persist");
-                return None;
-            }
-            Err(e) => {
-                error!("settings: partition table: {e:?}");
-                return None;
-            }
-        };
+        })?;
         let range = entry.offset()..entry.offset() + entry.len();
         info!("settings: nvs partition at {:#x}, {} bytes", range.start, entry.len());
         let config = match MapConfig::<AsyncFlash>::try_new(range) {
@@ -115,7 +146,7 @@ impl Store {
                 return None;
             }
         };
-        Some(Store { map: Map::new(AsyncFlash(flash), config, NoCache::new_uncached()), scratch: Scratch([0; 128]) })
+        Some(Store { map: Map::new(AsyncFlash, config, NoCache::new_uncached()), scratch: Scratch([0; 128]) })
     }
 
     /// The stored settings, if there is a valid record. A map that cannot

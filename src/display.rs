@@ -1,6 +1,6 @@
 //! Turns the clock and the UI state into panel images, and rings the alarm.
 
-use embassy_futures::select::{Either3, select3};
+use embassy_futures::select::{Either4, select4};
 use embassy_net::Stack;
 use embassy_time::{Duration, Instant, Timer};
 use log::info;
@@ -11,7 +11,7 @@ use crate::config::MAX_CURRENT_STEP;
 use crate::panel::{Panel, Rgb, ScanImage, current_step_for};
 use crate::settings::{self, Settings};
 use crate::ui::{Field, IP_STEP, Ui, View};
-use crate::{carry, clock, scan};
+use crate::{carry, clock, ota, scan};
 
 /// Step time of the waiting animation and of the blink.
 const BLINK_STEP: Duration = Duration::from_millis(250);
@@ -71,6 +71,15 @@ fn draw_ip(panel: &mut Panel, ip: Option<[u8; 4]>, index: usize) {
     panel.set_char(3, (b'0' + v % 10) as char);
 }
 
+/// The update page's PIN: four digits, colon off.
+fn draw_pin(panel: &mut Panel, pin: u16) {
+    let mut v = pin;
+    for i in (0..4).rev() {
+        panel.set_char(i, (b'0' + (v % 10) as u8) as char);
+        v /= 10;
+    }
+}
+
 fn draw(panel: &mut Panel, view: View, settings: &Settings, ip: Option<[u8; 4]>, phase_ms: u64) {
     panel.clear();
     panel.set_color(settings.color());
@@ -101,6 +110,7 @@ fn draw(panel: &mut Panel, view: View, settings: &Settings, ip: Option<[u8; 4]>,
             }
         }
         View::Ip { index } => draw_ip(panel, ip, index),
+        View::Pin { pin } => draw_pin(panel, pin),
     }
 }
 
@@ -191,21 +201,23 @@ pub async fn display_task(stack: Stack<'static>) -> ! {
             View::Ip { .. } => IP_STEP / 4,
             _ => BLINK_STEP / 4,
         };
-        match select3(
+        match select4(
             Timer::after(wait + Duration::from_millis(2)),
             buttons::next_event(),
             changes.changed(),
+            ota::pin_to_show(),
         )
         .await
         {
-            Either3::First(()) => {}
-            Either3::Second(ev) => {
+            Either4::First(()) => {}
+            Either4::Second(ev) => {
                 let now = Instant::now();
                 settings::update(|s| ui.handle(s, ev, now));
                 // Our own change; the redraw happens on this loop anyway.
                 let _ = changes.try_changed();
             }
-            Either3::Third(_) => {}
+            Either4::Third(_) => {}
+            Either4::Fourth(pin) => ui.show_pin(pin, Instant::now()),
         }
     }
 }

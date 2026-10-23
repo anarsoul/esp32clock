@@ -1,6 +1,7 @@
 //! The settings page and API: a few TCP sockets, one request per
 //! connection, responses built whole and written once. Runs in thread
-//! mode and never touches the scan path.
+//! mode and never touches the scan path, except that a firmware upload
+//! (`POST /ota`, streamed into `ota::install`) stops it for the write.
 //!
 //! Several sockets listen at once because a browser opens more
 //! connections than it uses: a speculative one alongside the page, one
@@ -14,18 +15,20 @@ use core::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 use embassy_net::Stack;
 use embassy_net::tcp::TcpSocket;
 use embassy_time::{Duration, with_timeout};
-use embedded_io_async::Write;
+use embedded_io_async::{Read, Write};
 use log::{info, warn};
 
 use crate::buzzer;
 use crate::config::HTTP_PORT;
 use crate::form::{self, FormError, HealStamp, Status};
-use crate::{clock, heal, settings};
+use crate::{clock, heal, ota, settings};
 
 /// Connections served at once, each with its own buffers and task.
 pub const LISTENERS: usize = 3;
 
-const RX_BUF: usize = 1024;
+/// The receive buffer is the TCP window, and a firmware upload is 800 KB
+/// of body; 1 KB throttled it to one segment per round trip.
+const RX_BUF: usize = 4096;
 const TX_BUF: usize = 1024;
 const REQUEST_BUF: usize = 1536;
 const BODY_MAX: usize = 512;
@@ -37,6 +40,13 @@ const TIMEOUT: Duration = Duration::from_secs(5);
 /// A client that has connected but not sent its request within this long
 /// is dropped, so an idle speculative connection frees its socket.
 const HEAD_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// A refused upload reads and discards the rest of the body, up to this
+/// much and for this long, before answering. Answering at once and
+/// closing would reset the connection under the client's unsent body,
+/// and a browser then reports a lost connection instead of the `403`.
+const DRAIN_MAX: usize = 2 * 1024 * 1024;
+const DRAIN_TIMEOUT: Duration = Duration::from_secs(40);
 
 /// Where a listener is in its loop, for the heartbeat. Three listeners
 /// stuck in the same place is the shape of a wedged server.
@@ -146,23 +156,39 @@ enum Method {
     Post,
 }
 
-/// What was asked. The body is a slice of the request buffer; `query` is
-/// what followed `?` in the target, without the `?`.
+/// The body of a request: read whole into the request buffer for the
+/// small ones, or left on the socket for a firmware upload, with what
+/// followed the head in the buffer and the total to expect.
+enum Body<'a> {
+    Inline(&'a [u8]),
+    Stream { first: &'a [u8], total: usize },
+}
+
+/// What was asked. `query` is what followed `?` in the target, without
+/// the `?`; `authorization` is that header's value, if sent.
 struct Request<'a> {
     method: Method,
     path: &'a str,
     query: &'a str,
-    body: &'a [u8],
+    authorization: Option<&'a str>,
+    body: Body<'a>,
 }
 
-/// The request line and `Content-Length`, as positions in the buffer so
-/// that the borrow of the head ends before the body is read into it.
+/// The request line, `Content-Length` and `Authorization`, as positions
+/// in the buffer so that the borrow of the head ends before the body is
+/// read into it.
 struct Head {
     method: Method,
     target_start: usize,
     path_len: usize,
     target_len: usize,
     content_length: usize,
+    authorization: Option<(usize, usize)>,
+}
+
+/// Position and length of `s` inside `head`.
+fn span_in(head: &str, s: &str) -> (usize, usize) {
+    (s.as_ptr() as usize - head.as_ptr() as usize, s.len())
 }
 
 fn parse_head(head: &str) -> Option<Head> {
@@ -175,14 +201,24 @@ fn parse_head(head: &str) -> Option<Head> {
         _ => return None,
     };
     let target = words.next()?;
-    let target_start = target.as_ptr() as usize - head.as_ptr() as usize;
+    let (target_start, target_len) = span_in(head, target);
     let path_len = target.find('?').unwrap_or(target.len());
-    let content_length = lines
-        .filter_map(|l| l.split_once(':'))
-        .find(|(k, _)| k.eq_ignore_ascii_case("content-length"))
-        .and_then(|(_, v)| v.trim().parse().ok())
-        .unwrap_or(0);
-    Some(Head { method, target_start, path_len, target_len: target.len(), content_length })
+    let mut content_length = 0;
+    let mut authorization = None;
+    for (key, value) in lines.filter_map(|l| l.split_once(':')) {
+        if key.eq_ignore_ascii_case("content-length") {
+            content_length = value.trim().parse().ok()?;
+        } else if key.eq_ignore_ascii_case("authorization") {
+            authorization = Some(span_in(head, value.trim()));
+        }
+    }
+    Some(Head { method, target_start, path_len, target_len, content_length, authorization })
+}
+
+/// Whether the request is a firmware upload, whose body stays on the
+/// socket. Decided from the head alone, before the body is read.
+fn is_upload(buf: &[u8], head: &Head) -> bool {
+    head.method == Method::Post && &buf[head.target_start..head.target_start + head.path_len] == b"/ota"
 }
 
 /// Read the head and the body. `None` for anything that is not a request
@@ -204,22 +240,32 @@ async fn read_request<'a>(socket: &mut TcpSocket<'_>, buf: &'a mut [u8; REQUEST_
     };
 
     let head = parse_head(core::str::from_utf8(&buf[..head_end]).ok()?)?;
-    if head.content_length > BODY_MAX || head_end + head.content_length > buf.len() {
-        return None;
-    }
-    while n < head_end + head.content_length {
-        let got = socket.read(&mut buf[n..]).await.ok()?;
-        if got == 0 {
+    let upload = is_upload(buf, &head);
+    if !upload {
+        if head.content_length > BODY_MAX || head_end + head.content_length > buf.len() {
             return None;
         }
-        n += got;
+        while n < head_end + head.content_length {
+            let got = socket.read(&mut buf[n..]).await.ok()?;
+            if got == 0 {
+                return None;
+            }
+            n += got;
+        }
     }
 
     let (head_bytes, rest) = buf.split_at(head_end);
-    let target = core::str::from_utf8(&head_bytes[head.target_start..head.target_start + head.target_len]).ok()?;
+    let field = |(start, len)| core::str::from_utf8(&head_bytes[start..start + len]).ok();
+    let target = field((head.target_start, head.target_len))?;
     let (path, query) = target.split_at(head.path_len);
     let query = query.strip_prefix('?').unwrap_or(query);
-    Some(Request { method: head.method, path, query, body: &rest[..head.content_length] })
+    let authorization = head.authorization.and_then(field);
+    let body = if upload {
+        Body::Stream { first: &rest[..n - head_end], total: head.content_length }
+    } else {
+        Body::Inline(&rest[..head.content_length])
+    };
+    Some(Request { method: head.method, path, query, authorization, body })
 }
 
 fn status_line(out: &mut Response, status: &str, content_type: &str) -> core::fmt::Result {
@@ -259,11 +305,17 @@ fn status() -> Status {
             ago_secs: now.map(|n| n - t),
         }
     });
-    Status { uptime_secs: embassy_time::Instant::now().as_secs(), heals: heal::count(), last_heal }
+    Status {
+        version: ota::VERSION,
+        slot: ota::booted().name(),
+        uptime_secs: embassy_time::Instant::now().as_secs(),
+        heals: heal::count(),
+        last_heal,
+    }
 }
 
-/// Build the response for one request.
-fn respond(out: &mut Response, req: &Request<'_>) -> core::fmt::Result {
+/// Build the response for one request with its body in hand.
+fn respond(out: &mut Response, req: &Request<'_>, body: &[u8]) -> core::fmt::Result {
     match (req.method, req.path) {
         (Method::Get, "/") => {
             status_line(out, "200 OK", "text/html; charset=utf-8")?;
@@ -275,7 +327,7 @@ fn respond(out: &mut Response, req: &Request<'_>) -> core::fmt::Result {
             // browser sent empty, say) cannot leave the checkboxes, which
             // `apply` resets first, half applied.
             let mut trial = settings::get();
-            let result = form::apply(&mut trial, req.body, true);
+            let result = form::apply(&mut trial, body, true);
             match result {
                 Ok(()) => {
                     settings::update(|s| *s = trial);
@@ -288,11 +340,17 @@ fn respond(out: &mut Response, req: &Request<'_>) -> core::fmt::Result {
             // Preview the sound chosen in the form without saving anything:
             // the form is applied to a scratch copy and only its melody used.
             let mut trial = settings::get();
-            if let Err(e) = form::apply(&mut trial, req.body, true) {
+            if let Err(e) = form::apply(&mut trial, body, true) {
                 warn!("http: play form rejected: {e:?}");
             }
             buzzer::preview(trial.melody);
             redirect_home(out, None)
+        }
+        (Method::Get, "/update") => {
+            // Opening the page puts a PIN on the panel; the page asks for it.
+            let lockout_secs = ota::issue_pin().err();
+            status_line(out, "200 OK", "text/html; charset=utf-8")?;
+            form::write_update_page(out, &status(), lockout_secs)
         }
         (Method::Get, "/api") => {
             status_line(out, "200 OK", "application/json")?;
@@ -301,7 +359,7 @@ fn respond(out: &mut Response, req: &Request<'_>) -> core::fmt::Result {
         (Method::Post, "/api") => {
             // Validate on a copy first so a bad pair changes nothing.
             let mut trial = settings::get();
-            match form::apply(&mut trial, req.body, false) {
+            match form::apply(&mut trial, body, false) {
                 Ok(()) => {
                     settings::update(|s| *s = trial);
                     status_line(out, "200 OK", "application/json")?;
@@ -319,6 +377,85 @@ fn respond(out: &mut Response, req: &Request<'_>) -> core::fmt::Result {
         _ => {
             status_line(out, "404 Not Found", "text/plain")?;
             out.write_str("not found\n")
+        }
+    }
+}
+
+/// The socket as a body reader that counts what was taken from it, so a
+/// refusal knows how much is left to drain.
+struct Counting<'a, 'b> {
+    socket: &'a mut TcpSocket<'b>,
+    taken: usize,
+}
+
+impl embedded_io_async::ErrorType for Counting<'_, '_> {
+    type Error = embassy_net::tcp::Error;
+}
+
+impl Read for Counting<'_, '_> {
+    async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+        let n = self.socket.read(buf).await?;
+        self.taken += n;
+        Ok(n)
+    }
+}
+
+/// Read and discard `remaining` body bytes, within the caps, using the
+/// response buffer as scratch before it is written. Stops early on a
+/// client that goes quiet or away.
+async fn drain(socket: &mut TcpSocket<'_>, out: &mut Response, remaining: usize) {
+    if remaining == 0 || remaining > DRAIN_MAX {
+        return;
+    }
+    let mut left = remaining;
+    let drained = with_timeout(DRAIN_TIMEOUT, async {
+        while left > 0 {
+            let want = left.min(out.buf.len());
+            match socket.read(&mut out.buf[..want]).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => left -= n,
+            }
+        }
+    })
+    .await;
+    if drained.is_err() || left > 0 {
+        warn!("http: drained {} of {remaining} refused body bytes", remaining - left);
+    }
+}
+
+/// A firmware upload: the credentials first, then the body streamed from
+/// the socket into the other slot. The response says what happened; on
+/// success the caller reboots once it is sent. A refusal first takes the
+/// rest of the body off the socket, except when another upload is
+/// running and needs the air.
+async fn upload(out: &mut Response, req: &Request<'_>, socket: &mut TcpSocket<'_>) -> Result<bool, core::fmt::Error> {
+    let Body::Stream { first, total } = req.body else {
+        return Ok(false);
+    };
+    let mut body = Counting { socket, taken: 0 };
+    let result = match ota::authorize(req.authorization) {
+        Ok(()) => ota::install(first, total, &mut body).await,
+        Err(e) => {
+            warn!("http: upload refused: {}", e.text);
+            Err(e)
+        }
+    };
+    let consumed = first.len() + body.taken;
+    if let Err(e) = &result
+        && !e.status.starts_with("503")
+    {
+        drain(socket, out, total.saturating_sub(consumed)).await;
+    }
+    match result {
+        Ok(done) => {
+            status_line(out, "200 OK", "text/plain")?;
+            writeln!(out, "updated: {} written to {}, {} bytes; rebooting", done.version, done.slot.name(), done.bytes)?;
+            Ok(true)
+        }
+        Err(e) => {
+            status_line(out, e.status, "text/plain")?;
+            writeln!(out, "{}", e.text)?;
+            Ok(false)
         }
     }
 }
@@ -353,10 +490,15 @@ pub async fn http_task(stack: Stack<'static>, index: usize) -> ! {
                 None
             }
         };
+        let mut reboot = false;
         if let Some(req) = req {
             info!("http: L{index} {:?} {}", req.method, req.path);
             let mut out = Response::new();
-            if respond(&mut out, &req).is_err() {
+            let built = match req.body {
+                Body::Inline(body) => respond(&mut out, &req, body),
+                Body::Stream { .. } => upload(&mut out, &req, &mut socket).await.map(|r| reboot = r),
+            };
+            if built.is_err() {
                 warn!("http: response did not fit");
                 out = Response::new();
                 let _ = status_line(&mut out, "500 Internal Server Error", "text/plain");
@@ -366,9 +508,14 @@ pub async fn http_task(stack: Stack<'static>, index: usize) -> ! {
                 warn!("http: L{index} write: {e:?}");
             }
             bump(&me.served);
+            // Serving a request is proof enough that a new image works.
+            ota::confirm();
         }
         me.set(State::Closing);
         socket.close();
         let _ = socket.flush().await;
+        if reboot {
+            ota::reboot().await;
+        }
     }
 }

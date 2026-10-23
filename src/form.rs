@@ -11,6 +11,9 @@ use crate::settings::{
 /// a posted status key is refused as unknown like any other.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Status {
+    /// What the firmware calls itself, and the app slot it runs from.
+    pub version: &'static str,
+    pub slot: &'static str,
     pub uptime_secs: u64,
     /// Self-heal resets since power-up.
     pub heals: u32,
@@ -202,8 +205,9 @@ pub fn apply(s: &mut Settings, body: &[u8], checkboxes_absent_off: bool) -> Resu
     Ok(())
 }
 
-/// The settings as JSON, followed by the read-only status keys `uptime`
-/// (seconds), `heals` and `last_heal` (Unix seconds or null).
+/// The settings as JSON, followed by the read-only status keys `version`,
+/// `slot`, `uptime` (seconds), `heals` and `last_heal` (Unix seconds or
+/// null).
 pub fn write_json(out: &mut impl core::fmt::Write, s: &Settings, st: &Status) -> core::fmt::Result {
     write!(
         out,
@@ -217,12 +221,14 @@ pub fn write_json(out: &mut impl core::fmt::Write, s: &Settings, st: &Status) ->
     write_days(out, s.alarm_days)?;
     write!(
         out,
-        "\",\"skip\":{},\"melody\":\"{}\",\"twelve_hour\":{},\"tz\":{},\"hostname\":\"{}\",\"uptime\":{},\"heals\":{},\"last_heal\":",
+        "\",\"skip\":{},\"melody\":\"{}\",\"twelve_hour\":{},\"tz\":{},\"hostname\":\"{}\",\"version\":\"{}\",\"slot\":\"{}\",\"uptime\":{},\"heals\":{},\"last_heal\":",
         s.skip_next,
         melody::get(s.melody).name,
         s.twelve_hour,
         s.tz_offset_minutes,
         s.hostname.as_str(),
+        st.version,
+        st.slot,
         st.uptime_secs,
         st.heals,
     )?;
@@ -232,8 +238,10 @@ pub fn write_json(out: &mut impl core::fmt::Write, s: &Settings, st: &Status) ->
     }
 }
 
-/// The status line under the form.
+/// The status lines under the form: the firmware with a link to the
+/// update page, then uptime and self-heals.
 fn write_status(out: &mut impl core::fmt::Write, st: &Status) -> core::fmt::Result {
+    write_firmware_line(out, st)?;
     write!(out, "<p><small>Up {}. Self-heal resets since power-up: {}", Span(st.uptime_secs as i64), st.heals)?;
     if let Some(h) = st.last_heal {
         write!(out, ", last {} {:02}:{:02}", WEEKDAY_LABELS[h.weekday as usize % 7], h.hour, h.minute)?;
@@ -244,6 +252,58 @@ fn write_status(out: &mut impl core::fmt::Write, st: &Status) -> core::fmt::Resu
     out.write_str(".</small></p>")
 }
 
+fn write_firmware_line(out: &mut impl core::fmt::Write, st: &Status) -> core::fmt::Result {
+    write!(out, "<p><small>Firmware {} in {}. <a href=/update>Update</a>.</small></p>", st.version, st.slot)
+}
+
+/// Shared `<head>`: the viewport and the styles of both pages.
+const HEAD: &str = "<!doctype html><html><head><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\">\
+<style>body{font-family:sans-serif;max-width:22em;margin:2em auto;padding:0 1em}\
+label{display:block;margin:.8em 0}select,input{font-size:1em;width:100%;box-sizing:border-box}input[type=checkbox]{width:auto}\
+button{font-size:1em;padding:.5em 1.5em;margin-top:1em}p.err{color:#b00}progress{width:100%}</style>";
+
+/// The firmware update page: a file input and the PIN the clock is
+/// showing, posted as the raw body of `/ota` by script with the PIN in
+/// the header, which is what the curl path sends with its token, so the
+/// server needs no multipart. `XMLHttpRequest` for the progress bar;
+/// after a `200` the page polls `/api` until the clock is back.
+/// `lockout_secs` is set when no PIN was issued because of a wrong
+/// attempt just before.
+pub fn write_update_page(out: &mut impl core::fmt::Write, st: &Status, lockout_secs: Option<u64>) -> core::fmt::Result {
+    out.write_str(HEAD)?;
+    out.write_str("<title>Clock update</title></head><body><h1>Clock update</h1>")?;
+    write_firmware_line(out, st)?;
+    match lockout_secs {
+        Some(secs) => write!(
+            out,
+            "<p class=err>A wrong PIN was entered. Reload this page in {secs} s to get a new one.</p>"
+        )?,
+        None => out.write_str("<p>The clock is showing a four-digit PIN. Enter it below.</p>")?,
+    }
+    out.write_str(
+        "<label>Image file (<code>scripts/ota.sh</code> makes it)<input type=file id=f></label>\
+<label>PIN on the clock<input type=text inputmode=numeric pattern=[0-9]* maxlength=4 autocomplete=off id=t></label>\
+<button id=b>Upload</button><progress id=p value=0 max=1 hidden></progress>\
+<p id=s>The panel goes dark for about ten seconds while the image is written. Do not unplug.</p>\
+<p><a href=/>Back to the settings</a></p>\
+<script>\
+var $=function(i){return document.getElementById(i)},f=$('f'),t=$('t'),b=$('b'),p=$('p'),s=$('s');\
+function say(m,e){s.textContent=m;s.className=e?'err':''}\
+function poll(n){fetch('/api',{cache:'no-store'}).then(function(x){return x.json()})\
+.then(function(j){say('Back up: firmware '+j.version+' in '+j.slot+'.')})\
+.catch(function(){if(n>0)setTimeout(function(){poll(n-1)},2000);else say('The clock has not come back; check it.',1)})}\
+b.onclick=function(){if(!f.files[0]){say('Choose an image file.',1);return}\
+if(!/^[0-9]{4}$/.test(t.value)){say('Enter the four digits the clock is showing.',1);return}\
+var x=new XMLHttpRequest();x.open('POST','/ota');x.setRequestHeader('Authorization','PIN '+t.value);\
+x.upload.onprogress=function(e){if(e.lengthComputable)p.value=e.loaded/e.total};\
+x.onload=function(){b.disabled=false;if(x.status==200){say(x.responseText.trim()+' Waiting for the clock to come back.');setTimeout(function(){poll(20)},5000)}\
+else say(x.status+': '+x.responseText.trim(),1)};\
+x.onerror=function(){b.disabled=false;say('Upload failed: connection lost.',1)};\
+b.disabled=true;p.hidden=false;p.value=0;say('Uploading.');x.send(f.files[0])}\
+</script></body></html>",
+    )
+}
+
 /// The settings page. `error` is why the last form post was refused, if
 /// it was; the page then says so above the form.
 pub fn write_page(
@@ -252,12 +312,8 @@ pub fn write_page(
     st: &Status,
     error: Option<FormError>,
 ) -> core::fmt::Result {
-    out.write_str(
-        "<!doctype html><html><head><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\">\
-<title>Clock</title><style>body{font-family:sans-serif;max-width:22em;margin:2em auto;padding:0 1em}\
-label{display:block;margin:.8em 0}select,input[type=time],input[type=number],input[type=text]{font-size:1em;width:100%;box-sizing:border-box}\
-button{font-size:1em;padding:.5em 1.5em;margin-top:1em}p.err{color:#b00}</style></head><body><h1>Clock</h1>",
-    )?;
+    out.write_str(HEAD)?;
+    out.write_str("<title>Clock</title></head><body><h1>Clock</h1>")?;
     match error {
         None => {}
         Some(FormError::BadValue) => out.write_str("<p class=err>Nothing was saved: a field had a bad value.</p>")?,

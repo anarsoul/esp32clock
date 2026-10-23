@@ -1,10 +1,34 @@
 fn main() {
-    for var in ["WIFI_SSID", "WIFI_PASSWORD", "TZ_OFFSET_MINUTES"] {
+    for var in ["WIFI_SSID", "WIFI_PASSWORD", "TZ_OFFSET_MINUTES", "OTA_TOKEN"] {
         println!("cargo:rerun-if-env-changed={var}");
     }
+    firmware_version();
     linker_be_nice();
     // make sure linkall.x is the last linker script (otherwise might cause problems with flip-link)
     println!("cargo:rustc-link-arg=-Tlinkall.x");
+}
+
+/// `git describe --always --dirty`, as `FIRMWARE_VERSION`, for the app
+/// descriptor, the boot line and the page. "unknown" outside a checkout.
+/// Cut to 31 bytes, the descriptor's field less its terminator. The
+/// build reruns when HEAD or the index moves, so a commit changes it;
+/// a dirty tree is only noticed at the next rebuild.
+fn firmware_version() {
+    let out = std::process::Command::new("git").args(["describe", "--always", "--dirty"]).output();
+    let mut version = match out {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
+        _ => String::from("unknown"),
+    };
+    if version.is_empty() {
+        version = String::from("unknown");
+    }
+    version.truncate(31);
+    println!("cargo:rustc-env=FIRMWARE_VERSION={version}");
+    for path in [".git/HEAD", ".git/index"] {
+        if std::path::Path::new(path).exists() {
+            println!("cargo:rerun-if-changed={path}");
+        }
+    }
 }
 
 fn linker_be_nice() {

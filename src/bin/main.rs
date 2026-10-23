@@ -32,10 +32,21 @@ use static_cell::StaticCell;
 
 use esp32clock::buzzer;
 use esp32clock::settings::Settings;
-use esp32clock::{buttons, carry, clock, display, heal, http, net, scan, settings, storage};
+use esp32clock::{buttons, carry, clock, display, heal, http, net, ota, scan, settings, storage};
 
-// This creates a default app-descriptor required by the esp-idf bootloader.
-esp_bootloader_esp_idf::esp_app_desc!();
+// The app descriptor the esp-idf bootloader requires, with the git
+// version in it so an image file says what it is before it is flashed.
+esp_bootloader_esp_idf::esp_app_desc!(
+    ota::VERSION,
+    env!("CARGO_PKG_NAME"),
+    esp_bootloader_esp_idf::BUILD_TIME,
+    esp_bootloader_esp_idf::BUILD_DATE,
+    esp_bootloader_esp_idf::ESP_IDF_COMPATIBLE_VERSION,
+    esp_bootloader_esp_idf::MMU_PAGE_SIZE,
+    0,
+    u16::MAX,
+    esp_bootloader_esp_idf::SECURE_VERSION
+);
 
 /// Called by esp-backtrace after it has printed the panic message and the
 /// backtrace. A clock should not sit dark waiting for a power cycle, so
@@ -133,7 +144,8 @@ async fn main(spawner: Spawner) -> ! {
 
     // Saved settings, so the first frame already has the user's colour.
     // Without a usable nvs partition they live in RAM for this boot.
-    let mut store = storage::Store::open(FlashStorage::new(peripherals.FLASH));
+    storage::init_flash(FlashStorage::new(peripherals.FLASH));
+    let mut store = storage::Store::open();
     let mut stored = None;
     if let Some(store) = store.as_mut() {
         stored = store.load().await;
@@ -145,6 +157,9 @@ async fn main(spawner: Spawner) -> ! {
     } else {
         info!("boot: reset reason {reason:?}, RTC carry-over discarded");
     }
+    // Slot bookkeeping over the same flash handle. This may reset the chip
+    // to roll back an unconfirmed image; nothing is running yet.
+    ota::init();
     // The RTC timer ran through the reset; with a carried offset the
     // clock is known before Wi-Fi is even started.
     clock::init(Rtc::new(peripherals.RTC_TIMER));

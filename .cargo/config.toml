@@ -1,5 +1,8 @@
 [target.riscv32imc-unknown-none-elf]
-runner = "espflash flash --monitor --chip esp32c3"
+# The partition table carries two OTA slots; otadata is erased on every
+# USB flash so the chip boots ota_0, where espflash put the image, even
+# after an OTA had switched it to ota_1.
+runner = "espflash flash --monitor --chip esp32c3 --partition-table partitions.csv --erase-parts otadata"
 
 [env]
 ESP_LOG="info"

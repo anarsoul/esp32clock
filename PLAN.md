@@ -1298,7 +1298,7 @@ adapter board's schematic in `adapter/adapter/adapter.kicad_sch` (an
 ESP32-C3-Zero on a 2×8 header into the 8051 socket) and the esp-hal,
 esp-radio and esp-bootloader-esp-idf sources in the registry.
 
-### M9 — OTA updates — planned
+### M9 — OTA updates — DONE, verified on the panel 2026-10-22
 
 **Why first.** The clock lives in its case with no USB reachable, and
 every fix since M8 has meant opening it. An update over the LAN turns
@@ -1306,8 +1306,9 @@ that into a `curl`.
 
 **Flash layout.** The 4 MB flash today carries espflash's default
 table: `nvs` at 0x9000 (24 KB), `phy_init` at 0xF000, one `factory`
-app at 0x10000 of 4032 KB. The release image is about 830 KB (text
-820 KB, data 10 KB), so two slots fit with room to double. New
+app at 0x10000 of 4032 KB. The release application image is 652 KB
+(`espflash save-image`; the ELF's text is 816 KB before the flash
+segments are packed), so two slots fit with room to double. New
 `partitions.csv`, checked in and passed to espflash from the runner
 line in `.cargo/config.toml` (`--partition-table partitions.csv`):
 
@@ -1320,90 +1321,327 @@ line in `.cargo/config.toml` (`--partition-table partitions.csv`):
 | ota_1 | app/ota_1 | 0x200000 | 0x1E0000 |
 
 `nvs` keeps its offset so saved settings survive the repartition. The
-one-time USB flash with the new table erases `otadata`
-(`--erase-parts otadata`); all-ones `otadata` with no `factory` boots
-`ota_0`, which is where espflash puts the image. The bootloader is
-espflash's prebuilt one, and the crate docs warn it "might not"
-support OTA. ESP-IDF bootloaders have always booted from `otadata`,
-so the expectation is that it works; it is the first thing to verify,
-and if the boot log keeps loading from 0x20000 after a slot switch,
-the fallback is building the bootloader from ESP-IDF with
-`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` and pointing espflash at it
-with `--bootloader`.
+runner line also carries `--erase-parts otadata` on every USB flash:
+all-ones `otadata` with no `factory` boots `ota_0`, which is where
+espflash puts the image, so a USB flash always boots what was just
+flashed even when the last OTA had switched the clock to `ota_1`.
+The bootloader is espflash's prebuilt one, and the crate docs warn it
+"might not" support OTA. Its binary (the first 32 KB of a
+`save-image --merge`) carries the strings of ESP-IDF's `otadata`
+selection: "No factory image, trying OTA 0", "Set actual ota_seq=%lu
+in otadata[0]", "Loaded app from partition at offset 0x%lx", so the
+slot switch should work. It is still the first thing to verify on the
+panel; if the boot log keeps loading from 0x20000 after a switch, the
+fallback is building the bootloader from ESP-IDF and pointing espflash
+at it with `--bootloader`.
+
+**Token.** The upload is the one request that can brick the clock or
+replace its firmware with someone else's, so it is not as open as the
+settings form. A token comes in at build time, `OTA_TOKEN`, like the
+Wi-Fi credentials, and `POST /ota` must carry it as
+`Authorization: Bearer <token>`; anything else is `403` before a byte
+of the body is read or the flash touched. The comparison is constant
+time (a fold over the XOR of both strings, lengths included) so a
+timing side channel cannot leak it. A firmware built without
+`OTA_TOKEN`, or with one shorter than `config::OTA_TOKEN_MIN` (8)
+characters, has no OTA at all: every `/ota` is `403 ota disabled`, and
+the boot line says so, so a forgotten variable is noticed at the first
+flash and not at the first update. The token is compiled in as a
+string; anyone with the image file can read it out, which is the same
+standing as the Wi-Fi password.
 
 **Upload.** `POST /ota` with the raw application binary as the body
-(`espflash save-image --chip esp32c3 … app.bin`, then
-`curl --data-binary @app.bin http://<ip>/ota`). The request head is
-parsed as today; the body is streamed, not buffered: the handler
-reads the socket into a 4 KB sector buffer and, per full sector,
-erases and writes it into the slot that `OtaUpdater::next_partition`
-hands back (`esp_bootloader_esp_idf::ota_updater`, over the same
-`esp-storage` flash the settings use). `Content-Length` is required
-and must be at most the slot size; the first sector is checked for
-the image magic (0xE9) and the app descriptor magic before anything
-is erased, and a body that ends short leaves the slot half written
-and `otadata` untouched, so the running image stays the boot image.
-On the last sector the handler calls `activate_next_partition`,
-answers `200` with the slot name and byte count, and resets through
-`heal::reset` after the response is flushed. One upload at a time: a
-static busy flag makes a second listener answer `503`.
+(`espflash save-image --chip esp32c3 --partition-table partitions.csv
+<elf> app.bin`, then `curl -H 'Authorization: Bearer …'
+--data-binary @app.bin http://<ip>/ota`). The head is parsed as today
+plus the `Authorization` header; the body is streamed, not buffered.
+`read_request` returns the body as `Body::Inline` for the small
+requests and as `Body::Stream` (whatever followed the head in the
+request buffer, plus the total) for `/ota`, and the listener reads the
+rest of the socket in chunks into `ota::Update`, which fills a 4 KB
+sector buffer and, per full sector, erases, writes and reads back the
+sector in the slot that `OtaUpdater::next_partition` hands back
+(`esp_bootloader_esp_idf::ota_updater` chooses the slot and switches
+`otadata`; the sectors are written with `esp-storage` directly at the
+slot's absolute offset). The flash is the one handle in the firmware,
+`storage::with_flash`, taken for one blocking operation at a time and
+never across an await, so the settings map and the updater cannot
+interleave inside an operation. The first attempt gave the updater a
+second `FlashStorage` on a stolen `FLASH` peripheral, and on the panel
+it could not read the partition table: `FlashStorage::new` sizes the
+flash with a chip-ID command over SPI1, and once the first handle has
+used the flash that read returns 0 (logged `capacity 0 bytes`), so
+every bounds check on the second handle fails.
+`Content-Length` is required, at least a sector and at most the slot
+size; the first sector is checked for the image magic (0xE9), the
+app descriptor magic (0xABCD5432 at offset 0x20) and the
+hash-appended flag (byte 23) before anything is erased, and the
+descriptor's version string is logged and returned. The body is
+hashed as it streams (`sha2`, software) and the last 32 bytes, which
+espflash makes the SHA-256 of the rest, must match: that is the only
+thing that tells a truncated file sent with its own honest length
+from a whole one, and it catches a corrupt byte too. A body that ends
+short, a hash mismatch, a read-back mismatch or a flash error leaves
+the slot half written and `otadata` untouched, so the running image
+stays the boot image, and the answer is `4xx`/`5xx`. On the last
+sector the handler calls `activate_next_partition`, answers `200`
+with the slot name, byte count and version, closes the socket, and
+reboots through `ota::reboot`: the time is carried as for a heal, the
+carry record's `ota_boots` is set to 1 and the chip resets. One
+upload at a time: the updater sits in an `embassy_sync` mutex and a
+second listener that cannot `try_lock` it answers `503`.
 
 **The scan during the write.** Flash writes run with interrupts off,
-and 830 KB is about 200 sector erases of tens of ms each: the panel
-would blink dark for the whole upload and the last latched row could
-sit lit at full current between sectors. The upload therefore starts
-by stopping the scan through `scan::stop` (the transfer ends on its
-blanking frame, same as the heal path), so the panel is dark from
-the first byte to the reboot. That is the honest display for "do not
-unplug". Expected wall time: the TCP side with 1 KB socket buffers
-over Wi-Fi is the limit, somewhere between ten and forty seconds;
-measure it. Wi-Fi frames dropped while interrupts are off are
-covered by TCP retransmission.
+and 830 KB is about 200 sector erases of tens of ms each: with the
+scan running the panel would flicker dark at a few hertz for the
+whole upload. The upload therefore starts, once the head and the
+first sector have passed every check, by stopping the scan through
+`scan::stop` (the transfer ends on its blanking frame, same as the
+heal path), so the panel is dark from the first erase to the reboot.
+That is the honest display for "do not unplug". A failed upload
+calls `scan::resume`, new in this milestone: the scan task no longer
+pends forever after stopping but waits for the resume signal, and
+`stop` is idempotent (it polls a halted flag rather than a one-shot
+signal), so a self-heal firing during an upload cannot hang on the
+second stop. Expected wall time: the TCP side over Wi-Fi is the
+limit; `http::RX_BUF` goes from 1 KB to 4 KB on all listeners (9 KB
+of static RAM, taken from the 120 KB main stack) because it is the
+receive window. Measure it. Wi-Fi frames arriving while interrupts
+are off wait in the radio's receive ring; TCP covers any that spill.
 
 **Rollback without bootloader support.** The bootloader falls back
 to the other slot on its own only if the selected image fails its
 checksum. A new image that boots and then panics or loses the network
-is on the firmware. The `carry` record gains an `ota_pending`
-counter: set to 1 by the upload, bumped on every software reset while
-non-zero, cleared when the new image reaches "good" (defined as the
-first gateway probe answered, or the first HTTP request served, so a
-board with a dead router can still be updated). If it reaches 3 the
-boot path switches `otadata` back to the previous slot and resets.
-A power cut zeroes the carry record, which is the right default: the
-user pulled the plug, the user decides.
+is on the firmware. The `carry` record gains an `ota_boots` word:
+set to 1 by the upload, read at boot by `ota::check_rollback` before
+anything else is spawned: zero means nothing pending; at or above
+`config::OTA_BOOT_LIMIT` (3) the previous slot is activated again
+with `activate_next_partition` (two slots, so "next" is "previous"),
+the word is cleared and the chip resets, with the scan not yet
+started so no transfer is in flight; otherwise the word is bumped.
+`ota::confirm` clears it when the new image reaches "good": the first
+gateway probe answered, or the first HTTP request served, so a board
+with a dead router can still be updated. A power cut zeroes the carry
+record, which is the right default: the user pulled the plug, the
+user decides. So: two software resets of an unconfirmed image and the
+third boot runs the old one.
 
 **Visible state.** `build.rs` exports `git describe --always --dirty`
-as `FIRMWARE_VERSION`; `/api` gains the read-only keys `version` and
-`slot` (`ota_0`/`ota_1`), the page status line shows both, and the
-boot line logs them. The page-size check on the host runs again
-(worst case was 2529 bytes with headers against the 4096 buffer).
-`scripts/ota.sh <ip> [app.bin]` builds the image and posts it.
-
-**Security.** The upload is as open as the settings form: anyone on
-the LAN can post. That is the existing trust boundary and stays so;
-a build-time `OTA_TOKEN` checked as a query string is a one-line
-addition if the LAN ever becomes shared.
+as `FIRMWARE_VERSION` (truncated to the descriptor's 31 characters)
+and `main.rs` feeds it to `esp_app_desc!`, so the image file carries
+it too. `/api` gains the read-only keys `version` and `slot`
+(`ota_0`/`ota_1`, or `factory`/`?` on an old table), the page status
+line shows both, and the boot line logs them with the selected slot,
+which differs from the booted one only after a bootloader fallback.
+`ota::init` reads the partition table once at boot for the slot name
+and whether OTA is possible. The page-size check on the host runs
+again. `scripts/ota.sh <ip> [app.bin]` builds the image and posts it
+with `OTA_TOKEN` from the environment.
 
 **Touches.** `partitions.csv`, `.cargo/config.toml`, `build.rs`,
-`src/ota.rs` (slot lookup, sector writer, activate, the pending
-counter), `src/http.rs` (`POST /ota`, streaming body, busy flag),
-`src/carry.rs`, `src/form.rs` (`Status` version and slot),
-`src/bin/main.rs` (boot-time rollback check, log line), `scripts/`.
+`src/config.rs` (`OTA_TOKEN`, `OTA_TOKEN_MIN`, `OTA_BOOT_LIMIT`),
+`src/ota.rs` (boot-time slot lookup and rollback, token check, the
+sector writer, activate, reboot, confirm), `src/http.rs` (the
+`Authorization` header, `Body::Stream`, the `/ota` handler, `RX_BUF`),
+`src/scan.rs` (`resume`, idempotent `stop`), `src/carry.rs`
+(`ota_boots`), `src/net.rs` (confirm on the first probe answer),
+`src/form.rs` (`Status` version and slot), `src/bin/main.rs`
+(rollback check, descriptor version, boot line, the second flash
+handle), `scripts/ota.sh`, this file and `AGENTS.md`.
 
-**Host checks.** The head parser with a `Content-Length` of a few
-hundred KB; the sector writer over `sequential-storage`'s mock flash
-with a body that ends short, one that is exactly a sector multiple
-and one that is not; the carry record round trip with the counter.
+**Host checks** (scratch crate, 2026-10-22; `form.rs`, `settings.rs`,
+`melody.rs`, `panel.rs`, `aip33628.rs` and `config.rs` included by
+path, the head parser, the token and sector functions and the carry
+codec copied in): the head parser takes a `Content-Length` of 831488
+and the `Authorization` header in either case, strips the query,
+refuses a non-numeric length and does not treat `GET /ota` or
+`POST /otax` as uploads; the token matches only itself (not empty, a
+prefix, one byte longer, first or last byte off, `Basic`, or bare);
+the sector loop reproduces an image that is a sector multiple, one
+with 1001 bytes over, one three bytes over (padded to a word with
+0xFF), a single sector, and one where the request buffer already held
+more than a sector, which caught a bug: `fill` dropped what was left
+of the prefix past the first sector; a body that ends short or is
+empty is refused. The carry record round-trips with `ota_boots`, and a
+zero word means nothing pending. The worst-case page (31-character
+version, `factory`, 24-character hostname, every notice) is 2487
+bytes, 2590 with headers, of 4096. Sizes: the application image is
+652 KB, 33 % of a slot, with the version in its descriptor at 0x30
+and the hash-appended flag set; static RAM grew by 11 KB for the upload buffers and 9 KB for
+the receive windows, leaving a 98 KB main stack; the buffers sit in
+a `StaticCell` so they are zeroed RAM, not image.
 
-**Verify on the panel.** Flash once over USB with the new table and
-read the boot log: `otadata` listed, app loaded from 0x20000. Post an
-image with a changed version string: the panel goes dark, the curl
-returns the slot and size, the clock reboots within a minute and
-`/api` shows the new version and `ota_1`. Post again: back to
-`ota_0`. Post a truncated file: `4xx`, the clock keeps running the
-old image after the dark period, and `/api` still shows it. Flash an
-image that panics after boot: three resets later the boot log shows
-the previous slot and the version in `/api` is the old one.
+**Seen on the bench** (board on `/dev/ttyACM0`, 10.1.1.31, AP
+`esptest`, 2026-10-22). The USB flash with the new table: the
+bootloader lists `otadata`, `ota_0`, `ota_1` and loads from 0x20000;
+the boot line says `booted from ota_0, otadata selects ota_0, updates
+enabled`; saved settings survived the repartition. The first attempt
+with a second flash handle failed as described above and was
+replaced by the shared one. Then, in order:
+
+| post | answer | time | after |
+| --- | --- | --- | --- |
+| no header, wrong token | `403 bad token` | 25 ms | nothing in the log but the refusal |
+| `GET /ota` | `404` | | |
+| whole image, 672544 bytes | `200 … written to ota_1` | 10.4 s | reboot, `Loaded app from partition at offset 0x200000`, time carried, `confirmed good` at the first probe 5.6 s up, `/api` says `ota_1` |
+| whole image again | `200 … written to ota_0` | 10.8 s | back on `ota_0` |
+| 300 KB of the file with the full length claimed | reset by peer | 9.7 s | `body read failed` after the 5 s socket timeout; the timed-out socket cannot carry the `400`; running image stays, scan resumed (the heartbeat's transfer count dipped for that minute and recovered) |
+| 8 KB of `/dev/urandom` | `400 not an application image` | 35 ms | |
+| two uploads at once | second gets `503 an upload is in progress` | 0.1 s | |
+| 300 KB of the file with its own length | `400 image hash mismatch` | 5.1 s | written to the other slot, not selected |
+| the file with one byte flipped | `400 image hash mismatch` | 10.8 s | same |
+| an image that panics 1 s after start | `200`, reboot | | `boot 1 of 2`, panic, `boot 2 of 2`, panic, `not confirmed after 3 boots, switching back`, `Loaded app from partition at offset 0x200000`, old image `confirmed good` |
+
+So an upload runs at about 65 KB/s with the 4 KB window, flash
+writes included; the hash costs nothing visible. The user confirmed
+both paths on the panel, from the browser and from the script. One gateway probe
+timed out during an upload (interrupts are off for each erase) and
+was answered next time; at ten failures in a row for a heal, an
+upload cannot come close. A reset reason of `CoreSw` carries the
+record through the panic and the rollback alike.
+
+### M9b — upload from the page — DONE, verified on the panel 2026-10-22
+
+**Scope.** `GET /update` serves a page with a file input, a token
+field, a "remember the token in this browser" checkbox, an Upload
+button, a progress bar and a status line. Its script posts the file
+itself as the body of `POST /ota` with the `Authorization: Bearer`
+header through `XMLHttpRequest`, so the server side is the one the
+curl path already uses: no multipart, no new parser. A plain HTML form
+would wrap the file in multipart boundaries and need the image length
+dug out of the wrapper on the device; the script avoids all of that.
+`XMLHttpRequest` rather than `fetch` because it reports upload
+progress. Same origin, so no CORS preflight; the browser's request
+head fits `REQUEST_BUF`. On `200` the page waits 5 s and polls `/api`
+every 2 s, up to 20 times, until the clock answers again, then shows
+the version and slot it came back with; a refusal shows the status
+and text. The token is kept in `localStorage` only when the box is
+ticked, in clear, same standing as the shell history of a curl.
+
+**Status line.** The firmware line moves out of the uptime line onto
+its own: `Firmware <version> in <slot>. Update.` with the link, then
+`Up …. Self-heal resets …` as before. `/api` is unchanged.
+
+**Script.** `scripts/ota.sh` with no argument builds the image file
+and stops, printing its path, for the browser path (`-` as the host
+does the same).
+
+**Touches.** `src/form.rs` (`write_update_page`, the split status),
+`src/http.rs` (`GET /update`), `scripts/ota.sh`, `AGENTS.md`.
+
+**Host checks.** Both pages' sizes against `RESPONSE_BUF`; the page's
+script syntax-checked with `node`.
+
+**Host checks** (2026-10-22). Pages with the longest version, slot and
+hostname and every notice: settings page 2541 bytes, 2644 with
+headers; update page 2277 bytes, 2380 with headers; both against the
+4096-byte buffer. The page's script passed `node --check` and a run
+under node with a mocked DOM, `XMLHttpRequest`, `fetch` and
+`localStorage`: the request is `POST /ota` with the bearer header and
+the file as the body, the button locks and the bar shows, progress
+updates, a `200` leads to the polling and "Back up: firmware v2 in
+ota_1", a `403` shows `403: bad token` in red, no file is refused
+before any request, and the token is stored only with the box ticked.
+
+**Seen from a browser** (headless Chromium driven over the DevTools
+protocol against the clock, file set through `DOM.setFileInputFiles`):
+the bar went from 0.19 at 1 s to 1.0 at 10 s, the line read
+`updated: … written to ota_0, 680704 bytes; rebooting Waiting for the
+clock to come back.` at 11 s and `Back up: firmware … in ota_0.` at
+18 s, with `/api` agreeing and the token in `localStorage`. With a
+wrong token the browser got the `403` and the page said
+`403: bad token` within a second, even though the server closes
+without reading the body. The trailing newline of the server's text
+showed before "Waiting" and is trimmed now.
+
+### M9c — a PIN on the panel for the update page — DONE, verified on the bench 2026-10-22 (serial log, curl and a browser; the panel itself not watched)
+
+**Why.** The owner of a clock does not build firmware: they get an
+image file and have a browser, on Windows or a phone. A token baked
+into the image is public once the image is, and one they must be told
+and type is a nuisance. What every owner has is the panel. So the
+page proves possession of the clock: opening `/update` makes the
+clock draw four random digits, show them on the panel and log them,
+and the page asks for them. The script keeps the build-time token,
+for the bench and for updates out of sight of the panel; a build
+without `OTA_TOKEN` refuses the script and still serves the page.
+
+**The PIN.** `GET /update` calls `ota::issue_pin`: four digits from
+the hardware RNG (`Rng::new().random() % 10000`), remembered with the
+time of issue, sent to the display task over a signal and logged
+(`ota: PIN 1234 shown on the panel`; the serial port is physical
+access, and a headless board has no panel to read). The panel shows
+the digits in one frame, colon off, for `ui::PIN_SHOW` (60 s) or
+until any press; ringing and alarm-set take precedence, the PIN
+display replaces the clock and the IP display. The upload sends
+`Authorization: PIN 1234`. One attempt consumes the PIN, right or
+wrong: a wrong one also starts `PIN_LOCKOUT` (10 s) during which the
+page is served with a notice and no PIN; a PIN older than `PIN_TTL`
+(5 min) is refused as expired. That caps guessing at one try per ten
+seconds against 10,000 values, with the panel flashing a fresh PIN
+every time, which is plenty for a LAN. The PIN is never in the page,
+so a cross-site page learns nothing and still cannot send the header
+without a preflight the clock does not answer. The PIN logic is a
+pure `PinState` with a millisecond clock passed in, for the host
+check; `ota.rs` wraps it with `Instant` and the RNG.
+
+**The two schemes.** `authorize` accepts `Bearer <token>` only when
+`OTA_TOKEN` was built in, and `PIN <digits>` whenever one is pending.
+The boot line says which paths are open: "page with a PIN and the
+script with the token" or "page with a PIN only (no OTA_TOKEN)".
+
+**The page** loses the token field and the remember box and gains a
+numeric PIN field; the text says to read the digits off the clock. A
+page served during the lockout says so and that reloading gets a new
+PIN after it.
+
+**Touches.** `src/ota.rs` (`PinState`, `issue_pin`, `pin_to_show`,
+the two-scheme `authorize`), `src/http.rs` (`GET /update` issues),
+`src/ui.rs` (`Mode::ShowPin`, `View::Pin`, `show_pin`, timeout),
+`src/display.rs` (draw, the signal in the select), `src/form.rs`
+(the page), `AGENTS.md`.
+
+**Host checks.** `PinState`: issue, match, consume, wrong attempt
+and lockout, expiry, reload during the lockout; `authorize` with each
+scheme; the page sizes.
+
+**Host checks** (2026-10-22). `PinState` copied verbatim: nothing
+pending, four digits from the random (leading zeros kept), a wrong
+or short attempt uses the PIN up and locks, the lockout is reported
+and ends, success uses it up, an old PIN is expired without locking,
+a reissue replaces. `authorize_with` with each scheme and each PIN
+error. The update page is 2252 bytes (2355 with headers) in both its
+normal and lockout forms; the page script passed the node mock with
+the PIN header and the four-digit check.
+
+**Seen on the bench.** Boot line: `updates from the page with a PIN
+and from the script with the token`. No header: `403 no
+credentials`. `PIN 1234` before any page: `403 no PIN issued`. After
+`GET /update` the log read `ota: PIN 3838 shown on the panel`; the
+wrong PIN got `403 wrong PIN`, the page then said "Reload this page
+in 10 s", the right PIN after that got `no PIN issued` (used up),
+and a fresh PIN after the lockout uploaded 683 KB in 11.6 s with the
+reboot and confirmation as before. From headless Chromium: the page
+opened with the notice, the PIN read from the serial log went in,
+the bar filled in 11 s, "Back up: firmware c5f7e81-dirty in ota_1"
+at 20 s; a wrong PIN showed `403: wrong PIN` within a second and the
+reloaded page carried the lockout notice with the seconds left. The
+script's token path is unchanged.
+
+**A refusal drains the body first** (found by the user in a real
+browser, 2026-10-22). The clock used to answer `403` and close while
+the browser was still sending the 680 KB body; the reset on the
+leftover data reached the browser before the response, and the page
+said "connection lost" where headless Chromium, on a faster path, had
+seen the `403`. Now `http::upload` counts what `ota::install` took
+from the socket and, on any refusal but `503` (another upload is
+running and needs the air), reads and discards the rest, capped at
+2 MB and 40 s, using the response buffer as scratch, before answering.
+Without flash writes the body streams at about 200 KB/s, so a wrong
+PIN costs 2 to 4 s and then shows as `403: wrong PIN` in the browser
+and in curl alike; the right PIN went through as before. A client
+that claims more length than it sends still ends in the socket
+timeout and a reset, as recorded under M9.
 
 ### M10 — Wi-Fi provisioning from an access point — planned
 

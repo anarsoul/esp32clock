@@ -1,0 +1,9 @@
+# ESP-IDF partition table for the clock: two OTA app slots and the
+# otadata that selects between them. nvs keeps espflash's default
+# offset so saved settings survive the repartition. See PLAN.md, M9.
+# Name,     Type, SubType, Offset,   Size,     Flags
+nvs,        data, nvs,     0x9000,   0x6000,
+phy_init,   data, phy,     0xF000,   0x1000,
+otadata,    data, ota,     0x10000,  0x2000,
+ota_0,      app,  ota_0,   0x20000,  0x1E0000,
+ota_1,      app,  ota_1,   0x200000, 0x1E0000,

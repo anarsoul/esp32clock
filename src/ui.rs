@@ -22,6 +22,10 @@ pub const IP_STEP: Duration = Duration::from_millis(2000);
 /// Show the four octets this many times.
 const IP_ROUNDS: u64 = 2;
 
+/// The update page's PIN stays on the panel this long, unless a press
+/// ends it. The PIN itself is good for longer; see `ota::PIN_TTL_MS`.
+pub const PIN_SHOW: Duration = Duration::from_secs(60);
+
 /// After a power cut the clock comes back and gets a valid time some
 /// minutes late. On the first tick with a time, an alarm that came round
 /// within this many minutes before is rung anyway, so an outage across
@@ -52,6 +56,8 @@ pub enum Mode {
     Ringing,
     /// Showing the IP address, octet by octet.
     ShowIp,
+    /// Showing the update page's PIN.
+    ShowPin,
 }
 
 /// Which part of an alarm-set view is being edited.
@@ -74,6 +80,8 @@ pub enum View {
     Ringing { time: LocalTime, flash: bool },
     /// Octet `index` (0 to 3) of the IP address.
     Ip { index: usize },
+    /// Four digits for the update page.
+    Pin { pin: u16 },
 }
 
 pub struct Ui {
@@ -84,6 +92,9 @@ pub struct Ui {
     ring_started: Instant,
     /// When the IP display started.
     ip_started: Instant,
+    /// The PIN being shown and when it started.
+    pin: u16,
+    pin_started: Instant,
     /// Minute of day the alarm last fired on, so it fires once.
     fired_minute: Option<u16>,
     /// A valid time has been seen since boot; the missed-alarm check is
@@ -105,6 +116,8 @@ impl Ui {
             last_press: now,
             ring_started: now,
             ip_started: now,
+            pin: 0,
+            pin_started: now,
             fired_minute: None,
             had_time: false,
         }
@@ -114,7 +127,7 @@ impl Ui {
     pub fn handle(&mut self, settings: &mut Settings, ev: Event, now: Instant) {
         self.last_press = now;
         match self.mode {
-            Mode::Ringing | Mode::ShowIp => self.mode = Mode::Clock,
+            Mode::Ringing | Mode::ShowIp | Mode::ShowPin => self.mode = Mode::Clock,
             Mode::Clock => match (ev.button, ev.kind) {
                 (Button::Top, Kind::Short) => {
                     settings.color = (settings.color + 1) % PALETTE.len();
@@ -149,6 +162,16 @@ impl Ui {
         }
     }
 
+    /// Show a PIN from the update page. Ringing and alarm-set keep the
+    /// panel; the PIN replaces the clock, the IP or an earlier PIN.
+    pub fn show_pin(&mut self, pin: u16, now: Instant) {
+        if matches!(self.mode, Mode::Clock | Mode::ShowIp | Mode::ShowPin) {
+            self.pin = pin;
+            self.pin_started = now;
+            self.mode = Mode::ShowPin;
+        }
+    }
+
     /// Treat the alarm at this minute of the day as already handled: it
     /// neither rings on that minute nor through the boot-time grace. Seeded
     /// from the state carried across a software reset, so an alarm that
@@ -174,6 +197,11 @@ impl Ui {
             }
             Mode::ShowIp => {
                 if now - self.ip_started >= IP_STEP * (4 * IP_ROUNDS as u32) {
+                    self.mode = Mode::Clock;
+                }
+            }
+            Mode::ShowPin => {
+                if now - self.pin_started >= PIN_SHOW {
                     self.mode = Mode::Clock;
                 }
             }
@@ -221,6 +249,7 @@ impl Ui {
                 let elapsed = phase_ms.saturating_sub(self.ip_started.as_millis());
                 View::Ip { index: (elapsed / IP_STEP.as_millis()) as usize % 4 }
             }
+            Mode::ShowPin => View::Pin { pin: self.pin },
             Mode::SetHour | Mode::SetMinute => View::AlarmSet {
                 hour: settings.alarm_hour,
                 minute: settings.alarm_minute,

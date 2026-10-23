@@ -7,6 +7,9 @@
 //! WIFI_SSID=home WIFI_PASSWORD=secret TZ_OFFSET_MINUTES=-420 cargo run --release
 //! ```
 //!
+//! `OTA_TOKEN` is the fourth: a firmware update over the LAN must carry
+//! it, and a build without one has no update path at all.
+//!
 //! `build.rs` re-runs the build when any of them changes.
 
 /// Wi-Fi network name. Empty when the variable was not set at build time.
@@ -20,6 +23,26 @@ pub const WIFI_PASSWORD: &str = match option_env!("WIFI_PASSWORD") {
     Some(s) => s,
     None => "",
 };
+
+/// Token a firmware upload must carry, as `Authorization: Bearer <token>`
+/// on `POST /ota`. Empty when the variable was not set at build time,
+/// which disables updates over the air: every upload is refused and the
+/// boot line says so. Compiled in as a string, so anyone with the image
+/// file can read it out, the same standing as the Wi-Fi password.
+pub const OTA_TOKEN: &str = match option_env!("OTA_TOKEN") {
+    Some(s) => s,
+    None => "",
+};
+
+/// Shortest token that enables updates. A shorter one counts as none.
+pub const OTA_TOKEN_MIN: usize = 8;
+
+/// Boots an updated image gets before the previous slot is booted again.
+/// The upload sets the carried boot count to 1; each software reset
+/// before the image has been confirmed good (a gateway probe answered or
+/// an HTTP request served) bumps it, and this value rolls back. A power
+/// cut clears the count and keeps the new image.
+pub const OTA_BOOT_LIMIT: u32 = 3;
 
 /// Minutes east of UTC at boot until the user sets it. No daylight saving
 /// handling.

@@ -164,18 +164,34 @@ static READY: Channel<CriticalSectionRawMutex, TransferBuf, 1> = Channel::new();
 /// Set to end the scan at the next transfer boundary.
 static STOP: AtomicBool = AtomicBool::new(false);
 
-/// Raised by the scan task once it has stopped.
-static STOPPED: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+/// Set by the scan task once it has stopped, cleared when it resumes.
+static HALTED: AtomicBool = AtomicBool::new(false);
+
+/// Raised to let a stopped scan task run again.
+static RESUME: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 /// Stop the scan with the panel blank. Returns once the transfer in
 /// flight has ended, on its blanking frame, and no other will start; the
-/// wires then rest on their pull-downs. There is no restart: this is for
-/// a deliberate reset, which must not land mid-transfer or the row the
-/// drivers had latched stays lit at full current until the firmware is
-/// back. Takes up to one transfer, about 3 ms.
+/// wires then rest on their pull-downs. For a deliberate reset, which
+/// must not land mid-transfer or the row the drivers had latched stays
+/// lit at full current until the firmware is back, and for a firmware
+/// upload, whose flash writes would otherwise flicker the panel. Takes
+/// up to one transfer, about 3 ms. Safe to call while already stopped,
+/// so a self-heal during an upload does not hang here: it polls a flag
+/// rather than waiting on a one-shot signal.
 pub async fn stop() {
     STOP.store(true, Ordering::Release);
-    STOPPED.wait().await;
+    while !HALTED.load(Ordering::Acquire) {
+        Timer::after_millis(1).await;
+    }
+}
+
+/// Let a stopped scan run again, from the buffer it had. A no-op when
+/// it is running.
+pub fn resume() {
+    if HALTED.load(Ordering::Acquire) {
+        RESUME.signal(());
+    }
 }
 
 /// Give the publisher its spare buffer. Call once, before any `publish`.
@@ -250,8 +266,11 @@ pub async fn scan_task(hw: ScanHardware) -> ! {
         ended_at = Some(Instant::now());
 
         if STOP.load(Ordering::Acquire) {
-            STOPPED.signal(());
-            match core::future::pending::<core::convert::Infallible>().await {}
+            HALTED.store(true, Ordering::Release);
+            RESUME.wait().await;
+            STOP.store(false, Ordering::Release);
+            HALTED.store(false, Ordering::Release);
+            ended_at = None;
         }
 
         if let Ok(next) = READY.try_receive() {

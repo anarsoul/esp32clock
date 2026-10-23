@@ -19,7 +19,7 @@ use sntpc_net_embassy::UdpSocketWrapper;
 use sntpc_time_embassy::EmbassyTimestampGenerator;
 
 use crate::settings::Hostname;
-use crate::{clock, config, heal, settings};
+use crate::{clock, config, heal, ota, settings};
 
 const NTP_PORT: u16 = 123;
 const LOCAL_PORT: u16 = 12345;
@@ -341,6 +341,9 @@ pub async fn probe_task(stack: Stack<'static>) -> ! {
             Ok(rtt) => {
                 let streak = PROBE_STREAK.load(Ordering::Relaxed);
                 PROBE_STREAK.store(0, Ordering::Relaxed);
+                // A gateway that answers means a freshly installed image
+                // has its network; it will not be rolled back.
+                ota::confirm();
                 if streak > 0 {
                     info!("probe: gateway {gateway} back after {streak} failures, rtt {} ms", rtt.as_millis());
                 }

@@ -12,6 +12,7 @@ pub mod heal;
 pub mod http;
 pub mod melody;
 pub mod net;
+pub mod ota;
 pub mod panel;
 pub mod scan;
 pub mod settings;
