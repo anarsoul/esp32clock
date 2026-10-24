@@ -1137,7 +1137,14 @@ near access point three times with hostapd's `del_client` did:
    hardware section says so. On the real clock, in its case, 68 moved
    the near AP's reading from -84/-91 to -76/-90 with dips to -78: an
    8 dB gain, 14 dB above the noise floor against 7 before, clear of
-   the 6 Mbit/s decoding limit with margin. The smoltcp DHCP lines never appeared:
+   the 6 Mbit/s decoding limit with margin. Confirmed 2026-10-23 on the
+   real clock in its case after 24 h on `881d786`: the AP reads it at
+   -74/-76 dBm (two chains), 0 heals, a 1400-byte ping from the host
+   5 to 12 ms with none lost, the page in 28 ms. The clock's uplink sits
+   at 6 Mbit/s when idle and the rate control moves it to 13 Mbit/s
+   (MCS 1) under a 100 packets/s flood of 1400-byte pings, the second
+   chain dipping to -81 meanwhile; the AP sends to the clock at MCS 5.
+   The smoltcp DHCP lines never appeared:
    smoltcp logs only with its own `log` feature, which embassy-net does
    not enable; turning it on is the next thing to do before another
    far-AP session, since DHCP there took 30 to 135 s at every power.
