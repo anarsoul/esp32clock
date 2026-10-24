@@ -27,3 +27,6 @@ target/
 
 # Reference material, not part of this project
 3rdparty/
+
+# Local credentials for the build (WIFI_SSID, OTA_TOKEN, ...)
+.env
