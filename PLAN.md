@@ -1281,6 +1281,211 @@ Found in the same review, not yet done, in rough order of value:
   `scan_task` leaves `ended_at` set, so each retry adds its delay to the
   restart-gap statistics. Statistics only.
 
+### Review backlog, second pass (2026-10-23)
+
+A whole-tree review of the code as of commit 0e85ee9, read in four
+slices (net/http/ota/heal/main; ui/display/clock/carry/buttons/buzzer/
+melody; settings/storage/form/config; scan/panel/aip33628) against
+the registry sources where a claim depended on them (esp-hal 1.2.2,
+embassy-net 0.9.1, smoltcp 0.12, embassy-sync 0.7.2, sequential-storage
+8.0.2, esp-bootloader-esp-idf 0.6.0, sntpc 0.11). Every item below was
+confirmed by reading the code path; none is fixed yet. What checked out
+and is not listed: the frame and transfer arithmetic and the two-buffer
+hand-off in `scan.rs`; the panel tables against the reference docs and
+every glyph in use; the record decode of every version; the flash handle
+never held across an await; the HTTP head parser on partial reads and
+odd headers; the alarm-age arithmetic across midnight and the 12-hour
+display; the carry record's sign and 2106 limits; the buzzer's
+open-drain path on every exit; the rollback count; the NTP validation
+in sntpc; the library's refusal to pick the booted slot for an upload.
+
+Bugs, in rough order of value:
+
+- **Carried time drifts with uptime.** `clock::carry_time` stores Unix
+  time minus `Rtc::time_since_power_up`, and `restore_carried` adds the
+  same reading back after the reset. esp-hal converts the raw RTC tick
+  count to microseconds with the slow-clock period in `STORE1`, which
+  `esp_hal::init` measures afresh at every boot over 16 cycles of the
+  ~136 kHz RC oscillator (`clock/mod.rs:237`, `:454-497`). The write
+  uses the old period and the restore the new one on the *whole* count
+  since power-up, so the error is `ticks_since_power_up × (P_new −
+  P_old)`: 0.1 % after a day of uptime is 86 s, a week is ten minutes,
+  a 1 % temperature shift is hours. The 2026-10-22 check ran at minutes
+  of uptime, where the term is under a second. Consequences: a wrong
+  time on the panel after a heal until NTP corrects it, an alarm that
+  rings twice (carried time reaches the alarm, NTP steps back before
+  it, `fired_minute` is cleared, it rings again) or not at all (NTP
+  steps forward past it with `had_time` set), and a wrong `unix` in the
+  handled-window test. Fix: carry the raw tick count (read
+  `RTC_CNTL.time_update`/`time_low0`/`time_high0` through the PAC;
+  esp-hal's `time_since_boot_raw` is `pub(crate)`) and at restore
+  convert only `ticks_now − ticks_then` with the current calibration,
+  so only the seconds of the reboot ride on the RC clock.
+- **Self-heal is unreachable once the lease expires on a dead uplink.**
+  `probe_task` starts every iteration with `stack.wait_config_up()`
+  (`net.rs:328`). When the uplink dies with less lease time left than
+  the five-minute budget, smoltcp's DHCP client resets at `expires_at`
+  and embassy-net clears the address (`lib.rs:907-909`); from then on
+  no probe is sent, the streak is frozen below ten, the link is still
+  up so `wifi_task` sees nothing, and the connect budget needs connect
+  failures that never come. The clock sits with the carried time and
+  no page until power is cut. With a one-hour lease that is about one
+  uplink death in twelve. Fix: bound the wait (`with_timeout(PROBE_PERIOD,
+  wait_config_up())`) and, once armed, count a period with the link up
+  and no address as a failed probe.
+- **The sweep's trailing dash is dark and blinks the armed mark.**
+  `display::dimmed` scales components by 64/256, so none exceeds 63,
+  and `GAMMA[0..=76]` is 0: `Levels::from_rgb(dimmed(c))` is (0,0,0)
+  for every palette colour. `set_digit_color(tail, …)` therefore sets
+  the whole tail block to level 0, annunciator included: the dimmer
+  dash of the M4 design has never been visible, and when the tail is
+  block 3 the degree mark lit for an armed alarm goes dark one step in
+  four, a visible blink before the first sync. Fix: dim in level space
+  (halve the head's `Levels`, floor 1) and apply it to the dash
+  segments only, not the block.
+- **`POST /play` during an alarm silences it.** `buzzer_task`'s `Ring`
+  loop breaks on any command and the `Preview` arm plays once and then
+  waits for the next command; the display re-issues `ring` only on the
+  ringing edge. One preview, from a browser tab left on the page, say,
+  leaves the panel flashing in silence for the rest of the 120 s. Fix:
+  ignore `Preview` while ringing, or go back into the ring loop after
+  it.
+- **A `POST /` without `Content-Length` disarms the alarm.**
+  `parse_head` defaults the length to 0 and nothing records whether the
+  header was present, so a chunked or bodiless post is an empty form;
+  `form::apply` with `checkboxes_absent_off` then clears `alarm_armed`,
+  `twelve_hour` and `skip_next` and returns `Ok`, which is committed and
+  answered with a 303. Not reachable from the clock's own page;
+  reachable by anything on the LAN by accident. Fix: refuse a `POST`
+  without `Content-Length` (411) or with `Transfer-Encoding` (400).
+
+Gaps:
+
+- **No watchdog.** `esp_hal::init` disables the SWD, RWDT and both
+  timer-group watchdogs and nothing re-enables one. A hang that is not a
+  panic (a lockup in the Wi-Fi driver, a critical section waiting on
+  something, an infinite loop in a freshly uploaded image) leaves the
+  panel dark until someone opens the case, and the OTA rollback counts
+  only software resets, so a new image that hangs is never rolled back,
+  contrary to `ota.rs`'s header. Fix: enable the RWDT with a few-second
+  timeout fed from the heartbeat or the display tick, and keep
+  `ota_boots` in `carry::init` on a watchdog reset reason.
+- **A heal reset can land mid-transfer during a failing upload.**
+  `ota::install` has stopped the scan; a probe or connect budget then
+  calls `heal::reset`, whose `scan::stop` returns at once (already
+  halted) and which waits 200 ms before `software_reset`. If the
+  upload's body read fails in that window (likely, since the same dead
+  link is what trips both), `install` calls `scan::resume` and the
+  reset lands with a transfer in flight, the exact case the stop
+  exists for. One `STOP` flag cannot represent two stoppers. Fix: a
+  latched reset-pending flag that `resume` honours, or a stop count.
+- **A record from a newer image throws every setting away on rollback.**
+  `from_record` returns `None` for `version > RECORD_VERSION`, and
+  `is_valid` fails the whole record for a `color` or `melody` index this
+  build does not know; only `brightness` is clamped. An OTA image with
+  record version 6 (M10 plans exactly that) or one more melody saves a
+  record, the `OTA_BOOT_LIMIT` rollback or a manual re-flash boots the
+  older image, which comes up with hostname `clock`, timezone 0 and the
+  alarm disarmed, and its first change writes a version-5 record over
+  the newer fields for good. Fix: versions are append-only, so accept a
+  newer version's known prefix and clamp `color` and `melody` the way
+  `brightness` is.
+- **The carry record has a mark but no layout.** `decode` trusts word
+  positions behind `MARK` alone, and `ota::reboot` writes the record in
+  firmware A for firmware B to read after `CoreSw`. The record has grown
+  twice and M10 adds `boot_ap`; a reorder or insertion makes B misread
+  a stale word as `ota_boots`, `handled` or the time offset. Fix: fold
+  `WORDS` or a version into the mark and treat a mismatch like a missing
+  mark.
+- **The time learned from NTP is not carried until the next heartbeat.**
+  `ntp_task` calls `set_unix_micros` and nothing else; `carry_time` runs
+  from `heal::reset`, `ota::reboot` and the 60 s heartbeat. A panic in
+  the first minute after a power-on sync resets with no time in the
+  record and the panel sweeps until Wi-Fi and NTP are back, although
+  the design says a panic carries the time to within a minute. Fix: call
+  `carry_time` right after `set_unix_micros`.
+- **A PIN issued while ringing or in alarm-set is dropped, not deferred.**
+  `ui.show_pin` acts only in the clock, IP and PIN modes, but the
+  `Signal` is consumed either way and `ota.rs:218` logs "shown on the
+  panel" regardless; the user at the update page has nothing to type
+  until they reload. Fix: keep the pending PIN in `Ui` and show it when
+  the mode returns to clock within `PIN_TTL_MS`, or log that it was not
+  shown.
+- **The missed-alarm grace is used up by the first time in any mode.**
+  `had_time |= time.is_some()` sits outside the mode match while the
+  grace check runs only in clock mode. A sync that lands during the IP
+  display or a PIN at boot marks the boot as had-time and the alarm
+  that fell in the outage never rings. Same fix as the known
+  "alarm lost while in another mode" item: evaluate the due check, or
+  at least `had_time`, in every mode.
+- **The connect budget is cleared by an association that does not
+  survive.** `failures` and `first_failure` reset on any `connect_async`
+  success. An access point that associates and drops the station before
+  DHCP finishes (MAC filter, client isolation, a flaky AP) gives a loop
+  of connect-ok, disconnect, retry in which neither budget fires and the
+  probe never arms. Fix: clear the budget only once DHCP has an address
+  or the connection has lasted some tens of seconds.
+- **A failed save is never retried.** `persist_task` logs an `Err` from
+  `store_item` and goes back to waiting for the next change, so the
+  unsaved settings live only in RAM until something else changes. Fix:
+  re-arm the settle timer on an error.
+- **A reset inside the settle window loses the last change.** Changes
+  reach flash two seconds after the last one; `heal::reset` and
+  `ota::reboot` carry the time and alarm state but not the settings, so
+  a colour or arming change made just before the probe budget fires is
+  gone after the reboot with no indication. Fix: have the two reset
+  paths flush the persist task (or save synchronously through
+  `with_flash` after `scan::stop`).
+- **The upload does not check the chip id.** The first sector is checked
+  for the image magic, the descriptor magic and the hash flag, not for
+  the ESP32-C3 id at bytes 12–13 of the extended header. An image built
+  with the wrong `--chip` is written, selected and booted; the
+  bootloader falls back, and the old image then logs that it is itself
+  on probation. Recovery works; the first failure is confusing. Fix:
+  refuse unless `sector[12..14] == [0x05, 0x00]`.
+
+Nits:
+
+- **The display task freezes during an upload.** With the scan halted
+  the scan task does not swap buffers, so the second `publish` after
+  `stop` blocks in `FREE.receive()` for the whole 11 s write: no tick,
+  no button handling, a ringing alarm cannot be silenced, and after a
+  failed upload the first transfer shows the image queued at the stop.
+  Fix: have `publish` drop or overwrite the image while halted.
+- **`scan::stop` is not honoured on the DMA start-failure path.** The
+  `Err` branch sleeps and `continue`s past the `STOP` check, so if the
+  start kept failing `heal::reset` and `ota::install` would spin for
+  ever. Unreachable with esp-hal 1.2.2's constant error conditions;
+  a `STOP` check before the retry keeps the invariant.
+- **`clock::carry_time` in the rollback path runs before `clock::init`.**
+  `ota::init` (`main.rs:162`) precedes `clock::init` (`:165`), so the
+  call at `ota.rs:291` is a no-op; the previously carried offset is
+  still in the record, so nothing is lost. Drop the call or reorder.
+- **Oversized or unparseable requests get a TCP reset, not a status.**
+  `read_request` returns `None` for a head over `REQUEST_BUF`, a body
+  over `BODY_MAX` or a bad request line, and the socket is closed with
+  bytes pending. Answer 413/400 after a bounded drain, as `/ota` does.
+- **First change on an empty flash writes the default record.** With
+  `stored == None` the compare in `persist_task` is skipped, so ticking
+  "skip the next alarm" on a fresh board costs a flash write for a field
+  the record does not hold. Compare against the defaults when nothing
+  was loaded.
+- **A persistent `set_config` failure loops outside the connect budget.**
+  The error path at `net.rs:162-166` sleeps and retries without touching
+  `failures`. Static errors are caught earlier, so unlikely to matter.
+- **`FIRMWARE_VERSION` goes into JSON and HTML unescaped.** It is
+  `git describe`, so a tag with `"` or `<` breaks `/api` and the page.
+  Sanitise in `build.rs`.
+- **Silent fallbacks in the panel tables.** `com_index` returns slot 0
+  for a value not in `COM_SEQ`, and nothing ties `GAMMA[255]` to
+  `MAX_LEVEL`. Two `const` asserts lock in what is verbatim today.
+- **In the ringing off-phase the degree mark stays lit.** `set_degree`
+  runs before the match, so the flash is digits-off, mark-on. Cosmetic.
+- **Stale names.** `ota.rs:12` and `carry.rs:49` refer to
+  `ota::check_rollback`, which is `ota::init`; `http.rs:29` says an
+  upload is 800 KB where the image is about 680 KB; the M10 text said
+  two `RECEIVERS` where there are three (fixed in place).
+
 ## 6. Risks and how they are handled
 
 | risk | mitigation |
@@ -1750,7 +1955,7 @@ does; any other press is ignored. A station that is waiting the 3
 minutes shows the usual blank-until-synced face, so the only new
 face is `AP`.
 
-**Touches.** `settings.rs` (fields, validity, record v6, two
+**Touches.** `settings.rs` (fields, validity, record v6, the three
 `RECEIVERS` unchanged), `storage.rs` (scratch size), `form.rs`
 (keys, the provisioning page, write-only password), `http.rs` (serve
 the provisioning page when in AP mode), `net.rs` (AP config, the
