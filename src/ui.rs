@@ -13,8 +13,9 @@ use crate::settings::{BRIGHTNESS_STEPS, PALETTE, Settings};
 /// Leave alarm-set mode after this long without a press.
 const SET_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// Stop ringing after this long if nobody presses anything.
-const RING_TIMEOUT: Duration = Duration::from_secs(120);
+/// Stop ringing after this long if nobody presses anything. Public so
+/// `heal::reset` can bound how long it holds a reset off for a ring.
+pub const RING_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Each octet of the IP stays this long.
 pub const IP_STEP: Duration = Duration::from_millis(2000);

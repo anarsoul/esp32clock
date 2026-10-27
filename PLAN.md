@@ -1883,6 +1883,48 @@ over a few frames so the brightness button changes the load gradually,
 and log the reset reason prominently so a `SysBrownOut` is told apart
 from a panic at a glance.
 
+### Hold the self-heal while the alarm rings, and ring for five minutes (after the brightness ceiling) — built, not yet verified on the panel
+
+The user asked whether a self-heal reset can land while the alarm is
+ringing. It could: neither the probe task nor the connect loop asked
+the UI anything, so a heal mid-ring blanked the panel, reset the chip
+with the buzzer still driven until the reset itself, and relied on the
+missed-alarm grace to bring the alarm back a few seconds later for a
+fresh timeout, for up to four minutes of ringing in two pieces. Also
+120 s of ringing is too short for the user.
+
+Design. `display.rs` owns a `RINGING` atomic with the display task as
+its one writer, set on the ringing edge before the buzzer is told to
+ring and cleared after `record_handled` on the ending edge, so a reset
+that goes ahead the moment the flag clears finds the alarm already
+recorded as handled. The hold is in `heal::reset`, the one way to a
+deliberate reset, so both triggers and any future one get it: while the
+flag is set it logs once, polls the flag every second and goes on only
+when ringing has ended, or after `ui::RING_TIMEOUT` plus 30 s, a bound
+that keeps a flag stuck for any reason from blocking a heal for good.
+The panic path (`custom_halt`) cannot wait and is unchanged. The probe
+and connect tasks sit inside the hold, so no probes are sent and no
+connects are attempted while an alarm rings on a dead network; the
+reset follows anyway, as before, since the network state that earned
+it is not re-examined. `RING_TIMEOUT` goes from 120 s to 300 s, and
+`display::HANDLED_WINDOW_SECS` from 15 to 20 minutes to keep its margin
+over the grace plus a full ring (10 + 5). `MISSED_ALARM_GRACE` stays at
+10 minutes: an alarm cut off by a reset is at most five minutes plus a
+boot old, well inside it. The `POST /play` item in the second-pass
+backlog is unchanged by this, except that the silent flashing it leaves
+now lasts up to five minutes.
+
+Checked on the host: builds, clippy clean. The UI scratch crate from
+the 2026-10-22 alarm-state check needs no change beyond the constant.
+
+Verify on the panel: set the alarm a minute ahead, let it ring, and pull
+the uplink (block the clock at the AP or power the AP down) so the probe
+streak reaches ten while it rings; the log must show `heal: ... alarm
+ringing, holding the reset` and the panel must keep flashing and
+sounding until a press or five minutes, then `heal: ... self-heal reset`
+and the reboot with no second ring. Then the plain case: an undismissed
+alarm must stop on its own after five minutes.
+
 ### M10 — Wi-Fi provisioning from an access point — planned
 
 **Scope.** Credentials become a stored setting instead of a build-time

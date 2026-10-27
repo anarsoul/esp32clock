@@ -80,7 +80,7 @@ MSRV-aware resolver picks an esp-rom-sys that esp-storage cannot build with.
 Opening `http://<ip>/update` shows a four-digit PIN for a minute.
 
 Any press ends ringing or the IP display. Set mode times out after 15 s,
-ringing after 120 s. Self-heal: once the gateway has answered a ping, ten
+ringing after 5 minutes. Self-heal: once the gateway has answered a ping, ten
 failed probes in a row (five minutes) with the link still up blank the
 panel and reset the chip (`config::PROBE_RESET_FAILURES`). The probe is
 a full-size ping (`config::PROBE_PAYLOAD_BYTES`, 1400 bytes) because a
@@ -94,7 +94,9 @@ offset from the RTC timer, which keeps running, so the panel shows the
 time again before Wi-Fi is up. An alarm missed by up to
 10 minutes across a power cut rings on the first valid time after boot;
 after a software reset the alarm last rung-and-ended or skipped within
-15 minutes is not rung again, while one cut off mid-ring comes back.
+20 minutes is not rung again, while one cut off mid-ring comes back. A
+self-heal due while the alarm rings waits for the ring to end, by a press
+or its timeout, before blanking and resetting.
 
 Firmware updates: `POST /ota` with the application image as the body
 and an `Authorization` header: `Bearer <OTA_TOKEN>` from `scripts/ota.sh`,
@@ -132,7 +134,7 @@ answered or an HTTP request served bumps it, and the third such boot
 | `src/ui.rs` | mode state machine, pure logic; edits the settings it is handed; alarm due check, missed-alarm grace with `suppress_alarm` seed, consumes `skip_next` |
 | `src/settings.rs` | `Settings`, palette and brightness tables, `Hostname`, shared `Watch` with change signal, versioned flash record |
 | `src/storage.rs` | the one flash handle (`with_flash`), nvs partition lookup, `sequential-storage` map over it, debounced persist task that compares records, not structs |
-| `src/heal.rs` | last-resort reset: blanks the panel through `scan::stop`, counts itself and the time in the `carry` record, logs, reboots |
+| `src/heal.rs` | last-resort reset: waits out a ringing alarm, blanks the panel through `scan::stop`, counts itself and the time in the `carry` record, logs, reboots |
 | `src/form.rs` | key=value parsing, all-or-nothing `apply` on a copy, JSON, the HTML page with its error notice and the read-only `Status` lines, the update page with its upload script; pure logic |
 | `src/http.rs` | HTTP/1.0 server, `LISTENERS` sockets each in its own task: `GET`/`POST` on `/` and `/api`, `POST /play`, `GET /update`, `POST /ota` with the body streamed to `ota::install`; a refused form redirects to `/?error=…`; per-listener state and counters for the heartbeat |
 | `src/buttons.rs` | debounced short/long press events, plus the two-button hold |

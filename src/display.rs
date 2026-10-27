@@ -1,5 +1,7 @@
 //! Turns the clock and the UI state into panel images, and rings the alarm.
 
+use core::sync::atomic::{AtomicBool, Ordering};
+
 use embassy_futures::select::{Either4, select4};
 use embassy_net::Stack;
 use embassy_time::{Duration, Instant, Timer};
@@ -116,7 +118,17 @@ fn draw(panel: &mut Panel, view: View, settings: &Settings, ip: Option<[u8; 4]>,
 
 /// How long after an alarm was handled a software reset still counts it
 /// as handled: the missed-alarm grace plus the ringing timeout, with room.
-const HANDLED_WINDOW_SECS: i64 = 15 * 60;
+const HANDLED_WINDOW_SECS: i64 = 20 * 60;
+
+/// Whether the alarm is ringing right now. Written only by the display
+/// task, on the ringing edges; read by `heal::reset`, which holds a
+/// deliberate reset off while it is set.
+static RINGING: AtomicBool = AtomicBool::new(false);
+
+/// Is the alarm ringing?
+pub fn ringing() -> bool {
+    RINGING.load(Ordering::Relaxed)
+}
 
 /// Remember, across a software reset, that today's alarm has been dealt
 /// with. Needs the time; without it there is no grace to suppress either.
@@ -171,9 +183,13 @@ pub async fn display_task(stack: Stack<'static>) -> ! {
         }
 
         // The buzzer loops the melody on its own; tell it only on the edges.
+        // The flag goes up before the buzzer starts and comes down after
+        // the alarm is recorded as handled, so a heal held off by the
+        // ring never resets between the end of the ring and the record.
         if ui.ringing() != was_ringing {
             was_ringing = ui.ringing();
             if was_ringing {
+                RINGING.store(true, Ordering::Relaxed);
                 buzzer::ring(current.melody);
             } else {
                 buzzer::stop();
@@ -182,6 +198,7 @@ pub async fn display_task(stack: Stack<'static>) -> ! {
                 // while still ringing leaves this unset on purpose, so the
                 // grace brings the alarm back after the reboot.
                 record_handled(&current);
+                RINGING.store(false, Ordering::Relaxed);
             }
         }
 
