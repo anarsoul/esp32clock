@@ -4,17 +4,23 @@
 //! few tens of milliseconds per hour at most. The offset is replaced, not
 //! slewed, on every sync; a jump of that size is invisible on a HH:MM display.
 //!
-//! Across a software reset the uptime restarts but the RTC timer does
-//! not, so the time is carried in the `carry` record as Unix time minus
-//! RTC time (`carry_time`) and set again from it at boot
-//! (`restore_carried`). Only the reboot itself, a few seconds, runs on the
-//! RTC slow clock; after that the crystal takes over again.
+//! Across a software reset the uptime restarts, so the time is carried
+//! in the `carry` record as plain Unix time, written every second by the
+//! display tick and once more just before a deliberate reset
+//! (`carry_time`), and set again from it at boot (`restore_carried`).
+//! Nothing measures the reset itself; the restore takes the carried
+//! time as the time at uptime zero plus `RESET_PAUSE`, the pause a
+//! deliberate reset makes before it fires. The error is the bootloader's
+//! share of the uptime, well under a second, or up to a second more
+//! after a panic, which cannot write on the way down. The RTC timer is
+//! not used: esp-hal recalibrates its slow clock at every boot, and a
+//! time stored relative to it drifted with the whole uptime since
+//! power-up (see `PLAN.md`, 2026-10-27).
 
-use core::cell::{Cell, RefCell};
+use core::cell::Cell;
 
 use critical_section::Mutex;
 use embassy_time::{Duration, Instant};
-use esp_hal::rtc_cntl::Rtc;
 
 use crate::{carry, settings};
 
@@ -23,39 +29,32 @@ const SECS_PER_DAY: i64 = 86_400;
 /// Microseconds to add to the uptime to get Unix time. `None` until synced.
 static OFFSET_US: Mutex<Cell<Option<i64>>> = Mutex::new(Cell::new(None));
 
-/// The RTC timer, for the time carried across a software reset.
-static RTC: Mutex<RefCell<Option<Rtc<'static>>>> = Mutex::new(RefCell::new(None));
+/// How long a deliberate reset waits after its last log line and
+/// `carry_time` before it fires, so the line leaves the serial port.
+/// `restore_carried` adds it back, so every deliberate reset path must
+/// wait exactly this.
+pub const RESET_PAUSE: Duration = Duration::from_millis(200);
 
-/// Hand over the RTC timer. Call once at boot, before `restore_carried`.
-pub fn init(rtc: Rtc<'static>) {
-    critical_section::with(|cs| RTC.borrow(cs).replace(Some(rtc)));
-}
-
-/// Microseconds on the RTC timer since power-up, if `init` has run.
-fn rtc_micros() -> Option<i64> {
-    critical_section::with(|cs| {
-        RTC.borrow(cs).borrow().as_ref().map(|rtc| rtc.time_since_power_up().as_micros() as i64)
-    })
-}
-
-/// Write the current time into the carried record as an offset from the
-/// RTC timer, so the next software reset starts with it. Does nothing
-/// before the first sync.
+/// Write the current time into the carried record, so the next software
+/// reset starts with it. Does nothing before the first sync. Cheap: a
+/// few words of RTC RAM, so the display tick calls it every second.
 pub fn carry_time() {
-    if let (Some(unix_us), Some(rtc_us)) = (unix_micros(), rtc_micros()) {
-        carry::update(|c| c.time_offset_us = Some(unix_us - rtc_us));
+    if let Some(unix_us) = unix_micros() {
+        carry::update(|c| c.unix_us = Some(unix_us));
     }
 }
 
-/// Set the clock from the offset carried across a software reset, if
-/// there is one. Returns whether the time is now known.
+/// Set the clock from the time carried across a software reset, if
+/// there is one: it is taken as the time at uptime zero less the pause
+/// the reset made. Returns whether the time is now known.
 pub fn restore_carried() -> bool {
-    match (carry::get().time_offset_us, rtc_micros()) {
-        (Some(offset), Some(rtc_us)) => {
-            set_unix_micros(rtc_us + offset);
+    match carry::get().unix_us {
+        Some(unix_us) => {
+            let offset = unix_us + RESET_PAUSE.as_micros() as i64;
+            critical_section::with(|cs| OFFSET_US.borrow(cs).set(Some(offset)));
             true
         }
-        _ => false,
+        None => false,
     }
 }
 

@@ -19,7 +19,6 @@ use esp_hal::gpio::{DriveMode, Input, InputConfig, Level, Output, OutputConfig, 
 use esp_hal::interrupt::Priority;
 use esp_hal::ledc::Ledc;
 use esp_hal::rng::Rng;
-use esp_hal::rtc_cntl::Rtc;
 use esp_hal::spi::Mode;
 use esp_hal::spi::master::{Config as SpiConfig, Spi};
 use esp_hal::time::Rate;
@@ -160,9 +159,7 @@ async fn main(spawner: Spawner) -> ! {
     // Slot bookkeeping over the same flash handle. This may reset the chip
     // to roll back an unconfirmed image; nothing is running yet.
     ota::init();
-    // The RTC timer ran through the reset; with a carried offset the
-    // clock is known before Wi-Fi is even started.
-    clock::init(Rtc::new(peripherals.RTC_TIMER));
+    // With a carried time the clock is known before Wi-Fi is even started.
     if clock::restore_carried()
         && let Some(t) = clock::now()
     {
@@ -216,9 +213,6 @@ async fn main(spawner: Spawner) -> ! {
     info!("running");
     loop {
         Timer::after(Duration::from_secs(60)).await;
-        // Keep the carried time fresh for a panic reset, which cannot
-        // write it on the way down.
-        clock::carry_time();
         let g = scan::take_gap_stats();
         let (sent, failed, streak) = net::probe_stats();
         info!(

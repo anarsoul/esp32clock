@@ -164,6 +164,9 @@ pub async fn display_task(stack: Stack<'static>) -> ! {
     loop {
         let now = Instant::now();
         let time = clock::now();
+        // Keep the carried time fresh for a panic reset, which cannot
+        // write it on the way down; this loop runs at least every second.
+        clock::carry_time();
         if let (Some((at, minute)), Some(unix)) = (seed_handled, clock::unix_secs()) {
             seed_handled = None;
             if unix - at <= HANDLED_WINDOW_SECS {

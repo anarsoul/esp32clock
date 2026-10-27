@@ -52,10 +52,10 @@ pub async fn reset(reason: core::fmt::Arguments<'_>) -> ! {
         c.heals = n;
         c.last_heal_unix = clock::unix_secs();
     });
-    // The time goes over as an offset from the RTC timer, which keeps
-    // running through the reset, so the panel shows it again at once.
+    // The time goes over in the same record, so the panel shows it again
+    // at once; the restore adds the pause back.
     clock::carry_time();
     // Let the log line leave the serial port.
-    Timer::after(Duration::from_millis(200)).await;
+    Timer::after(clock::RESET_PAUSE).await;
     esp_hal::system::software_reset()
 }

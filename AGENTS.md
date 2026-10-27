@@ -89,9 +89,12 @@ failed connects in a row or three minutes of them
 (`config::CONNECT_RESET_ATTEMPTS`, `CONNECT_RESET_SECS`), because the
 driver avoids the access point that last dropped it and only a reset
 clears that. The boot line and the heartbeat carry the count since
-power-up. The time survives a software reset: it is carried as an
-offset from the RTC timer, which keeps running, so the panel shows the
-time again before Wi-Fi is up. An alarm missed by up to
+power-up. The time survives a software reset: the display tick writes
+the Unix time to RTC RAM every second, a deliberate reset writes it once
+more and pauses `clock::RESET_PAUSE`, and the boot adds that pause back,
+so the panel shows the time again before Wi-Fi is up, within a second
+(the RTC timer is not used; esp-hal recalibrates it at every boot and an
+offset from it drifted with the uptime since power-up). An alarm missed by up to
 10 minutes across a power cut rings on the first valid time after boot;
 after a software reset the alarm last rung-and-ended or skipped within
 20 minutes is not rung again, while one cut off mid-ring comes back. A
@@ -139,9 +142,9 @@ answered or an HTTP request served bumps it, and the third such boot
 | `src/http.rs` | HTTP/1.0 server, `LISTENERS` sockets each in its own task: `GET`/`POST` on `/` and `/api`, `POST /play`, `GET /update`, `POST /ota` with the body streamed to `ota::install`; a refused form redirects to `/?error=…`; per-listener state and counters for the heartbeat |
 | `src/buttons.rs` | debounced short/long press events, plus the two-button hold |
 | `src/melody.rs` | alarm tunes as pitch and length data with tempo; pure |
-| `src/carry.rs` | RTC-RAM record used only after a software reset (`CoreSw`/`Cpu0Sw`; anything else zeroes it at boot): self-heal count and time, the skip flag, the alarm last handled, the clock as an offset from the RTC timer, boots of an unconfirmed OTA image |
+| `src/carry.rs` | RTC-RAM record used only after a software reset (`CoreSw`/`Cpu0Sw`; anything else zeroes it at boot): self-heal count and time, the skip flag, the alarm last handled, the Unix time last written, boots of an unconfirmed OTA image; the mark carries a layout version |
 | `src/buzzer.rs` | LEDC PWM on an open-drain pin; plays a melody on command, looped or once, stops within a note |
-| `src/clock.rs` | Unix time = uptime + NTP offset; local time with weekday; `carry_time`/`restore_carried` move the time across a software reset via the RTC timer, refreshed by the heartbeat |
+| `src/clock.rs` | Unix time = uptime + NTP offset; local time with weekday; `carry_time`/`restore_carried` move the time across a software reset as plain Unix time, written every second by the display tick; `RESET_PAUSE` for every deliberate reset |
 | `src/ota.rs` | firmware upload: token check, slot lookup and the boot-time rollback, sector writer with read-back, activate, reboot; `VERSION` from `build.rs` |
 | `src/net.rs` | Wi-Fi station with all-channel scan and transmit-power ceiling, minute RSSI line, connect failure budget that ends in `heal::reset`; DHCP switched on 500 ms after each connect and off at disconnect; link and address monitor, gateway ping probe with the self-heal trigger, SNTP, DHCP renew on hostname change |
 | `src/config.rs` | build-time env vars and compile-time defaults |

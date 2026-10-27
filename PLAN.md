@@ -1301,26 +1301,6 @@ in sntpc; the library's refusal to pick the booted slot for an upload.
 
 Bugs, in rough order of value:
 
-- **Carried time drifts with uptime.** `clock::carry_time` stores Unix
-  time minus `Rtc::time_since_power_up`, and `restore_carried` adds the
-  same reading back after the reset. esp-hal converts the raw RTC tick
-  count to microseconds with the slow-clock period in `STORE1`, which
-  `esp_hal::init` measures afresh at every boot over 16 cycles of the
-  ~136 kHz RC oscillator (`clock/mod.rs:237`, `:454-497`). The write
-  uses the old period and the restore the new one on the *whole* count
-  since power-up, so the error is `ticks_since_power_up × (P_new −
-  P_old)`: 0.1 % after a day of uptime is 86 s, a week is ten minutes,
-  a 1 % temperature shift is hours. The 2026-10-22 check ran at minutes
-  of uptime, where the term is under a second. Consequences: a wrong
-  time on the panel after a heal until NTP corrects it, an alarm that
-  rings twice (carried time reaches the alarm, NTP steps back before
-  it, `fired_minute` is cleared, it rings again) or not at all (NTP
-  steps forward past it with `had_time` set), and a wrong `unix` in the
-  handled-window test. Fix: carry the raw tick count (read
-  `RTC_CNTL.time_update`/`time_low0`/`time_high0` through the PAC;
-  esp-hal's `time_since_boot_raw` is `pub(crate)`) and at restore
-  convert only `ticks_now − ticks_then` with the current calibration,
-  so only the seconds of the reboot ride on the RC clock.
 - **Self-heal is unreachable once the lease expires on a dead uplink.**
   `probe_task` starts every iteration with `stack.wait_config_up()`
   (`net.rs:328`). When the uplink dies with less lease time left than
@@ -1397,13 +1377,6 @@ Gaps:
   a stale word as `ota_boots`, `handled` or the time offset. Fix: fold
   `WORDS` or a version into the mark and treat a mismatch like a missing
   mark.
-- **The time learned from NTP is not carried until the next heartbeat.**
-  `ntp_task` calls `set_unix_micros` and nothing else; `carry_time` runs
-  from `heal::reset`, `ota::reboot` and the 60 s heartbeat. A panic in
-  the first minute after a power-on sync resets with no time in the
-  record and the panel sweeps until Wi-Fi and NTP are back, although
-  the design says a panic carries the time to within a minute. Fix: call
-  `carry_time` right after `set_unix_micros`.
 - **A PIN issued while ringing or in alarm-set is dropped, not deferred.**
   `ui.show_pin` acts only in the clock, IP and PIN modes, but the
   `Signal` is consumed either way and `ota.rs:218` logs "shown on the
@@ -1457,10 +1430,6 @@ Nits:
   start kept failing `heal::reset` and `ota::install` would spin for
   ever. Unreachable with esp-hal 1.2.2's constant error conditions;
   a `STOP` check before the retry keeps the invariant.
-- **`clock::carry_time` in the rollback path runs before `clock::init`.**
-  `ota::init` (`main.rs:162`) precedes `clock::init` (`:165`), so the
-  call at `ota.rs:291` is a no-op; the previously carried offset is
-  still in the record, so nothing is lost. Drop the call or reorder.
 - **Oversized or unparseable requests get a TCP reset, not a status.**
   `read_request` returns `None` for a head over `REQUEST_BUF`, a body
   over `BODY_MAX` or a bad request line, and the socket is closed with
@@ -1924,6 +1893,68 @@ ringing, holding the reset` and the panel must keep flashing and
 sounding until a press or five minutes, then `heal: ... self-heal reset`
 and the reboot with no second ring. Then the plain case: an undismissed
 alarm must stop on its own after five minutes.
+
+### Carry the time across a reset as plain Unix time (after the ring hold) — built, not yet verified on the panel
+
+**Problem.** The user saw the clock jump back nine minutes after a
+self-heal. The carried time was Unix time minus
+`Rtc::time_since_power_up`, and esp-hal converts the RTC tick count to
+microseconds with a slow-clock period it measures afresh at every boot
+(`esp_hal::init` → `calibrate_rtc_slow_clock`, 16 cycles of the
+~136 kHz RC oscillator, kept in `STORE1`). The offset was written with
+the old period and read back with the new one on the whole count since
+power-up, so the error was `ticks_since_power_up × (P_new − P_old)`:
+0.3 % after two days is nine minutes, either sign. The 2026-10-22
+check ran at minutes of uptime, where it is under a second. NTP
+corrected it seconds after Wi-Fi returned, but the alarm logic saw the
+wrong time meanwhile (a ring twice or not at all around the step, a
+wrong `unix` in the handled-window test). This was the first item of
+the second-pass backlog.
+
+**Design.** The user chose the simpler of two fixes. The raw tick count
+could be carried and only the ticks of the reboot converted (exact to
+milliseconds, three PAC register reads, since esp-hal's raw read is
+`pub(crate)`); instead the record carries plain Unix microseconds and
+nothing measures the reset. Error per reset is the bootloader's share
+of the uptime at restore, well under a second, and repeated heals with
+no NTP to correct them are not a scenario the user cares about.
+
+- `carry::Carried.time_offset_us` becomes `unix_us`, same two words.
+  The mark is now `"CAR" + layout version` (`0x4341_5202`): a record
+  from the version-1 layout, left by `ota::reboot` on the firmware
+  before this one, is discarded as if the mark were missing, so the
+  offset cannot be read as a time. That one update therefore boots
+  with `ota_boots` 0 and is not covered by the boot-count rollback, and
+  loses the skip flag and the handled alarm once. This is half of the
+  "mark but no layout" backlog item; the item stays for the word count.
+- `clock::carry_time` writes `unix_us`; `clock::restore_carried` sets
+  the offset to the carried time plus `clock::RESET_PAUSE` (200 ms), so
+  the carried time is taken as the time at uptime zero less the pause
+  every deliberate reset makes for its last log line. `heal::reset`,
+  `ota::reboot` and the rollback in `ota::init` all wait exactly that
+  constant. `clock::init` and the `Rtc` are gone; the rollback path's
+  `carry_time`, a no-op before because it ran ahead of `clock::init`,
+  now works, which strikes that backlog item.
+- The display loop calls `carry_time` at the top of every iteration,
+  at least once a second in clock mode, instead of the minute heartbeat.
+  A panic reset is therefore at most a second plus the reboot stale,
+  and the time learned from NTP is in the record within a second of the
+  sync, which strikes the "not carried until the next heartbeat" item.
+  The write is nine words of RTC RAM.
+
+Checked on the host: builds, clippy clean. The record codec is unchanged
+apart from the mark value and the field's meaning, so the 2026-10-22
+scratch-crate round-trip still applies with the new mark.
+
+**Verify.** Flash over USB (the carry is discarded on that reset
+anyway), let it sync, leave it an hour or more, then force a heal (pull
+the uplink, or block the clock at the AP); the boot line must read
+`carried over Carried { …, unix_us: Some(…) }` and
+`clock: time carried over the reset, local time HH:MM:SS` within a
+second of the wall clock, and the first `ntp:` line after it must not
+move the display. For the one OTA from the previous firmware, expect
+`RTC carry-over discarded` on the `CoreSw` boot and no `ota: image …
+boot 1 of 2` line; later OTAs carry as before.
 
 ### M10 — Wi-Fi provisioning from an access point — planned
 

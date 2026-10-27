@@ -24,7 +24,7 @@ use critical_section::Mutex as CsMutex;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::mutex::Mutex;
 use embassy_sync::signal::Signal;
-use embassy_time::{Duration, Instant, Timer};
+use embassy_time::{Instant, Timer};
 use embedded_io_async::Read;
 use esp_bootloader_esp_idf::ota_updater::OtaUpdater;
 use esp_bootloader_esp_idf::partitions::{self, AppPartitionSubType, PARTITION_TABLE_MAX_LEN, PartitionType};
@@ -289,7 +289,7 @@ pub fn init() {
                 Ok(()) => {
                     carry::update(|c| c.ota_boots = 0);
                     clock::carry_time();
-                    esp_hal::delay::Delay::new().delay_millis(200);
+                    esp_hal::delay::Delay::new().delay_millis(clock::RESET_PAUSE.as_millis() as u32);
                     esp_hal::system::software_reset()
                 }
                 Err(e) => error!("ota: rollback failed: {e:?}; staying on this image"),
@@ -516,6 +516,6 @@ pub async fn reboot() -> ! {
     carry::update(|c| c.ota_boots = 1);
     clock::carry_time();
     info!("ota: rebooting into the new image");
-    Timer::after(Duration::from_millis(200)).await;
+    Timer::after(clock::RESET_PAUSE).await;
     esp_hal::system::software_reset()
 }

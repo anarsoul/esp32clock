@@ -1,5 +1,5 @@
 //! State carried across a software reset in RTC fast RAM: the self-heal
-//! count and time, the wall clock as an offset from the RTC timer, the
+//! count and time, the wall clock as the Unix time last written, the
 //! volatile alarm state a reboot would otherwise lose (the skip-next
 //! flag, and which alarm was last handled so the missed-alarm grace does
 //! not ring it again), and how many times a freshly installed firmware
@@ -14,13 +14,17 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use esp_hal::rtc_cntl::SocResetReason;
 
-/// Marks a record written by this firmware; a second guard behind the
-/// reset reason, against a reset that skipped the persistent-RAM zeroing.
-const MARK: u32 = 0x4341_5252; // "CARR"
+/// Marks a record written by this firmware with this layout; a second
+/// guard behind the reset reason, against a reset that skipped the
+/// persistent-RAM zeroing. The low byte is the layout version: an
+/// `ota::reboot` from a firmware with another layout leaves a record
+/// this one must not read, and the mismatch discards it, one time.
+/// Version 1 ("CARR") held an RTC-timer offset in words 6 and 7.
+const MARK: u32 = 0x4341_5200 | LAYOUT; // "CAR" + version
+const LAYOUT: u32 = 2;
 
 /// `[mark, heals, last heal unix, skip, handled unix, handled minute,
-/// time offset low, time offset high, ota boots]`. A zero time or offset
-/// means none.
+/// unix us low, unix us high, ota boots]`. A zero time means none.
 const WORDS: usize = 9;
 
 #[esp_hal::ram(unstable(rtc_fast, persistent))]
@@ -41,10 +45,10 @@ pub struct Carried {
     /// The alarm last rung and ended, or used up by the skip flag: the Unix
     /// time that happened and the alarm's minute of the day.
     pub handled: Option<(i64, u16)>,
-    /// Unix microseconds minus RTC-timer microseconds when last written;
-    /// the RTC timer runs through a software reset, so this gives the
-    /// time back at boot. See `clock::restore_carried`.
-    pub time_offset_us: Option<i64>,
+    /// Unix microseconds when the record was last written, from the
+    /// display tick every second and from a deliberate reset just before
+    /// it fires. See `clock::restore_carried`.
+    pub unix_us: Option<i64>,
     /// Boots of an updated firmware that has not yet been confirmed good;
     /// zero when nothing is pending. See `ota::check_rollback`.
     pub ota_boots: u32,
@@ -70,9 +74,9 @@ fn decode(v: [u32; WORDS]) -> Carried {
         last_heal_unix: (v[2] != 0).then_some(v[2] as i64),
         skip_next: v[3] != 0,
         handled: (v[4] != 0).then_some((v[4] as i64, v[5] as u16)),
-        time_offset_us: {
-            let offset = (v[6] as u64 | (v[7] as u64) << 32) as i64;
-            (offset != 0).then_some(offset)
+        unix_us: {
+            let us = (v[6] as u64 | (v[7] as u64) << 32) as i64;
+            (us != 0).then_some(us)
         },
         ota_boots: v[8],
     }
@@ -88,8 +92,8 @@ fn encode(c: &Carried) -> [u32; WORDS] {
         c.skip_next as u32,
         handled_at as u32,
         handled_minute as u32,
-        c.time_offset_us.unwrap_or(0) as u64 as u32,
-        (c.time_offset_us.unwrap_or(0) as u64 >> 32) as u32,
+        c.unix_us.unwrap_or(0) as u64 as u32,
+        (c.unix_us.unwrap_or(0) as u64 >> 32) as u32,
         c.ota_boots,
     ]
 }
