@@ -12,7 +12,9 @@
 //!
 //! Nothing sounds on its own. The task plays a melody on command, on a
 //! loop for the alarm or once for a preview, and stops within a note when
-//! told to.
+//! told to. A command naming `melody::RANDOM` is resolved here, from the
+//! hardware RNG, so the setting passes through the display and the page
+//! handler unchanged and the log says which tune was drawn.
 
 use embassy_futures::select::{Either, select};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
@@ -23,6 +25,7 @@ use esp_hal::ledc::channel::{self, ChannelIFace};
 use esp_hal::ledc::timer::{self, TimerIFace};
 use esp_hal::ledc::{Ledc, LowSpeed};
 use esp_hal::peripherals::GPIO5;
+use esp_hal::rng::Rng;
 use esp_hal::time::Rate;
 use log::{info, warn};
 
@@ -30,7 +33,8 @@ use crate::melody::{self, Melody};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Command {
-    /// Play this melody, index into `melody::MELODIES`, until stopped.
+    /// Play this melody, index into `melody::MELODIES` or
+    /// `melody::RANDOM`, until stopped.
     Ring(usize),
     /// Play it once.
     Preview(usize),
@@ -41,12 +45,12 @@ enum Command {
 /// stop after a ring is a stop.
 static COMMAND: Signal<CriticalSectionRawMutex, Command> = Signal::new();
 
-/// Ring the alarm with this melody until `stop`.
+/// Ring the alarm with this melody, or a random tune, until `stop`.
 pub fn ring(melody: usize) {
     COMMAND.signal(Command::Ring(melody));
 }
 
-/// Play this melody once.
+/// Play this melody, or a random tune, once.
 pub fn preview(melody: usize) {
     COMMAND.signal(Command::Preview(melody));
 }
@@ -57,7 +61,21 @@ pub fn stop() {
 }
 
 const SILENT_PCT: u8 = 100;
-const TONE_PCT: u8 = 50;
+
+/// The melody a command names: `melody::RANDOM` becomes a tune drawn
+/// from the hardware RNG, never the one drawn last, and `last` remembers
+/// it. Logs the choice as `what`.
+fn resolve(index: usize, last: &mut Option<usize>, what: &str) -> &'static Melody {
+    let picked = melody::pick(index, Rng::new().random(), *last);
+    let m = melody::get(picked);
+    if index == melody::RANDOM {
+        *last = Some(picked);
+        info!("buzzer: {what} {} (random)", m.name);
+    } else {
+        info!("buzzer: {what} {}", m.name);
+    }
+    m
+}
 
 /// Play `m` once. Returns early with the interrupting command if one
 /// arrives, checked after every note.
@@ -90,21 +108,20 @@ pub async fn buzzer_task(ledc: Ledc<'static>, pin: GPIO5<'static>) -> ! {
     let mut pin = pin;
     ledc.set_global_slow_clock(esp_hal::ledc::LSGlobalClkSource::APBClk);
 
+    let mut last_random = None;
     let mut command = COMMAND.wait().await;
     loop {
         command = match command {
             Command::Stop => COMMAND.wait().await,
             Command::Preview(i) => {
-                let m = melody::get(i);
-                info!("buzzer: preview {}", m.name);
+                let m = resolve(i, &mut last_random, "preview");
                 match play_once(&ledc, &mut pin, m).await {
                     Some(c) => c,
                     None => COMMAND.wait().await,
                 }
             }
             Command::Ring(i) => {
-                let m = melody::get(i);
-                info!("buzzer: ring {}", m.name);
+                let m = resolve(i, &mut last_random, "ring");
                 loop {
                     if let Some(c) = play_once(&ledc, &mut pin, m).await {
                         break c;
@@ -131,7 +148,8 @@ impl Drop for Sounding<'_> {
     }
 }
 
-/// Sound one tone, then release the line. Cancel-safe through `Sounding`.
+/// Sound one tone at the duty `melody::duty_pct` gives its pitch, then
+/// release the line. Cancel-safe through `Sounding`.
 async fn tone(ledc: &Ledc<'static>, pin: &mut GPIO5<'static>, freq_hz: u32, ms: u64) {
     let mut pwm_timer = ledc.timer::<LowSpeed>(timer::Number::Timer0);
     if let Err(e) = pwm_timer.configure(timer::config::Config {
@@ -159,7 +177,7 @@ async fn tone(ledc: &Ledc<'static>, pin: &mut GPIO5<'static>, freq_hz: u32, ms: 
     }
 
     let sounding = Sounding(channel);
-    let _ = sounding.0.set_duty(TONE_PCT);
+    let _ = sounding.0.set_duty(melody::duty_pct(freq_hz));
     Timer::after(Duration::from_millis(ms)).await;
     drop(sounding);
 }

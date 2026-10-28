@@ -140,7 +140,7 @@ pub struct Settings {
     pub hostname: Hostname,
     /// Days the alarm rings on: bit 0 Monday to bit 6 Sunday.
     pub alarm_days: u8,
-    /// Index into `melody::MELODIES`.
+    /// Index into `melody::MELODIES`, or `melody::RANDOM`.
     pub melody: usize,
     /// Skip the next alarm that would ring, then clear. Not stored: a
     /// reboot clears it, and `to_record` leaves it out so toggling it
@@ -164,6 +164,10 @@ const RECORD_ALARM_DAYS: usize = 34;
 
 /// Where the melody index sits in a version 5 record.
 const RECORD_MELODY: usize = 35;
+
+/// The melody byte for `melody::RANDOM`: out of any table's reach, so a
+/// tune added later does not change what a stored record means.
+const RECORD_MELODY_RANDOM: u8 = 0xff;
 
 /// Day names, Monday first, for the page and the API.
 pub const DAY_NAMES: [&str; 7] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
@@ -215,7 +219,7 @@ impl Settings {
             && (-TZ_LIMIT_MINUTES..=TZ_LIMIT_MINUTES).contains(&self.tz_offset_minutes)
             && self.alarm_days != 0
             && self.alarm_days & !DAYS_ALL == 0
-            && self.melody < melody::MELODIES.len()
+            && self.melody <= melody::RANDOM
     }
 
     /// Whether the alarm rings on `weekday` (0 Monday to 6 Sunday).
@@ -225,7 +229,8 @@ impl Settings {
 
     /// The flash record: version, colour, brightness, alarm hour, alarm
     /// minute, armed, twelve-hour, timezone offset as little-endian i16,
-    /// hostname length, hostname padded to 24 bytes, alarm days, melody.
+    /// hostname length, hostname padded to 24 bytes, alarm days, melody
+    /// (`0xff` for random).
     pub fn to_record(&self) -> [u8; RECORD_LEN] {
         let tz = self.tz_offset_minutes.to_le_bytes();
         let mut r = [0u8; RECORD_LEN];
@@ -243,7 +248,7 @@ impl Settings {
         r[RECORD_HOSTNAME_LEN] = self.hostname.len;
         r[RECORD_HOSTNAME..RECORD_HOSTNAME + HOSTNAME_MAX].copy_from_slice(&self.hostname.bytes);
         r[RECORD_ALARM_DAYS] = self.alarm_days;
-        r[RECORD_MELODY] = self.melody as u8;
+        r[RECORD_MELODY] = if self.melody == melody::RANDOM { RECORD_MELODY_RANDOM } else { self.melody as u8 };
         r
     }
 
@@ -277,7 +282,11 @@ impl Settings {
             s.alarm_days = *r.get(RECORD_ALARM_DAYS)?;
         }
         if version >= 5 {
-            s.melody = *r.get(RECORD_MELODY)? as usize;
+            s.melody = match *r.get(RECORD_MELODY)? {
+                RECORD_MELODY_RANDOM => melody::RANDOM,
+                m if (m as usize) < melody::MELODIES.len() => m as usize,
+                _ => return None,
+            };
         }
         if version > RECORD_VERSION {
             return None;

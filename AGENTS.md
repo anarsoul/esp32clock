@@ -148,7 +148,7 @@ answered or an HTTP request served bumps it, and the third such boot
 | `src/form.rs` | key=value parsing, all-or-nothing `apply` on a copy, JSON, the HTML page with its error notice and the read-only `Status` lines, the update page with its upload script; pure logic |
 | `src/http.rs` | HTTP/1.0 server, `LISTENERS` sockets each in its own task: `GET`/`POST` on `/` and `/api`, `POST /play`, `GET /update`, `POST /ota` with the body streamed to `ota::install`, `POST /reload` with the token; a refused form redirects to `/?error=…`; per-listener state and counters for the heartbeat |
 | `src/buttons.rs` | debounced short/long press events, plus the two-button hold |
-| `src/melody.rs` | alarm tunes as pitch and length data with tempo; pure |
+| `src/melody.rs` | alarm tunes as pitch and length data with tempo; `RANDOM` and the pure `pick` that turns it into a tune; pure |
 | `src/carry.rs` | RTC-RAM record used only after a software reset (`CoreSw`/`Cpu0Sw`; anything else zeroes it at boot): self-heal count and time, the skip flag, the time the alarm last rang, the Unix time last written, boots of an unconfirmed OTA image; the mark carries a layout version |
 | `src/buzzer.rs` | LEDC PWM on an open-drain pin; plays a melody on command, looped or once, stops within a note |
 | `src/clock.rs` | Unix time = uptime + NTP offset; local time with weekday; `carry_time`/`restore_carried` move the time across a software reset as plain Unix time, written every second by the display tick; `RESET_PAUSE` for every deliberate reset |
@@ -232,7 +232,7 @@ answered or an HTTP request served bumps it, and the third such boot
 
 - `http::RESPONSE_BUF` (4096) holds the whole page plus headers, and
   overflow is a 500, not a truncation. The worst-case settings page is
-  2644 bytes with headers and the update page 2355; measure on the host
+  2833 bytes with headers and the update page 2349; measure on the host
   after adding a field or label.
 - `http::RX_BUF` (4096) is the TCP receive window; 1 KB made an upload
   one segment per round trip. `REQUEST_BUF` (1536) still bounds the

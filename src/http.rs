@@ -274,9 +274,17 @@ fn redirect_home(out: &mut Response, error: Option<FormError>) -> core::fmt::Res
 
 /// The error the page was redirected back with, from `?error=...`.
 fn error_from_query(query: &str) -> Option<FormError> {
+    match query_value(query, "error") {
+        Some("value") => Some(FormError::BadValue),
+        Some("key") => Some(FormError::UnknownKey),
+        _ => None,
+    }
+}
+
+/// The value of `key` in a query string, undecoded.
+fn query_value<'a>(query: &'a str, key: &str) -> Option<&'a str> {
     query.split('&').find_map(|pair| match pair.split_once('=') {
-        Some(("error", "value")) => Some(FormError::BadValue),
-        Some(("error", "key")) => Some(FormError::UnknownKey),
+        Some((k, v)) if k == key => Some(v),
         _ => None,
     })
 }

@@ -492,7 +492,7 @@ Keys, as `application/x-www-form-urlencoded` on both routes so that
 | `twelve_hour` | same |
 | `tz` | minutes east of UTC, −840 to 840 |
 | `hostname` | 1 to 24 of `a-z`, `0-9`, `-`; sent to the DHCP server |
-| `melody` | alarm sound: `beeps`, `twinkle`, `ode`, `frere` (M8) |
+| `melody` | alarm sound: `beeps`, `twinkle`, `ode`, `frere` (M8), `morning`, `westminster`, `reveille`, `elise`, `jingle`, or `random` for a different tune each time |
 
 Changes go through `settings::update`, so the display redraws and the
 persist task writes exactly as for a button press.
@@ -2187,6 +2187,202 @@ monitor resets the board when it connects:
   scheme it replaced, so the hour-long soak is a formality still owed.
 - The rollback count cannot be tested this way: serving the reload
   request confirms the image before the reset.
+
+### More tunes, and a random pick (after `/reload`) — random verified on the bench 2026-10-28; the tunes retuned after two listens, a third owed
+
+**Why.** The user asked for a few more melodies and a setting that
+picks one at random for the alarm.
+
+**Design.**
+
+- **Five more tunes in `melody.rs`**, all public domain, written from
+  memory of the standard versions and kept in G like the first three so
+  they sit between D5 and E6, clear of the buzzer's resonance:
+  - `morning`, Morning Mood from Grieg's Peer Gynt (1875): the first
+    four bars of the pentatonic theme and the held note that follows,
+    in 6/8 at 90 bpm. The one tune made for waking up.
+  - `westminster`, the Westminster Quarters: the four changes of the
+    hour sequence, each four notes and a pause, at 72 bpm. The clock
+    chime; the lowest note is D5.
+  - `reveille`, the US bugle call's first strain, twice as it is
+    played: a pickup and three bars of the dotted figure on the bugle
+    notes (D5, G5, B5), at 120 bpm.
+  - `elise`, the opening of Beethoven's Für Elise (1810): the first
+    eight bars of the melody line with the left hand's arpeggios where
+    the right hand rests, at 100 bpm. It needs the pitches C5, E5, G#5
+    and D#6, which are added; C5 at 523 Hz is the lowest note any tune
+    uses and will be the quietest.
+  - `jingle`, the chorus of Jingle Bells (1857), both endings, at
+    120 bpm.
+  Nine melodies in all; the table order is the page order and the
+  stored index, so the new ones go after `frere`.
+- **Random is a value of the `melody` setting**, not a second field:
+  `melody::RANDOM` is the index one past the table, named `random` on
+  the API and "Random tune" on the page. The buzzer task resolves it
+  when a `Ring` or a `Preview` arrives, from the hardware RNG, so the
+  display and the `/play` handler pass the setting through unchanged
+  and the log line `buzzer: ring <name> (random)` says what was
+  drawn. `melody::pick` is the pure part: a fixed index is itself;
+  `RANDOM` is one of the tunes, every melody but the beeps at index 0,
+  since the beeps are the plain alarm and "random tune" promises a
+  tune; and it is never the one picked last when there is another,
+  so two mornings in a row do not sound the same (the last pick is a
+  local of the buzzer task, so it is forgotten at a reset, which is
+  fine).
+- **Record.** `RANDOM` is stored as `0xFF` in the melody byte at
+  offset 35, so the index of a real tune and the layout do not change
+  and `RECORD_VERSION` stays at 5. A record from this build holding
+  `0xFF` or an index from 4 up fails `is_valid` on the M8 image and
+  that image falls back to the defaults; that is the second-pass
+  backlog item on clamping `color` and `melody`, not new here, and it
+  only bites on a rollback to an older image.
+- **Page and API.** The select gets the five tunes and "Random tune"
+  as its last option; `melody=random` on the API, `"melody":"random"`
+  back. `POST /play` with Random chosen previews a random tune, so
+  the button still answers.
+
+**Checked on the host** (scratch crate with `form.rs`, `settings.rs`,
+`melody.rs`, `panel.rs`, `aip33628.rs` and `config.rs` by `#[path]`):
+every note of every tune has a length and every tone sounds; the
+tunes run 9.0 s (`morning`, E5 to D6, shortest tone 292 ms), 19.2 s
+(`westminster`, D5 to B5, 773 ms), 8.2 s (`reveille`, D5 to B5, the
+sixteenth sounds 110 ms), 7.5 s (`elise`, C5 to E6, 132 ms) and 32.0 s
+(`jingle`, G5 to D6, 219 ms); every name round-trips through
+`index_of`, `random` is index 9 and `9` is not a name; `pick` returns a
+fixed index as is, and for `RANDOM` over a thousand draws reaches every
+tune, never the beeps, never the avoided one, and wraps from the last
+tune to the first; a record with `RANDOM` stores `0xff` and loads back,
+each tune's index stores as itself, a raw 9 or `0xfe` in the byte is
+refused, and a version 4 record still loads with the beeps;
+`melody=random` and `melody=westminster` apply, `melody=9` is a bad
+value; the JSON says `"melody":"random"`; the worst-case settings page
+(24-byte hostname, −840, every checkbox on, an odd day list, Random
+selected, the error notice, a 400-day uptime with the fullest heal
+line) is 2730 bytes, 2833 with headers, of the 4096 buffer; the update
+page is 2349 with headers.
+
+**Verify on the panel.** On the page, each new tune plays once from
+"Play" and is recognisable; "Random tune" plays a tune, and pressing
+"Play" again plays a different one. Save with "Random tune" and reload
+the page: it stays selected, `/api` says `"melody":"random"`, and the
+boot line after `scripts/reload.sh` prints `melody: 9`. Set the alarm
+a minute ahead with Random: it rings a tune and the log says
+`buzzer: ring <name> (random)`. `curl -d melody=westminster
+http://<ip>/api` echoes it; `melody=random` too; `melody=9` is a 400.
+
+**Result (2026-10-28, bench board over the air, then the serial
+monitor).** The page lists the nine sounds and "Random tune" in order;
+each of the ten names posted to `/api` is echoed back, `melody=9` and
+`melody=jingle+bells` are `400`. With `random` saved, `scripts/reload.sh`
+brought it back from flash (`"melody":"random"` before and after) and
+the boot line after the monitor's USB reset read `melody: 9` from the
+record. Six `POST /play` with `melody=random`, four seconds apart, drew
+`morning`, `elise`, `jingle`, `reveille`, `frere`, `twinkle`, each
+logged as `buzzer: preview <name> (random)`: six different tunes, never
+the beeps. The five new tunes previewed by name each logged without the
+suffix. The alarm armed a minute ahead with Random rang at 14:26:00
+with `buzzer: ring westminster (random)`, a tune other than the last
+pick. Not checked: how the tunes sound, which needs an ear at the
+bench; they are transcribed from memory and Reveille's rhythm is the
+least certain. The board was left as found: alarm 14:17 armed, beeps.
+
+**First listen (2026-10-28, the user at the bench).** Morning Mood
+did not sound right and its fourth note rang out; the Westminster
+Quarters rang out on a note of each change; Reveille rang out on its
+first note; Für Elise rang out somewhere, less badly; Jingle Bells was
+too slow. The loud notes are exactly the pitches below G5 the new
+tunes introduced: E5 (Morning Mood's fourth note), D5 (the held note
+of the chime, Reveille's pickup) and C5 and E5 (the Für Elise
+arpeggios, sixteenths, so less of it). A 50 % square wave carries a
+third harmonic a third as strong as the fundamental, and for C5 to F5
+it lands between 1.6 and 2.1 kHz, where G6 (1568 Hz) and A6 already
+rang out in M8: the buzzer's resonance, reached from below. Two
+changes, both still to be heard:
+
+- The three tunes that could move were transposed so their lowest
+  note is G5: Morning Mood to B flat (G5, Bb5, C6, D6, F6; a new
+  `AS5`), the Westminster Quarters and Reveille to C (G5, C6, D6, E6).
+  Morning Mood is also slowed from 90 to 75 bpm (an eighth 400 ms, a
+  dotted quarter 50 to the minute, nearer the recordings), since the
+  pace may be part of what sounded wrong; the notes are the pentatonic
+  theme as remembered (mi re do la do re, twice; mi re mi sol re sol;
+  mi re do la do re; mi), and if it still sounds wrong the notes are
+  the next suspect. Jingle Bells goes from 120 to 160 bpm, 24 s a
+  pass.
+- Für Elise cannot go up (its phrase sits on E6) and keeps C5 and E5,
+  as Frère Jacques keeps its D5, so the buzzer now takes its duty from
+  the pitch: `melody::duty_pct` gives 33 % below 700 Hz and 50 %
+  above. A one-third duty cycle has no third harmonic at all and keeps
+  87 % of the fundamental, which is the per-pitch duty table M8 held
+  in reserve, reduced to one threshold. If the low notes still ring
+  out, the resonance is not the harmonic but something near 600 Hz
+  (the case, say), and the answer is a lower duty for those pitches
+  or dropping the arpeggios' low notes.
+
+Uploaded to the bench board at 15:07; the host harness checked the
+ranges (every tune G5 to F6 except Frère and Für Elise, the only two
+with a note below 700 Hz) and the lengths (Morning Mood 10.8 s, Jingle
+Bells 24.0 s). To hear: "Play" on each of the five, listening for an
+even loudness across the notes, Morning Mood's tune and pace, and
+Jingle Bells' pace.
+
+**Second listen (2026-10-28).** The Westminster Quarters, Reveille
+and Jingle Bells are fine now, which bears out the third-harmonic
+reading for D5 and E5. Morning Mood had wrong notes: the user supplied
+a score (`morning-mood-notes.png`, an arrangement in C, 3/4 with the
+6/8 eighths as quarters), which reads G E D | C D E | G E D | C D-E
+D-E | G E G | A E A | G E D | C held: sol mi re do re mi, the second
+time with a turn of sixteenths, then sol mi sol la mi la, sol mi re,
+do (the held note was first misread as E and corrected by the user).
+The first cut's figure (mi re do la do re) had the leap at the
+wrong end, a third too low throughout. Rewritten from the score, in G
+(G5, A5, B5, D6, E6; `AS5` and the B flat key go), 75 bpm, 9.6 s.
+Für Elise rang out on its long notes, the A5, B5 and C6 eighths and
+the final A5, pitches that are fine in every other tune, so the drive
+is not the difference; the tune was fast (a sixteenth 150 ms, 132
+sounding, blips next to 263 ms eighths). Slowed from 100 to 75 bpm:
+a sixteenth 200 ms, five notes a second, the usual pace, 10 s a pass.
+If the long notes still stand out, the next step is dropping the
+arpeggios so there is nothing quiet to contrast with. Uploaded to the
+bench at 15:20.
+
+**Third listen (2026-10-28).** Morning Mood's held note was C in the
+score, not E; fixed. The D (D6, 1175 Hz) of Morning Mood rings
+weakly; Twinkle holds the same D6, so it is the pitch. Either the
+fundamental is on the lower slope of the resonance (G6 at 1568 Hz
+rang out in M8), which no duty can help, or the transistor's slow
+turn-off stretches the low, sounding, phase past 50 % and lets a
+second harmonic through at 2350 Hz, which one global correction
+would fix for every pitch. The user chose to try the correction by
+ear, so the buzzer's square wave high time is now a runtime value,
+`melody::SQUARE_PCT` (50) until `POST /play?duty=NN` (first 40 to
+60, then 25 to 75 at the user's request) moved it; the one-third
+duty of the low pitches shifted by the same amount. Result: 50 is
+the cleanest; below 45 and above 55 every note sounds dirtier, which
+is the second harmonic a duty off 50 brings in. So the turn-off is
+not stretching the pulse, the D is its fundamental on the resonance
+slope, firmware cannot help it, and the hook is removed again (the
+`query_value` helper it needed stays, `error_from_query` now uses
+it). Final image on the bench at 15:30. What is left is acoustic: a
+filter before the buzzer can only take harmonics out, not the
+fundamental, and the one that would help the D would take the top
+notes with it; damping the buzzer's port lowers the resonance's Q
+and is the thing to try if the D matters.
+
+**Acoustic fix (2026-10-28, the user at the bench).** Masking tape
+across the buzzer's sound port made it louder, not softer: tape is
+airtight, so it seals the cavity and becomes a membrane with a
+resonance of its own rather than damping anything. Tape with a small
+hole pricked in it is what the user kept: a sealed cavity with a tiny
+port is a Helmholtz resonator tuned low, under the tunes, and it
+lifts the fundamentals without touching the harmonics, so the notes
+come through better at about the same loudness. The hole's size sets
+where the lift sits (bigger is higher). Porous damping, felt or
+cotton over the port, was the textbook answer and was not needed.
+With the tape on, the one-third duty for the low pitches was compared
+with the square wave through a second temporary hook
+(`POST /play?low=NN`, Für Elise and Frère Jacques): little difference
+to the ear now, so 33 % stays and the hook was dropped uncommitted.
 
 ### M10 — Wi-Fi provisioning from an access point — planned
 

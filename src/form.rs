@@ -223,7 +223,7 @@ pub fn write_json(out: &mut impl core::fmt::Write, s: &Settings, st: &Status) ->
         out,
         "\",\"skip\":{},\"melody\":\"{}\",\"twelve_hour\":{},\"tz\":{},\"hostname\":\"{}\",\"version\":\"{}\",\"slot\":\"{}\",\"uptime\":{},\"heals\":{},\"last_heal\":",
         s.skip_next,
-        melody::get(s.melody).name,
+        melody::name(s.melody),
         s.twelve_hour,
         s.tz_offset_minutes,
         s.hostname.as_str(),
@@ -332,6 +332,12 @@ pub fn write_page(
     for (i, m) in melody::MELODIES.iter().enumerate() {
         write!(out, "<option value={}{}>{}</option>", m.name, if i == s.melody { " selected" } else { "" }, m.label)?;
     }
+    write!(
+        out,
+        "<option value={}{}>Random tune</option>",
+        melody::RANDOM_NAME,
+        if s.melody == melody::RANDOM { " selected" } else { "" }
+    )?;
     writeln!(
         out,
         "</select></label><label>Alarm <input type=time name=alarm value={:02}:{:02}></label>\
