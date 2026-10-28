@@ -24,7 +24,7 @@ use critical_section::Mutex as CsMutex;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::mutex::Mutex;
 use embassy_sync::signal::Signal;
-use embassy_time::{Instant, Timer};
+use embassy_time::Instant;
 use embedded_io_async::Read;
 use esp_bootloader_esp_idf::ota_updater::OtaUpdater;
 use esp_bootloader_esp_idf::partitions::{self, AppPartitionSubType, PARTITION_TABLE_MAX_LEN, PartitionType};
@@ -35,7 +35,7 @@ use static_cell::StaticCell;
 
 use crate::config::{OTA_BOOT_LIMIT, OTA_TOKEN, OTA_TOKEN_MIN};
 use crate::storage::with_flash;
-use crate::{carry, clock, scan};
+use crate::{carry, clock, heal, scan};
 
 /// What this build calls itself: `git describe --always --dirty` from
 /// `build.rs`, also in the image's app descriptor.
@@ -334,15 +334,24 @@ pub fn authorize(header: Option<&str>) -> Result<(), Refusal> {
     authorize_with(header, |digits| critical_section::with(|cs| PIN.borrow_ref_mut(cs).check(now_ms, digits)))
 }
 
+/// Check the header for the script's token alone; the PIN does not do.
+/// For `POST /reload`, a script's tool.
+pub fn authorize_token(header: Option<&str>) -> Result<(), Refusal> {
+    let Some(token) = header.and_then(|h| h.strip_prefix("Bearer ")) else {
+        return Err(refuse("403 Forbidden", "no token: send Authorization: Bearer <OTA_TOKEN>"));
+    };
+    if !token_enabled() {
+        return Err(refuse("403 Forbidden", "the script path is disabled: no token built in"));
+    }
+    if token_ok(token.trim().as_bytes()) { Ok(()) } else { Err(refuse("403 Forbidden", "bad token")) }
+}
+
 pub fn authorize_with(header: Option<&str>, check_pin: impl FnOnce(&str) -> Result<(), PinError>) -> Result<(), Refusal> {
     let Some(header) = header else {
         return Err(refuse("403 Forbidden", "no credentials: a PIN from the update page or the token"));
     };
-    if let Some(token) = header.strip_prefix("Bearer ") {
-        if !token_enabled() {
-            return Err(refuse("403 Forbidden", "the script path is disabled: no token built in"));
-        }
-        return if token_ok(token.trim().as_bytes()) { Ok(()) } else { Err(refuse("403 Forbidden", "bad token")) };
+    if header.starts_with("Bearer ") {
+        return authorize_token(Some(header));
     }
     if let Some(digits) = header.strip_prefix("PIN ") {
         return match check_pin(digits.trim()) {
@@ -510,12 +519,9 @@ fn version_from(field: &[u8]) -> heapless::String<32> {
 }
 
 /// Reboot into the new image: the time goes across as for a self-heal
-/// and the carry record notes one boot of an unconfirmed image. The scan
-/// is already stopped, so no transfer is in flight.
+/// and the carry record notes one boot of an unconfirmed image.
 pub async fn reboot() -> ! {
     carry::update(|c| c.ota_boots = 1);
-    clock::carry_time();
     info!("ota: rebooting into the new image");
-    Timer::after(clock::RESET_PAUSE).await;
-    esp_hal::system::software_reset()
+    heal::reboot().await
 }

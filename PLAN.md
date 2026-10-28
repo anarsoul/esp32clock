@@ -1403,12 +1403,13 @@ Gaps:
   unsaved settings live only in RAM until something else changes. Fix:
   re-arm the settle timer on an error.
 - **A reset inside the settle window loses the last change.** Changes
-  reach flash two seconds after the last one; `heal::reset` and
-  `ota::reboot` carry the time and alarm state but not the settings, so
-  a colour or arming change made just before the probe budget fires is
-  gone after the reboot with no indication. Fix: have the two reset
-  paths flush the persist task (or save synchronously through
-  `with_flash` after `scan::stop`).
+  reach flash two seconds after the last one; `heal::reboot` carries
+  the time and alarm state but not the settings, so a colour or arming
+  change made just before the probe budget fires is gone after the
+  reboot with no indication. Reproduced 2026-10-28: `POST /api
+  color=green` then `scripts/reload.sh` at once comes back with the
+  old colour. Fix: have `heal::reboot` flush the persist task (or save
+  synchronously through `with_flash` after `scan::stop`).
 - **The upload does not check the chip id.** The first sector is checked
   for the image magic, the descriptor magic and the hash flag, not for
   the ESP32-C3 id at bytes 12–13 of the extended header. An image built
@@ -1969,7 +1970,7 @@ sounding until a press or five minutes, then `heal: ... self-heal reset`
 and the reboot with no second ring. Then the plain case: an undismissed
 alarm must stop on its own after five minutes.
 
-### Carry the time across a reset as plain Unix time (after the ring hold) — built, not yet verified on the panel
+### Carry the time across a reset as plain Unix time (after the ring hold) — verified on the bench 2026-10-28 at short uptime (five software resets, serial log); the hour-long soak still owed
 
 **Problem.** The user saw the clock jump back nine minutes after a
 self-heal. The carried time was Unix time minus
@@ -2031,7 +2032,7 @@ move the display. For the one OTA from the previous firmware, expect
 `RTC carry-over discarded` on the `CoreSw` boot and no `ota: image …
 boot 1 of 2` line; later OTAs carry as before.
 
-### Three simplifications from the third review pass (after the carry) — built, not yet verified on the panel
+### Three simplifications from the third review pass (after the carry) — DONE, verified on the bench 2026-10-28 (serial log and curl; the panel and buttons not watched)
 
 Three items of the third-pass backlog, chosen by the user. The first
 two change no behaviour; the third changes the carry layout and one
@@ -2103,6 +2104,89 @@ must show `last_alarm_unix: Some(…)` and the alarm must not ring
 again. Then arm it again a minute ahead and pull power during the
 ring; after the reboot and sync it must ring (grace), and the serial
 log must not show the "skip-next" or a stale `last_alarm_unix`.
+
+**Result (2026-10-28, bench board over USB, commit 4d2dcbe).** The
+parser: `GET /`, `/api`, `/?error=value` (notice shown), `/api?x=1`,
+`/update` (PIN logged), `/nope` (404); `POST /api` with a good key
+(200, JSON), a bad key (400), `POST /` with a bad value (303 to
+`/?error=value`) and the full form (303 to `/`); `POST /ota` with a
+wrong token (403 "bad token"), no header (403) and the logged PIN with
+a ten-byte body (400 "body too short"), so the `Authorization` value
+and the upload path are parsed as before; a `PUT` closes the socket.
+The alarm: armed two minutes ahead with the skip flag, it was used up
+at 13:39:00 with no ring; an OTA of the same image thirty seconds
+later (a `CoreSw` reset) booted with `last_alarm_unix:
+Some(1793219940)`, the display logged it as carried, the time came
+over at 13:39:30 and NTP moved it by nothing visible, and nothing
+rang. Armed again two minutes ahead and uploaded during the ring, the
+boot carried `last_alarm_unix: None` and rang again 352 ms after
+boot, from the carried time, before the link was up. Not driven:
+the IP display, alarm-set and the PIN timeouts, which need the
+buttons; the one `since` timer is the same code path for all of them.
+
+### `POST /reload`: a deliberate reset on demand (after the third-pass items) — DONE, verified on the bench 2026-10-28
+
+**Why.** The carry record can only be exercised by a software reset,
+and the only ways to get one were a self-heal (pull the uplink, wait
+five minutes) or an OTA of the same image (twenty seconds of dark
+panel and a slot switch). The user asked for a request that does it.
+
+**Design.**
+
+- `POST /reload` with `Authorization: Bearer <OTA_TOKEN>`, the token
+  only: the PIN is for the page, and a reset is a script's tool. A
+  build without a token refuses it like `/ota`. The check is
+  `ota::authorize_token`, split out of `authorize_with`, which now
+  calls it for a `Bearer` header.
+- The answer is `200` with one line, then after the socket is flushed
+  the listener calls `heal::reboot`, which is the tail `heal::reset`
+  and `ota::reboot` used to carry each: `scan::stop` (a no-op when the
+  upload has stopped it already), `clock::carry_time`, the
+  `RESET_PAUSE` wait and `software_reset`. `heal::reset` keeps its hold
+  for a ringing alarm and its count; `/reload` has neither, so a reset
+  mid-ring can be tested with it. The `RESET_PAUSE` invariant now lives
+  in one function plus the synchronous rollback in `ota::init`.
+- `http::respond` and `http::upload` both return what to do after the
+  response, `Then::{Close, NewImage, Reload}`, in place of the `bool`
+  the upload returned; the listener matches on it after the flush.
+
+**Verify.** `curl -X POST -H 'Authorization: Bearer …' http://<ip>/reload`
+answers `rebooting with the time carried over`; the boot line reads
+`reset reason Some(CoreSw), software reset: carried over Carried { … }`
+with `heals` unchanged, the time is back within a second, and
+`last_heal` on the page stays as it was. Without the header, `403`.
+
+**Result (2026-10-28).** No header, a wrong token and a `PIN` header
+each answered `403` with the reason; the token answered `200` and the
+board reset at once: `reset reason Some(CoreSw), software reset:
+carried over Carried { heals: 0, …, unix_us: Some(…), ota_boots: 0 }`,
+the time back at 13:46:43 against a request at 13:46:42, NTP five
+seconds later moving nothing visible, `/api` with `heals` 0 and
+`last_heal` null. The image had been uploaded over the air a minute
+before and confirmed by the probe, which is why `ota_boots` was 0 by
+the reload.
+
+`scripts/reload.sh <ip>` wraps the request: it prints `/api` before,
+posts the reload, and polls `/api` until the clock answers again,
+about three seconds after the request on the bench. Three more
+reloads with it, at uptimes under half a minute because the serial
+monitor resets the board when it connects:
+
+- The skip flag set just before: carried (`skip_next: true` in the
+  boot line, the display's "carried over the reset" line, `skip` true
+  on `/api` after).
+- A colour change posted two seconds before the reload came back as
+  the old colour, with no `settings: saved` between: the second-pass
+  backlog item "a reset inside the settle window loses the last
+  change", now reproducible in one line.
+- Time: the request left the host at 13:50:04.687, the record carried
+  13:50:05.002 (the response, the flush and the 200 ms pause), and the
+  sync five seconds later moved nothing visible. The same held on the
+  two reloads before it. That is the carry-as-plain-Unix-time design
+  checked at short uptime; it has no uptime term, unlike the RTC
+  scheme it replaced, so the hour-long soak is a formality still owed.
+- The rollback count cannot be tested this way: serving the reload
+  request confirms the image before the reset.
 
 ### M10 — Wi-Fi provisioning from an access point — planned
 

@@ -303,12 +303,22 @@ fn status() -> Status {
     }
 }
 
+/// What the listener does once the response is out.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Then {
+    Close,
+    /// Reboot into the image just written.
+    NewImage,
+    /// Reboot as asked, with the carry record.
+    Reload,
+}
+
 /// Build the response for one request with its body in hand.
-fn respond(out: &mut Response, req: &Request<'_>, body: &[u8]) -> core::fmt::Result {
+fn respond(out: &mut Response, req: &Request<'_>, body: &[u8]) -> Result<Then, core::fmt::Error> {
     match (req.method, req.path) {
         (Method::Get, "/") => {
             status_line(out, "200 OK", "text/html; charset=utf-8")?;
-            form::write_page(out, &settings::get(), &status(), error_from_query(req.query))
+            form::write_page(out, &settings::get(), &status(), error_from_query(req.query))?;
         }
         (Method::Post, "/") => {
             // All or nothing: the form is applied to a copy and committed
@@ -323,7 +333,7 @@ fn respond(out: &mut Response, req: &Request<'_>, body: &[u8]) -> core::fmt::Res
                 }
                 Err(e) => warn!("http: form rejected: {e:?}"),
             }
-            redirect_home(out, result.err())
+            redirect_home(out, result.err())?;
         }
         (Method::Post, "/play") => {
             // Preview the sound chosen in the form without saving anything:
@@ -333,17 +343,17 @@ fn respond(out: &mut Response, req: &Request<'_>, body: &[u8]) -> core::fmt::Res
                 warn!("http: play form rejected: {e:?}");
             }
             buzzer::preview(trial.melody);
-            redirect_home(out, None)
+            redirect_home(out, None)?;
         }
         (Method::Get, "/update") => {
             // Opening the page puts a PIN on the panel; the page asks for it.
             let lockout_secs = ota::issue_pin().err();
             status_line(out, "200 OK", "text/html; charset=utf-8")?;
-            form::write_update_page(out, &status(), lockout_secs)
+            form::write_update_page(out, &status(), lockout_secs)?;
         }
         (Method::Get, "/api") => {
             status_line(out, "200 OK", "application/json")?;
-            form::write_json(out, &settings::get(), &status())
+            form::write_json(out, &settings::get(), &status())?;
         }
         (Method::Post, "/api") => {
             // Validate on a copy first so a bad pair changes nothing.
@@ -352,22 +362,41 @@ fn respond(out: &mut Response, req: &Request<'_>, body: &[u8]) -> core::fmt::Res
                 Ok(()) => {
                     settings::update(|s| *s = trial);
                     status_line(out, "200 OK", "application/json")?;
-                    form::write_json(out, &trial, &status())
+                    form::write_json(out, &trial, &status())?;
                 }
                 Err(e) => {
                     status_line(out, "400 Bad Request", "text/plain")?;
                     out.write_str(match e {
                         FormError::UnknownKey => "unknown key\n",
                         FormError::BadValue => "bad value\n",
-                    })
+                    })?;
                 }
             }
         }
+        (Method::Post, "/reload") => {
+            // A deliberate reset for testing the carry: the token, not the
+            // PIN, and no hold for a ringing alarm.
+            return match ota::authorize_token(req.authorization) {
+                Ok(()) => {
+                    warn!("http: reload requested, rebooting with the time carried over");
+                    status_line(out, "200 OK", "text/plain")?;
+                    out.write_str("rebooting with the time carried over\n")?;
+                    Ok(Then::Reload)
+                }
+                Err(e) => {
+                    warn!("http: reload refused: {}", e.text);
+                    status_line(out, e.status, "text/plain")?;
+                    writeln!(out, "{}", e.text)?;
+                    Ok(Then::Close)
+                }
+            };
+        }
         _ => {
             status_line(out, "404 Not Found", "text/plain")?;
-            out.write_str("not found\n")
+            out.write_str("not found\n")?;
         }
     }
+    Ok(Then::Close)
 }
 
 /// The socket as a body reader that counts what was taken from it, so a
@@ -417,9 +446,9 @@ async fn drain(socket: &mut TcpSocket<'_>, out: &mut Response, remaining: usize)
 /// success the caller reboots once it is sent. A refusal first takes the
 /// rest of the body off the socket, except when another upload is
 /// running and needs the air.
-async fn upload(out: &mut Response, req: &Request<'_>, socket: &mut TcpSocket<'_>) -> Result<bool, core::fmt::Error> {
+async fn upload(out: &mut Response, req: &Request<'_>, socket: &mut TcpSocket<'_>) -> Result<Then, core::fmt::Error> {
     let Body::Stream { first, total } = req.body else {
-        return Ok(false);
+        return Ok(Then::Close);
     };
     let mut body = Counting { socket, taken: 0 };
     let result = match ota::authorize(req.authorization) {
@@ -439,12 +468,12 @@ async fn upload(out: &mut Response, req: &Request<'_>, socket: &mut TcpSocket<'_
         Ok(done) => {
             status_line(out, "200 OK", "text/plain")?;
             writeln!(out, "updated: {} written to {}, {} bytes; rebooting", done.version, done.slot.name(), done.bytes)?;
-            Ok(true)
+            Ok(Then::NewImage)
         }
         Err(e) => {
             status_line(out, e.status, "text/plain")?;
             writeln!(out, "{}", e.text)?;
-            Ok(false)
+            Ok(Then::Close)
         }
     }
 }
@@ -479,18 +508,21 @@ pub async fn http_task(stack: Stack<'static>, index: usize) -> ! {
                 None
             }
         };
-        let mut reboot = false;
+        let mut then = Then::Close;
         if let Some(req) = req {
             info!("http: L{index} {:?} {}", req.method, req.path);
             let mut out = Response::new();
             let built = match req.body {
                 Body::Inline(body) => respond(&mut out, &req, body),
-                Body::Stream { .. } => upload(&mut out, &req, &mut socket).await.map(|r| reboot = r),
+                Body::Stream { .. } => upload(&mut out, &req, &mut socket).await,
             };
-            if built.is_err() {
-                warn!("http: response did not fit");
-                out = Response::new();
-                let _ = status_line(&mut out, "500 Internal Server Error", "text/plain");
+            match built {
+                Ok(t) => then = t,
+                Err(_) => {
+                    warn!("http: response did not fit");
+                    out = Response::new();
+                    let _ = status_line(&mut out, "500 Internal Server Error", "text/plain");
+                }
             }
             me.set(State::Writing);
             if let Err(e) = socket.write_all(out.as_bytes()).await {
@@ -503,8 +535,10 @@ pub async fn http_task(stack: Stack<'static>, index: usize) -> ! {
         me.set(State::Closing);
         socket.close();
         let _ = socket.flush().await;
-        if reboot {
-            ota::reboot().await;
+        match then {
+            Then::Close => {}
+            Then::NewImage => ota::reboot().await,
+            Then::Reload => heal::reboot().await,
         }
     }
 }

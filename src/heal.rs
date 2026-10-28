@@ -1,8 +1,10 @@
-//! Deliberate reset as a last resort: the panel is blanked first and the
-//! reset is counted in the record `carry` keeps across a software reset,
-//! so the boot log, the heartbeat and the page can say it happened even
-//! when nobody was watching the serial port at the time. The time goes
-//! across in the same record, so a heal does not cost the display.
+//! Deliberate resets: the panel is blanked first and the time goes
+//! across in the record `carry` keeps across a software reset, so a
+//! reset does not cost the display. A self-heal, the last resort, is
+//! also counted there, so the boot log, the heartbeat and the page can
+//! say it happened even when nobody was watching the serial port at the
+//! time; `POST /reload` and the reboot into a new image take the same
+//! path without the count.
 
 use embassy_time::{Duration, Instant, Timer};
 use log::{error, warn};
@@ -47,15 +49,22 @@ pub async fn reset(reason: core::fmt::Arguments<'_>) -> ! {
     }
     let n = count() + 1;
     error!("heal: {reason}; self-heal reset {n} since power-up: blanking the panel and rebooting");
-    scan::stop().await;
     carry::update(|c| {
         c.heals = n;
         c.last_heal_unix = clock::unix_secs();
     });
-    // The time goes over in the same record, so the panel shows it again
-    // at once; the restore adds the pause back.
+    reboot().await
+}
+
+/// Stop the scan on a blank frame, carry the time and reset. The tail of
+/// a self-heal, the whole of `POST /reload`, and the reboot into a new
+/// image, which has stopped the scan already (a second `stop` returns at
+/// once). Whatever the caller wants carried goes into the record first;
+/// the time is written here, and the restore adds the pause back.
+pub async fn reboot() -> ! {
+    scan::stop().await;
     clock::carry_time();
-    // Let the log line leave the serial port.
+    // Let the last log line leave the serial port.
     Timer::after(clock::RESET_PAUSE).await;
     esp_hal::system::software_reset()
 }

@@ -31,6 +31,7 @@ WIFI_SSID='…' WIFI_PASSWORD='…' TZ_OFFSET_MINUTES=-420 OTA_TOKEN='…' cargo
 MAX_CURRENT_STEP=8 cargo build --release   # optional: raise the drive-current ceiling (default 5)
 OTA_TOKEN='…' scripts/ota.sh <ip>      # later updates, over the LAN
 scripts/ota.sh                          # just the image file, for http://<ip>/update
+OTA_TOKEN='…' scripts/reload.sh <ip>   # software reset with the carry record, waits for the clock to come back
 ```
 
 `cargo run` flashes with espflash and opens the monitor; `.cargo/config.toml`
@@ -101,6 +102,12 @@ that grace is not rung again, while one cut off mid-ring comes back. A
 self-heal due while the alarm rings waits for the ring to end, by a press
 or its timeout, before blanking and resetting.
 
+`POST /reload` with the `Bearer` token (never the PIN) answers once and
+then resets the chip the deliberate way: panel blanked, time and alarm
+state carried, not counted as a self-heal and not held for a ringing
+alarm. It is the way to exercise the carry record from a script:
+`curl -X POST -H "Authorization: Bearer $OTA_TOKEN" http://<ip>/reload`.
+
 Firmware updates: `POST /ota` with the application image as the body
 and an `Authorization` header: `Bearer <OTA_TOKEN>` from `scripts/ota.sh`,
 or `PIN <digits>` from the `/update` page. Opening the page makes the
@@ -137,9 +144,9 @@ answered or an HTTP request served bumps it, and the third such boot
 | `src/ui.rs` | mode state machine, pure logic, one timer for the current mode; edits the settings it is handed; alarm due check and missed-alarm grace, both gated by the carried time the alarm last rang; consumes `skip_next` |
 | `src/settings.rs` | `Settings`, palette and brightness tables, `Hostname`, shared `Watch` with change signal, versioned flash record |
 | `src/storage.rs` | the one flash handle (`with_flash`), nvs partition lookup, `sequential-storage` map over it, debounced persist task that compares records, not structs |
-| `src/heal.rs` | last-resort reset: waits out a ringing alarm, blanks the panel through `scan::stop`, counts itself and the time in the `carry` record, logs, reboots |
+| `src/heal.rs` | deliberate resets: `reboot` blanks the panel through `scan::stop`, carries the time and resets, for `/reload` and the OTA reboot; `reset`, the self-heal, waits out a ringing alarm and counts itself first |
 | `src/form.rs` | key=value parsing, all-or-nothing `apply` on a copy, JSON, the HTML page with its error notice and the read-only `Status` lines, the update page with its upload script; pure logic |
-| `src/http.rs` | HTTP/1.0 server, `LISTENERS` sockets each in its own task: `GET`/`POST` on `/` and `/api`, `POST /play`, `GET /update`, `POST /ota` with the body streamed to `ota::install`; a refused form redirects to `/?error=…`; per-listener state and counters for the heartbeat |
+| `src/http.rs` | HTTP/1.0 server, `LISTENERS` sockets each in its own task: `GET`/`POST` on `/` and `/api`, `POST /play`, `GET /update`, `POST /ota` with the body streamed to `ota::install`, `POST /reload` with the token; a refused form redirects to `/?error=…`; per-listener state and counters for the heartbeat |
 | `src/buttons.rs` | debounced short/long press events, plus the two-button hold |
 | `src/melody.rs` | alarm tunes as pitch and length data with tempo; pure |
 | `src/carry.rs` | RTC-RAM record used only after a software reset (`CoreSw`/`Cpu0Sw`; anything else zeroes it at boot): self-heal count and time, the skip flag, the time the alarm last rang, the Unix time last written, boots of an unconfirmed OTA image; the mark carries a layout version |
