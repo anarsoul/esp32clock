@@ -97,7 +97,7 @@ so the panel shows the time again before Wi-Fi is up, within a second
 offset from it drifted with the uptime since power-up). An alarm missed by up to
 10 minutes across a power cut rings on the first valid time after boot;
 after a software reset the alarm last rung-and-ended or skipped within
-20 minutes is not rung again, while one cut off mid-ring comes back. A
+that grace is not rung again, while one cut off mid-ring comes back. A
 self-heal due while the alarm rings waits for the ring to end, by a press
 or its timeout, before blanking and resetting.
 
@@ -133,8 +133,8 @@ answered or an HTTP request served bumps it, and the third such boot
 | `src/aip33628.rs` | frame format, bit-reversed current table, quad-nibble waveform encoder; pure `core` |
 | `src/panel.rs` | COM/SEG map, font, per-position colour, gamma and brightness tables, `Panel::render` → `ScanImage` |
 | `src/scan.rs` | cycle/transfer builder, double-buffered DMA scan task, restart-gap statistics, `stop` on a blank frame before a deliberate reset or a flash write, `resume` after a failed one |
-| `src/display.rs` | UI loop: tick, button or settings change → `ui` → draw → publish; rings the alarm; shows the IP; seeds and records the carried alarm state |
-| `src/ui.rs` | mode state machine, pure logic; edits the settings it is handed; alarm due check, missed-alarm grace with `suppress_alarm` seed, consumes `skip_next` |
+| `src/display.rs` | UI loop: tick, button or settings change → `ui` → draw → publish; rings the alarm; shows the IP; seeds and carries the skip flag and the time the alarm last rang |
+| `src/ui.rs` | mode state machine, pure logic, one timer for the current mode; edits the settings it is handed; alarm due check and missed-alarm grace, both gated by the carried time the alarm last rang; consumes `skip_next` |
 | `src/settings.rs` | `Settings`, palette and brightness tables, `Hostname`, shared `Watch` with change signal, versioned flash record |
 | `src/storage.rs` | the one flash handle (`with_flash`), nvs partition lookup, `sequential-storage` map over it, debounced persist task that compares records, not structs |
 | `src/heal.rs` | last-resort reset: waits out a ringing alarm, blanks the panel through `scan::stop`, counts itself and the time in the `carry` record, logs, reboots |
@@ -142,7 +142,7 @@ answered or an HTTP request served bumps it, and the third such boot
 | `src/http.rs` | HTTP/1.0 server, `LISTENERS` sockets each in its own task: `GET`/`POST` on `/` and `/api`, `POST /play`, `GET /update`, `POST /ota` with the body streamed to `ota::install`; a refused form redirects to `/?error=…`; per-listener state and counters for the heartbeat |
 | `src/buttons.rs` | debounced short/long press events, plus the two-button hold |
 | `src/melody.rs` | alarm tunes as pitch and length data with tempo; pure |
-| `src/carry.rs` | RTC-RAM record used only after a software reset (`CoreSw`/`Cpu0Sw`; anything else zeroes it at boot): self-heal count and time, the skip flag, the alarm last handled, the Unix time last written, boots of an unconfirmed OTA image; the mark carries a layout version |
+| `src/carry.rs` | RTC-RAM record used only after a software reset (`CoreSw`/`Cpu0Sw`; anything else zeroes it at boot): self-heal count and time, the skip flag, the time the alarm last rang, the Unix time last written, boots of an unconfirmed OTA image; the mark carries a layout version |
 | `src/buzzer.rs` | LEDC PWM on an open-drain pin; plays a melody on command, looped or once, stops within a note |
 | `src/clock.rs` | Unix time = uptime + NTP offset; local time with weekday; `carry_time`/`restore_carried` move the time across a software reset as plain Unix time, written every second by the display tick; `RESET_PAUSE` for every deliberate reset |
 | `src/ota.rs` | firmware upload: token check, slot lookup and the boot-time rollback, sector writer with read-back, activate, reboot; `VERSION` from `build.rs` |

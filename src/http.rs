@@ -174,24 +174,17 @@ struct Request<'a> {
     body: Body<'a>,
 }
 
-/// The request line, `Content-Length` and `Authorization`, as positions
-/// in the buffer so that the borrow of the head ends before the body is
-/// read into it.
-struct Head {
+/// The request line, `Content-Length` and `Authorization`, borrowed
+/// from the head.
+struct Head<'a> {
     method: Method,
-    target_start: usize,
-    path_len: usize,
-    target_len: usize,
+    path: &'a str,
+    query: &'a str,
+    authorization: Option<&'a str>,
     content_length: usize,
-    authorization: Option<(usize, usize)>,
 }
 
-/// Position and length of `s` inside `head`.
-fn span_in(head: &str, s: &str) -> (usize, usize) {
-    (s.as_ptr() as usize - head.as_ptr() as usize, s.len())
-}
-
-fn parse_head(head: &str) -> Option<Head> {
+fn parse_head(head: &str) -> Option<Head<'_>> {
     let mut lines = head.split("\r\n");
     let request_line = lines.next()?;
     let mut words = request_line.split(' ');
@@ -201,28 +194,26 @@ fn parse_head(head: &str) -> Option<Head> {
         _ => return None,
     };
     let target = words.next()?;
-    let (target_start, target_len) = span_in(head, target);
-    let path_len = target.find('?').unwrap_or(target.len());
+    let (path, query) = target.split_once('?').unwrap_or((target, ""));
     let mut content_length = 0;
     let mut authorization = None;
     for (key, value) in lines.filter_map(|l| l.split_once(':')) {
         if key.eq_ignore_ascii_case("content-length") {
             content_length = value.trim().parse().ok()?;
         } else if key.eq_ignore_ascii_case("authorization") {
-            authorization = Some(span_in(head, value.trim()));
+            authorization = Some(value.trim());
         }
     }
-    Some(Head { method, target_start, path_len, target_len, content_length, authorization })
-}
-
-/// Whether the request is a firmware upload, whose body stays on the
-/// socket. Decided from the head alone, before the body is read.
-fn is_upload(buf: &[u8], head: &Head) -> bool {
-    head.method == Method::Post && &buf[head.target_start..head.target_start + head.path_len] == b"/ota"
+    Some(Head { method, path, query, authorization, content_length })
 }
 
 /// Read the head and the body. `None` for anything that is not a request
 /// this server answers, in which case the connection is just closed.
+///
+/// The head is parsed twice: once for the two facts that decide how the
+/// body is read (a firmware upload's body stays on the socket), so that
+/// its borrow of the buffer ends before the body is read into it, and
+/// once more afterwards, on the same bytes, for the request itself.
 async fn read_request<'a>(socket: &mut TcpSocket<'_>, buf: &'a mut [u8; REQUEST_BUF]) -> Option<Request<'a>> {
     let mut n = 0;
     let head_end = loop {
@@ -239,13 +230,15 @@ async fn read_request<'a>(socket: &mut TcpSocket<'_>, buf: &'a mut [u8; REQUEST_
         }
     };
 
-    let head = parse_head(core::str::from_utf8(&buf[..head_end]).ok()?)?;
-    let upload = is_upload(buf, &head);
+    let (upload, content_length) = {
+        let head = parse_head(core::str::from_utf8(&buf[..head_end]).ok()?)?;
+        (head.method == Method::Post && head.path == "/ota", head.content_length)
+    };
     if !upload {
-        if head.content_length > BODY_MAX || head_end + head.content_length > buf.len() {
+        if content_length > BODY_MAX || head_end + content_length > buf.len() {
             return None;
         }
-        while n < head_end + head.content_length {
+        while n < head_end + content_length {
             let got = socket.read(&mut buf[n..]).await.ok()?;
             if got == 0 {
                 return None;
@@ -255,17 +248,13 @@ async fn read_request<'a>(socket: &mut TcpSocket<'_>, buf: &'a mut [u8; REQUEST_
     }
 
     let (head_bytes, rest) = buf.split_at(head_end);
-    let field = |(start, len)| core::str::from_utf8(&head_bytes[start..start + len]).ok();
-    let target = field((head.target_start, head.target_len))?;
-    let (path, query) = target.split_at(head.path_len);
-    let query = query.strip_prefix('?').unwrap_or(query);
-    let authorization = head.authorization.and_then(field);
+    let head = parse_head(core::str::from_utf8(head_bytes).ok()?)?;
     let body = if upload {
-        Body::Stream { first: &rest[..n - head_end], total: head.content_length }
+        Body::Stream { first: &rest[..n - head_end], total: content_length }
     } else {
-        Body::Inline(&rest[..head.content_length])
+        Body::Inline(&rest[..content_length])
     };
-    Some(Request { method: head.method, path, query, authorization, body })
+    Some(Request { method: head.method, path: head.path, query: head.query, authorization: head.authorization, body })
 }
 
 fn status_line(out: &mut Response, status: &str, content_type: &str) -> core::fmt::Result {

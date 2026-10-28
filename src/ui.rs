@@ -35,18 +35,16 @@ pub const MISSED_ALARM_GRACE: u16 = 10;
 
 const MINUTES_PER_DAY: u16 = 24 * 60;
 
-/// Minutes since the alarm time last came round, if the alarm is armed
-/// on the day it came round on. Before the alarm time that day is the
-/// day before.
-fn alarm_age(settings: &Settings, t: LocalTime) -> Option<u16> {
+/// Minutes since the alarm time last came round, and the weekday that
+/// was. Before the alarm time that day is the day before.
+fn minutes_since_alarm(settings: &Settings, t: LocalTime) -> (u16, u8) {
     let minute = t.hour as u16 * 60 + t.minute as u16;
     let alarm = settings.alarm_hour as u16 * 60 + settings.alarm_minute as u16;
-    let (age, day) = if minute >= alarm {
+    if minute >= alarm {
         (minute - alarm, t.weekday)
     } else {
         (minute + MINUTES_PER_DAY - alarm, (t.weekday + 6) % 7)
-    };
-    (settings.alarm_armed && settings.alarm_on(day)).then_some(age)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -87,17 +85,17 @@ pub enum View {
 
 pub struct Ui {
     pub mode: Mode,
-    /// Last press, for the set-mode timeout.
-    last_press: Instant,
-    /// When ringing started.
-    ring_started: Instant,
-    /// When the IP display started.
-    ip_started: Instant,
-    /// The PIN being shown and when it started.
+    /// When the current mode began, or the last press in alarm-set: what
+    /// every timeout and the IP octet index count from.
+    since: Instant,
+    /// The PIN being shown.
     pin: u16,
-    pin_started: Instant,
-    /// Minute of day the alarm last fired on, so it fires once.
-    fired_minute: Option<u16>,
+    /// Unix time the alarm last rang or was used up by the skip flag.
+    /// An alarm that came round after that is still due; one that came
+    /// round before it has been dealt with, so it fires once and the
+    /// boot-time grace does not fire it again. Carried across a software
+    /// reset by the display task.
+    pub last_alarm: Option<i64>,
     /// A valid time has been seen since boot; the missed-alarm check is
     /// only made before that.
     had_time: bool,
@@ -111,24 +109,21 @@ impl Default for Ui {
 
 impl Ui {
     pub fn new() -> Self {
-        let now = Instant::now();
-        Ui {
-            mode: Mode::Clock,
-            last_press: now,
-            ring_started: now,
-            ip_started: now,
-            pin: 0,
-            pin_started: now,
-            fired_minute: None,
-            had_time: false,
-        }
+        Ui { mode: Mode::Clock, since: Instant::now(), pin: 0, last_alarm: None, had_time: false }
+    }
+
+    /// Switch mode, timing it from `now`.
+    fn enter(&mut self, mode: Mode, now: Instant) {
+        self.mode = mode;
+        self.since = now;
     }
 
     /// Feed a button event, editing `settings` as the mode dictates.
     pub fn handle(&mut self, settings: &mut Settings, ev: Event, now: Instant) {
-        self.last_press = now;
+        // A press in alarm-set restarts its timeout.
+        self.since = now;
         match self.mode {
-            Mode::Ringing | Mode::ShowIp | Mode::ShowPin => self.mode = Mode::Clock,
+            Mode::Ringing | Mode::ShowIp | Mode::ShowPin => self.enter(Mode::Clock, now),
             Mode::Clock => match (ev.button, ev.kind) {
                 (Button::Top, Kind::Short) => {
                     settings.color = (settings.color + 1) % PALETTE.len();
@@ -136,28 +131,25 @@ impl Ui {
                 (Button::Bottom, Kind::Short) => {
                     settings.brightness = (settings.brightness + 1) % BRIGHTNESS_STEPS.len();
                 }
-                (Button::Top, Kind::Long) => self.mode = Mode::SetHour,
+                (Button::Top, Kind::Long) => self.enter(Mode::SetHour, now),
                 (Button::Bottom, Kind::Long) => {
                     settings.alarm_armed = !settings.alarm_armed;
                 }
-                (Button::Both, Kind::Long) => {
-                    self.ip_started = now;
-                    self.mode = Mode::ShowIp;
-                }
+                (Button::Both, Kind::Long) => self.enter(Mode::ShowIp, now),
                 (Button::Both, Kind::Short) => {}
             },
             Mode::SetHour => match (ev.button, ev.kind) {
                 (Button::Top, Kind::Short) => {
                     settings.alarm_hour = (settings.alarm_hour + 1) % 24;
                 }
-                (Button::Bottom, Kind::Short) => self.mode = Mode::SetMinute,
+                (Button::Bottom, Kind::Short) => self.enter(Mode::SetMinute, now),
                 _ => {}
             },
             Mode::SetMinute => match (ev.button, ev.kind) {
                 (Button::Top, Kind::Short) => {
                     settings.alarm_minute = (settings.alarm_minute + 5) % 60;
                 }
-                (Button::Bottom, Kind::Short) => self.mode = Mode::Clock,
+                (Button::Bottom, Kind::Short) => self.enter(Mode::Clock, now),
                 _ => {}
             },
         }
@@ -168,68 +160,45 @@ impl Ui {
     pub fn show_pin(&mut self, pin: u16, now: Instant) {
         if matches!(self.mode, Mode::Clock | Mode::ShowIp | Mode::ShowPin) {
             self.pin = pin;
-            self.pin_started = now;
-            self.mode = Mode::ShowPin;
+            self.enter(Mode::ShowPin, now);
         }
-    }
-
-    /// Treat the alarm at this minute of the day as already handled: it
-    /// neither rings on that minute nor through the boot-time grace. Seeded
-    /// from the state carried across a software reset, so an alarm that
-    /// rang and was dismissed, or was used up by the skip flag, just before
-    /// a self-heal does not ring again after it.
-    pub fn suppress_alarm(&mut self, minute: u16) {
-        self.fired_minute = Some(minute);
     }
 
     /// Advance timeouts and the alarm trigger. `time` is `None` before the
     /// first sync. `settings` is only written to consume `skip_next`.
     pub fn tick(&mut self, settings: &mut Settings, time: Option<LocalTime>, now: Instant) {
-        match self.mode {
-            Mode::SetHour | Mode::SetMinute => {
-                if now - self.last_press >= SET_TIMEOUT {
-                    self.mode = Mode::Clock;
+        let timeout = match self.mode {
+            Mode::SetHour | Mode::SetMinute => Some(SET_TIMEOUT),
+            Mode::Ringing => Some(RING_TIMEOUT),
+            Mode::ShowIp => Some(IP_STEP * (4 * IP_ROUNDS as u32)),
+            Mode::ShowPin => Some(PIN_SHOW),
+            Mode::Clock => None,
+        };
+        match timeout {
+            Some(limit) => {
+                if now - self.since >= limit {
+                    self.enter(Mode::Clock, now);
                 }
             }
-            Mode::Ringing => {
-                if now - self.ring_started >= RING_TIMEOUT {
-                    self.mode = Mode::Clock;
-                }
-            }
-            Mode::ShowIp => {
-                if now - self.ip_started >= IP_STEP * (4 * IP_ROUNDS as u32) {
-                    self.mode = Mode::Clock;
-                }
-            }
-            Mode::ShowPin => {
-                if now - self.pin_started >= PIN_SHOW {
-                    self.mode = Mode::Clock;
-                }
-            }
-            Mode::Clock => {
+            None => {
                 if let Some(t) = time {
-                    let minute = t.hour as u16 * 60 + t.minute as u16;
-                    let alarm = settings.alarm_hour as u16 * 60 + settings.alarm_minute as u16;
+                    let (behind, day) = minutes_since_alarm(settings, t);
+                    // When the alarm last came round, as Unix time.
+                    let came_round = t.unix - behind as i64 * 60 - t.second as i64;
+                    let armed = settings.alarm_armed && settings.alarm_on(day);
+                    let handled = self.last_alarm.is_some_and(|at| at >= came_round);
                     // On the alarm minute, once. On the first valid time
                     // after boot, also shortly after it: a power cut may
                     // have eaten the alarm.
-                    let due = match alarm_age(settings, t) {
-                        Some(0) => self.fired_minute != Some(minute),
-                        Some(age) => !self.had_time && age <= MISSED_ALARM_GRACE && self.fired_minute != Some(alarm),
-                        None => false,
-                    };
+                    let due = armed && !handled && (behind == 0 || (!self.had_time && behind <= MISSED_ALARM_GRACE));
                     if due {
-                        self.fired_minute = Some(minute);
+                        self.last_alarm = Some(t.unix);
                         if settings.skip_next {
                             // A skipped alarm is used up, not postponed.
                             settings.skip_next = false;
                         } else {
-                            self.ring_started = now;
-                            self.mode = Mode::Ringing;
+                            self.enter(Mode::Ringing, now);
                         }
-                    }
-                    if minute != alarm {
-                        self.fired_minute = None;
                     }
                 }
             }
@@ -247,7 +216,7 @@ impl Ui {
         let blink = (phase_ms / 250) % 2 == 1;
         match self.mode {
             Mode::ShowIp => {
-                let elapsed = phase_ms.saturating_sub(self.ip_started.as_millis());
+                let elapsed = phase_ms.saturating_sub(self.since.as_millis());
                 View::Ip { index: (elapsed / IP_STEP.as_millis()) as usize % 4 }
             }
             Mode::ShowPin => View::Pin { pin: self.pin },

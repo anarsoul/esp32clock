@@ -61,6 +61,8 @@ pub fn restore_carried() -> bool {
 /// Local time of day.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct LocalTime {
+    /// The Unix time this is the local time of.
+    pub unix: i64,
     pub hour: u8,
     pub minute: u8,
     pub second: u8,
@@ -107,6 +109,7 @@ pub fn local_time(unix_s: i64) -> LocalTime {
     let local = unix_s + tz_minutes * 60;
     let local_s = local.rem_euclid(SECS_PER_DAY);
     LocalTime {
+        unix: unix_s,
         hour: (local_s / 3600) as u8,
         minute: (local_s % 3600 / 60) as u8,
         second: (local_s % 60) as u8,

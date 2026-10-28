@@ -116,10 +116,6 @@ fn draw(panel: &mut Panel, view: View, settings: &Settings, ip: Option<[u8; 4]>,
     }
 }
 
-/// How long after an alarm was handled a software reset still counts it
-/// as handled: the missed-alarm grace plus the ringing timeout, with room.
-const HANDLED_WINDOW_SECS: i64 = 20 * 60;
-
 /// Whether the alarm is ringing right now. Written only by the display
 /// task, on the ringing edges; read by `heal::reset`, which holds a
 /// deliberate reset off while it is set.
@@ -128,15 +124,6 @@ static RINGING: AtomicBool = AtomicBool::new(false);
 /// Is the alarm ringing?
 pub fn ringing() -> bool {
     RINGING.load(Ordering::Relaxed)
-}
-
-/// Remember, across a software reset, that today's alarm has been dealt
-/// with. Needs the time; without it there is no grace to suppress either.
-fn record_handled(s: &Settings) {
-    if let Some(unix) = clock::unix_secs() {
-        let minute = s.alarm_hour as u16 * 60 + s.alarm_minute as u16;
-        carry::update(|c| c.handled = Some((unix, minute)));
-    }
 }
 
 /// Run the UI: wait for a tick, a button or a settings change from
@@ -149,9 +136,8 @@ pub async fn display_task(stack: Stack<'static>) -> ! {
     let mut last: Option<ScanImage> = None;
     let mut was_ringing = false;
 
-    // Volatile alarm state from before a software reset. The skip flag
-    // goes straight back into the settings; the handled alarm is applied
-    // once the time is known, since it is only meaningful near it.
+    // Volatile alarm state from before a software reset: the skip flag
+    // goes straight back into the settings, the handled alarm into the UI.
     let carried = carry::get();
     let mut carried_skip = carried.skip_next;
     if carried.skip_next {
@@ -159,7 +145,11 @@ pub async fn display_task(stack: Stack<'static>) -> ! {
         let _ = changes.try_changed();
         info!("display: skip-next alarm carried over the reset");
     }
-    let mut seed_handled = carried.handled;
+    let mut carried_alarm = carried.last_alarm_unix;
+    ui.last_alarm = carried.last_alarm_unix;
+    if let Some(at) = carried.last_alarm_unix {
+        info!("display: alarm last handled at unix {at}, carried over the reset");
+    }
 
     loop {
         let now = Instant::now();
@@ -167,27 +157,28 @@ pub async fn display_task(stack: Stack<'static>) -> ! {
         // Keep the carried time fresh for a panic reset, which cannot
         // write it on the way down; this loop runs at least every second.
         clock::carry_time();
-        if let (Some((at, minute)), Some(unix)) = (seed_handled, clock::unix_secs()) {
-            seed_handled = None;
-            if unix - at <= HANDLED_WINDOW_SECS {
-                ui.suppress_alarm(minute);
-                info!("display: alarm {:02}:{:02} handled {} s before the reset, not ringing it again", minute / 60, minute % 60, unix - at);
-            }
-        }
         // The tick only writes the settings to use up a skipped alarm.
         if settings::update(|s| ui.tick(s, time, now)) {
             let _ = changes.try_changed();
-            record_handled(&settings::get());
         }
         let current = settings::get();
         if current.skip_next != carried_skip {
             carried_skip = current.skip_next;
             carry::update(|c| c.skip_next = carried_skip);
         }
+        // The handled alarm is carried once the ring has ended, by a press
+        // or the timeout, so a reset that follows within the grace does
+        // not ring it again; a reset mid-ring finds nothing carried and
+        // the grace brings the alarm back.
+        let last_alarm = if ui.ringing() { None } else { ui.last_alarm };
+        if last_alarm != carried_alarm {
+            carried_alarm = last_alarm;
+            carry::update(|c| c.last_alarm_unix = last_alarm);
+        }
 
         // The buzzer loops the melody on its own; tell it only on the edges.
         // The flag goes up before the buzzer starts and comes down after
-        // the alarm is recorded as handled, so a heal held off by the
+        // the handled alarm is carried, above, so a heal held off by the
         // ring never resets between the end of the ring and the record.
         if ui.ringing() != was_ringing {
             was_ringing = ui.ringing();
@@ -196,11 +187,6 @@ pub async fn display_task(stack: Stack<'static>) -> ! {
                 buzzer::ring(current.melody);
             } else {
                 buzzer::stop();
-                // Rung and ended, by a press or the timeout: do not ring it
-                // again should a reset follow within the grace. A reset
-                // while still ringing leaves this unset on purpose, so the
-                // grace brings the alarm back after the reboot.
-                record_handled(&current);
                 RINGING.store(false, Ordering::Relaxed);
             }
         }

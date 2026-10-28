@@ -1455,6 +1455,81 @@ Nits:
   upload is 800 KB where the image is about 680 KB; the M10 text said
   two `RECEIVERS` where there are three (fixed in place).
 
+### Review backlog, third pass (2026-10-27): more than a clock needs
+
+The brief for this pass was over-engineering. The panel shows HH:MM
+and a minute of drift is acceptable, so anything that works below a
+second, and anything that was instrumentation for a problem since
+solved, is a candidate. Read against the tree at commit 7372f3d, every
+file. Nothing here is a bug; each item says what goes and what, if
+anything, is lost. None is done yet. What checked out and is not
+listed: the self-heal and connect budgets (each one measured in the
+dropout campaign), the persist debounce (flash blink), the scan stop
+for a reset or an upload, the upload drain (the `403` in the browser),
+the `RefCell` in `settings::update` (`send_if_modified` wants a `Fn`),
+and the buzzer's per-note timer (the LEDC API).
+
+In rough order of value:
+
+- **Sub-second time on a minute display.** The clock is an `i64` of
+  microseconds; `query_ntp` adds the NTP fraction, half the round trip
+  and the microseconds since the reply landed (measured in the same
+  function, so zero); `restore_carried` adds `RESET_PAUSE` back, which
+  makes "every deliberate reset path must wait exactly this" an
+  invariant across `heal`, `ota::reboot` and `ota::init`; the carry
+  record spends two words on it. All of it is well under a second. Fix:
+  keep the offset in whole seconds (`unix_s - uptime_s`), set it from
+  `result.seconds` alone, carry one `u32` word of seconds (good to
+  2106, like `last_heal_unix`), drop the pause add-back (a reset then
+  costs the pause, 200 ms, once) and key `until_next_second` to the
+  uptime, which is where the whole seconds tick anyway. About 25 lines
+  and one carry word go; the remaining error per sync or reset is under
+  a second.
+- **Colour through 8-bit RGB and two lookup tables.** The palette is
+  eight `Rgb` values whose components are 0, 96 or 255; `GAMMA[256]`
+  turns those three inputs into levels 0, 1 and 7; `BRIGHTNESS_STEP[101]`
+  turns five percentages into steps 1, 2, 5, 8 and 15. The sweep's
+  `dimmed` scales in RGB space, which is why its tail has never been
+  visible (second-pass bug). Fix: make `PALETTE` an array of `Levels`
+  (red is `(0, 0, 7)`, orange `(0, 1, 7)`, in blue-green-red order),
+  make `BRIGHTNESS_CHOICES` pairs of percent and step, delete `Rgb`,
+  `GAMMA`, `Levels::from_rgb`, `BRIGHTNESS_STEP` and
+  `current_step_for`, and dim the tail by halving levels with a floor
+  of 1, which fixes the sweep bug by construction. About 60 lines go;
+  `Panel::set_color` takes a `Levels`. The page keeps its colour names.
+- **Instrumentation from the dropout campaign.** Four pieces measured a
+  problem that is now understood and healed: the per-listener `State`,
+  `Listener`, `LISTENER` and `log_status` in `http.rs` (70 lines in the
+  heartbeat, "the shape of a wedged server"); `net::monitor_task` (link
+  and address transitions, which the Wi-Fi task and DHCP already log);
+  `net::log_candidates`, a second two-second scan before every connect
+  purely for a log line, on top of the one `ScanMethod::AllChannels`
+  makes; and `scan::GapStats` with its critical section after every
+  transfer, which settled the shimmer question in M3 and has read a few
+  microseconds since. Fix: delete them, keep the probe counters (they
+  drive the self-heal and the heartbeat still says "failing now") and
+  the minute RSSI line (the documented way to read the link). About 140
+  lines, one task, one `StackResources` slot and two seconds per
+  connect go. Whether the serial log is still being watched for these
+  is the user's call; `scripts/watch-clock.sh` covers the other side.
+- **Dead state.** `ota::SELECTED` is stored at `init` and never read
+  (the log line uses the local); `carry::SOFT` and `soft_reset` have no
+  caller; `clock::is_synced` neither (first-pass item). With the panel
+  methods of the first pass (`set_time`, `set_segment`,
+  `set_position_color`, `set_dash`, `Levels::OFF`, `IS_MA_TENTHS`,
+  `SLOT_US`) that is about 50 lines the lib crate hides warnings for.
+- **Nits.** `PinState::check` compares a one-attempt, four-digit PIN in
+  constant time; `presented.parse::<u16>() == Some(pin)` with a length
+  check is the whole rule. The three `try_changed` calls in
+  `display_task` save one loop iteration whose render equals `last` and
+  publishes nothing; deleting them, rather than adding one to the
+  hostname task as the first pass suggested, is the consistent fix.
+  `Hostname::DEFAULT` spends fifteen lines validating the literal
+  `"clock"` at compile time; `Hostname::new` at `settings::init` with
+  an `expect` does the same. `http::Counting` exists so a refusal knows
+  what to drain; `ota::install` could return the bytes it consumed in
+  the `Refusal` instead.
+
 ## 6. Risks and how they are handled
 
 | risk | mitigation |
@@ -1955,6 +2030,79 @@ second of the wall clock, and the first `ntp:` line after it must not
 move the display. For the one OTA from the previous firmware, expect
 `RTC carry-over discarded` on the `CoreSw` boot and no `ota: image …
 boot 1 of 2` line; later OTAs carry as before.
+
+### Three simplifications from the third review pass (after the carry) — built, not yet verified on the panel
+
+Three items of the third-pass backlog, chosen by the user. The first
+two change no behaviour; the third changes the carry layout and one
+edge of the alarm.
+
+- **The request head parsed once, into borrows.** `http::parse_head`
+  used to return byte spans (`span_in`, pointer subtraction) so that
+  the borrow of the head ended before the body was read into the same
+  buffer, and `read_request` rebuilt the `&str`s through a closure. Now
+  `parse_head` returns a `Head<'a>` of plain borrows: the method, path,
+  query, `Authorization` value and `Content-Length`. `read_request`
+  calls it twice: once before the body read, keeping only the two
+  `Copy` facts that decide the read (is it `POST /ota`, how long is the
+  body), and once after it on the head half of `buf.split_at`, to fill
+  the `Request`. The second parse cannot fail, since it is the same
+  bytes; the cost is one extra scan of a few hundred bytes. `span_in`,
+  `is_upload` and the `field` closure are gone.
+- **One timer in `Ui`.** `last_press`, `ring_started`, `ip_started`
+  and `pin_started` were each the instant the current mode began. They
+  are one field, `since`, set by `Ui::enter`, the one way `mode` is
+  assigned outside `new`; `handle` also sets it on a press that stays
+  in alarm-set, which is what that timeout wants. The IP view's octet
+  index counts from the same instant it did.
+- **The handled alarm is the time it last rang, carried.** Not ringing
+  an alarm again after a software reset took `carry.handled: (unix,
+  minute)`, `display::HANDLED_WINDOW_SECS` (20 minutes),
+  `record_handled` at the ring's end and at a skip, the `seed_handled`
+  block in the display loop, `Ui::suppress_alarm`, and `Ui::fired_minute`
+  with its own clearing rule for the current minute. The user asked for
+  the plain fact instead: `Ui::last_alarm` is the Unix time the alarm
+  last rang or was used up by the skip flag, nothing clears it, and an
+  occurrence is handled when that time is at or after the moment the
+  alarm last came round (`t.unix` less the minutes behind and the
+  seconds into the minute; `LocalTime` now carries its `unix`). Both
+  due checks test that one comparison, so the alarm fires once per
+  occurrence, a moved alarm time is a new occurrence, and the grace
+  does not repeat a ring. The distance is computed whether or not the
+  alarm is armed, so a disarm and re-arm inside the alarm minute does
+  not ring twice, as before. The display task carries the value
+  whenever it changes, like the skip flag, as `None` while ringing: a
+  reset that cuts a ring off still brings it back through the grace,
+  and one after the ring ended or the skip was used does not ring it
+  again, now within the grace's ten minutes rather than a window of
+  twenty. The carry record is eight words with the time as a `u32` of
+  seconds like `last_heal_unix`, layout version 3; the one OTA from the
+  previous firmware discards the record as the version-2 bump did.
+  `alarm_age` is split into `minutes_since_alarm`, the distance and the
+  weekday it fell on, and the armed test. About 40 lines and one carry
+  word go.
+
+Checked on the host: builds, clippy clean. The head parser is the one
+the second pass read on partial reads and odd headers; its inputs and
+outputs are the same, only the borrow shape changed. The alarm logic
+was walked through on paper for: the alarm minute (rings once, a press
+ends it, no second ring that minute); a skip (used up, not rung,
+carried so a reset does not ring it either); a power cut over the
+alarm (grace rings it on the first time after boot); a software reset
+one to ten minutes after a ring ended (not rung again); a reset
+mid-ring (rung again); the alarm moved to a later minute within the
+grace (rings at the new minute); the next day (cleared hours before).
+
+**Verify.** Flash over USB, then: open `http://<ip>/` and `/api`, post
+the form once, open `/update` (the PIN shows for a minute, a press
+ends it), hold both buttons for the IP (eight octets over 16 s), hold
+the top button for alarm-set and let it time out after 15 s. For the
+alarm: arm it a minute ahead, let it ring, press to stop, then force a
+heal within ten minutes (block the clock at the AP); the boot line
+must show `last_alarm_unix: Some(…)` and the alarm must not ring
+again. Then arm it again a minute ahead and pull power during the
+ring; after the reboot and sync it must ring (grace), and the serial
+log must not show the "skip-next" or a stale `last_alarm_unix`.
 
 ### M10 — Wi-Fi provisioning from an access point — planned
 

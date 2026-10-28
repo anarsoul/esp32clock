@@ -1,9 +1,9 @@
 //! State carried across a software reset in RTC fast RAM: the self-heal
 //! count and time, the wall clock as the Unix time last written, the
 //! volatile alarm state a reboot would otherwise lose (the skip-next
-//! flag, and which alarm was last handled so the missed-alarm grace does
-//! not ring it again), and how many times a freshly installed firmware
-//! has booted without being confirmed good.
+//! flag, and when the alarm last rang so the missed-alarm grace does not
+//! ring it again), and how many times a freshly installed firmware has
+//! booted without being confirmed good.
 //!
 //! The record is used only after a software reset, which is what the
 //! self-heal and the panic handler do. Any other reset reason, power-on,
@@ -19,13 +19,14 @@ use esp_hal::rtc_cntl::SocResetReason;
 /// persistent-RAM zeroing. The low byte is the layout version: an
 /// `ota::reboot` from a firmware with another layout leaves a record
 /// this one must not read, and the mismatch discards it, one time.
-/// Version 1 ("CARR") held an RTC-timer offset in words 6 and 7.
+/// Version 1 ("CARR") held an RTC-timer offset in words 6 and 7; version
+/// 2 held the handled alarm as a Unix time and a minute in words 4 and 5.
 const MARK: u32 = 0x4341_5200 | LAYOUT; // "CAR" + version
-const LAYOUT: u32 = 2;
+const LAYOUT: u32 = 3;
 
-/// `[mark, heals, last heal unix, skip, handled unix, handled minute,
-/// unix us low, unix us high, ota boots]`. A zero time means none.
-const WORDS: usize = 9;
+/// `[mark, heals, last heal unix, skip, last alarm unix, unix us low,
+/// unix us high, ota boots]`. A zero time means none.
+const WORDS: usize = 8;
 
 #[esp_hal::ram(unstable(rtc_fast, persistent))]
 static mut RECORD: [u32; WORDS] = [0; WORDS];
@@ -42,9 +43,9 @@ pub struct Carried {
     pub last_heal_unix: Option<i64>,
     /// The skip-next-alarm flag.
     pub skip_next: bool,
-    /// The alarm last rung and ended, or used up by the skip flag: the Unix
-    /// time that happened and the alarm's minute of the day.
-    pub handled: Option<(i64, u16)>,
+    /// Unix time the alarm last rang and ended, or was used up by the skip
+    /// flag; `ui::Ui::last_alarm` as the display task carries it.
+    pub last_alarm_unix: Option<i64>,
     /// Unix microseconds when the record was last written, from the
     /// display tick every second and from a deliberate reset just before
     /// it fires. See `clock::restore_carried`.
@@ -73,25 +74,23 @@ fn decode(v: [u32; WORDS]) -> Carried {
         heals: v[1],
         last_heal_unix: (v[2] != 0).then_some(v[2] as i64),
         skip_next: v[3] != 0,
-        handled: (v[4] != 0).then_some((v[4] as i64, v[5] as u16)),
+        last_alarm_unix: (v[4] != 0).then_some(v[4] as i64),
         unix_us: {
-            let us = (v[6] as u64 | (v[7] as u64) << 32) as i64;
+            let us = (v[5] as u64 | (v[6] as u64) << 32) as i64;
             (us != 0).then_some(us)
         },
-        ota_boots: v[8],
+        ota_boots: v[7],
     }
 }
 
 fn encode(c: &Carried) -> [u32; WORDS] {
     // Seconds fit a u32 until 2106.
-    let (handled_at, handled_minute) = c.handled.unwrap_or((0, 0));
     [
         MARK,
         c.heals,
         c.last_heal_unix.unwrap_or(0) as u32,
         c.skip_next as u32,
-        handled_at as u32,
-        handled_minute as u32,
+        c.last_alarm_unix.unwrap_or(0) as u32,
         c.unix_us.unwrap_or(0) as u64 as u32,
         (c.unix_us.unwrap_or(0) as u64 >> 32) as u32,
         c.ota_boots,
