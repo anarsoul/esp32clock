@@ -4,7 +4,10 @@ Firmware for the HU-058 / HU-058D LED clock panel driven by an ESP32-C3,
 written in Rust with esp-hal and Embassy on esp-rtos. The display's two
 AiP33628 drivers are fed by SPI2 in quad mode used as a four-wire pattern
 generator with DMA; see `PLAN.md` for the full design and its history.
-`CLAUDE.md` is a symlink to this file; edit this one.
+The repo is a two-member workspace: the firmware is the root package,
+and `core/` (`esp32clock-core`) is the hardware-independent half, a
+`no_std` library the firmware re-exports and the host runs the tests
+of. `CLAUDE.md` is a symlink to this file; edit this one.
 
 ## Workflow
 
@@ -13,9 +16,10 @@ generator with DMA; see `PLAN.md` for the full design and its history.
   starting work and mark milestones verified when the user confirms on the
   panel. It ends with a review backlog of known, undone findings; read it
   before proposing work and strike items you finish.
-- Nothing here can be verified without the hardware. Build, run clippy, and
-  where logic allows, simulate on the host; then hand the user a flash
-  command and say exactly what to look for. Do not claim hardware results.
+- Nothing here can be verified without the hardware. Build, run clippy
+  and `cargo host-test`, and put new pure logic under test in `core/`;
+  then hand the user a flash command and say exactly what to look for.
+  Do not claim hardware results.
 - Commit only when asked. Commit messages end with
   `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>` (the user asked
   for this trailer in this project).
@@ -27,6 +31,8 @@ generator with DMA; see `PLAN.md` for the full design and its history.
 ```
 cargo build --release
 cargo clippy --release
+cargo host-test                          # the core crate's tests on the host (alias in .cargo/config.toml)
+cargo clippy -p esp32clock-core --target host-tuple --tests
 WIFI_SSID='…' WIFI_PASSWORD='…' TZ_OFFSET_MINUTES=-420 API_TOKEN='…' cargo run --release
 MAX_CURRENT_STEP=8 cargo build --release   # optional: raise the drive-current ceiling (default 5)
 API_TOKEN='…' scripts/ota.sh <ip>      # later updates, over the LAN
@@ -59,8 +65,9 @@ full-size ping and fetches `/api` from the host every 30 s for the other
 side of the story.
 
 Credentials, the default timezone and the API token are read at build
-time by `src/config.rs`; `build.rs` reruns the build when they change,
-and exports `git describe --always --dirty` as `FIRMWARE_VERSION`, which
+time by `core/src/config.rs`; `core/build.rs` reruns that crate when
+they change, and the root `build.rs` exports `git describe --always
+--dirty` as `FIRMWARE_VERSION`, which
 goes into the app descriptor, the boot line, the page and `/api`. The timezone, 12/24 hour, colour, brightness, alarm, alarm days,
 alarm melody, DHCP hostname, Wi-Fi network and API token are settings:
 saved in the `nvs` partition, editable from the buttons and from
@@ -191,29 +198,47 @@ answered or an HTTP request served bumps it, and the third such boot
 
 ## Layout
 
+The pure modules live in `core/src/` and the firmware re-exports them
+from `src/lib.rs`, so firmware code says `crate::settings`; inside
+`core` the same `crate::` paths point at its own modules. Five modules
+are split, the pure half in `core/src/` under the same name and the
+hardware half in `src/`: `buttons` (event types / GPIO task), `clock`
+(calendar arithmetic / the offset and the carry), `carry` (record
+codec / RTC static and reset gate), `http` (head parser and
+`RESPONSE_BUF` / sockets), `ota` (image constants, `Slot`,
+`hash_chunk`, `version_from` / flash and partitions). Each `core`
+module ends with its `#[cfg(test)] mod tests`.
+
 | file | role |
 | --- | --- |
-| `src/aip33628.rs` | frame format, bit-reversed current table, quad-nibble waveform encoder; pure `core` |
-| `src/panel.rs` | COM/SEG map, font, per-position colour as duty `Levels` (no RGB; the palette is written in levels), `Panel::render` → `ScanImage` |
+| `core/src/lib.rs` | `#![cfg_attr(not(test), no_std)]`; the module list; nothing else |
+| `core/src/aip33628.rs` | frame format, bit-reversed current table, quad-nibble waveform encoder; pure `core` |
+| `core/src/panel.rs` | COM/SEG map, font, per-position colour as duty `Levels` (no RGB; the palette is written in levels), `Panel::render` → `ScanImage` |
 | `src/scan.rs` | cycle/transfer builder, double-buffered DMA scan task that builds the SPI2 quad + DMA bus itself (an async esp-hal driver is `!Send`), restart-gap statistics, `stop` on a blank frame before a deliberate reset or a flash write, `resume` after a failed one |
 | `src/display.rs` | UI loop: tick, button or settings change → `ui` → draw → publish; rings the alarm; shows the IP, or `AP` in place of the sweep on the access point; acts on the hold before the UI sees it; seeds and carries the skip flag and the time the alarm last rang |
-| `src/ui.rs` | mode state machine, pure logic, one timer for the current mode; edits the settings it is handed; alarm due check and missed-alarm grace, both gated by the carried time the alarm last rang; consumes `skip_next` |
-| `src/settings.rs` | `Settings`, palette and brightness tables, `Hostname`, `Text`/`Secret` strings, `Credentials` and the token with their rules, the build-time `seed`, shared `Watch` with change signal, versioned append-only flash record |
+| `core/src/ui.rs` | mode state machine, pure logic, one timer for the current mode; edits the settings it is handed; alarm due check and missed-alarm grace, both gated by the carried time the alarm last rang; consumes `skip_next` |
+| `core/src/settings.rs` | `Settings`, palette and brightness tables, `Hostname`, `Text`/`Secret` strings, `Credentials` and the token with their rules, the build-time `seed`, shared `Watch` with change signal, versioned append-only flash record |
 | `src/storage.rs` | the one flash handle (`with_flash`), nvs partition lookup, `sequential-storage` map over it, debounced persist task that compares records, not structs, and resets into station mode after a save that changed the credentials |
 | `src/heal.rs` | deliberate resets: `reboot` blanks the panel through `scan::stop`, carries the time and resets, for `/reload` and the OTA reboot; `reset`, the self-heal, waits out a ringing alarm and counts itself first; `switch_mode`, the reset between station and access point, which starts the carry record over and freezes it |
-| `src/auth.rs` | the API token (a setting; constant-time compare) and the panel PIN with its TTL and lockout; `token`, `token_or_pin`, `issue_pin`, `pin_to_show`; `Refusal` with its HTTP status; pure rules with the clock and the random number passed in |
-| `src/form.rs` | key=value parsing, all-or-nothing `apply` on a copy, JSON, the HTML page with its error notice and the read-only `Status` lines, the update page with its upload and token scripts, `JsonStr`/`HtmlStr` escaping for the SSID, `parse_token`; pure logic |
+| `core/src/auth.rs` | the API token (a setting; constant-time compare) and the panel PIN with its TTL and lockout; `token`, `token_or_pin`, `issue_pin`, `pin_to_show`; `Refusal` with its HTTP status; pure rules with the clock and the random number passed in |
+| `core/src/form.rs` | key=value parsing, all-or-nothing `apply` on a copy, JSON, the HTML page with its error notice and the read-only `Status` lines, the update page with its upload and token scripts, `JsonStr`/`HtmlStr` escaping for the SSID, `parse_token`; pure logic |
+| `core/src/http.rs` | `Method`, `Head`, `parse_head`; `RESPONSE_BUF` and `PAGE_MAX`, which the page tests assert against |
 | `src/http.rs` | HTTP/1.0 server, `LISTENERS` sockets each in its own task: `GET`/`POST` on `/` (the settings page, or the setup form on the access point) and `/api`, `POST /play`, `GET /update`, `POST /ota` with the body streamed to `ota::install`, `POST /reload` and `POST /ap` with the token, `POST /token` with the token or the PIN, `POST /pin`, `POST /scan` on the access point; a refused form redirects to `/?error=…`; per-listener state and counters for the heartbeat |
+| `core/src/buttons.rs` | `Button`, `Kind`, `Event` |
 | `src/buttons.rs` | debounced short/long press events, the two-button long press, and the 10 s two-button `Hold` |
-| `src/melody.rs` | alarm tunes as pitch and length data with tempo; `RANDOM` and the pure `pick` that turns it into a tune; pure |
+| `core/src/melody.rs` | alarm tunes as pitch and length data with tempo; `RANDOM` and the pure `pick` that turns it into a tune; pure |
+| `core/src/carry.rs` | `Carried`, `MARK` with its layout version, `encode`/`decode` |
 | `src/carry.rs` | RTC-RAM record used only after a software reset (`CoreSw`/`Cpu0Sw`; anything else zeroes it at boot): self-heal count and time, the skip flag, the time the alarm last rang, the Unix time last written, boots of an unconfirmed OTA image, the access-point flag for the next boot; the mark carries a layout version; `freeze` for a mode switch |
 | `src/buzzer.rs` | LEDC PWM on an open-drain pin; plays a melody on command, looped or once, stops within a note |
-| `src/clock.rs` | Unix time = uptime + NTP offset; local time with weekday; `carry_time`/`restore_carried` move the time across a software reset as plain Unix time, written every second by the display tick; `RESET_PAUSE` for every deliberate reset |
+| `core/src/clock.rs` | `LocalTime`, `weekday_of_days`, `local_time(unix, tz_minutes)` |
+| `src/clock.rs` | Unix time = uptime + NTP offset; `local_time` with the settings' timezone; `carry_time`/`restore_carried` move the time across a software reset as plain Unix time, written every second by the display tick; `RESET_PAUSE` for every deliberate reset |
+| `core/src/ota.rs` | image header and descriptor offsets, `Slot` names, `hash_chunk` for the appended SHA-256, `version_from` |
 | `src/ota.rs` | firmware upload: slot lookup and the boot-time rollback, sector writer with read-back, activate, reboot; `VERSION` from `build.rs` |
 | `src/net.rs` | Wi-Fi station on the stored credentials with all-channel scan and transmit-power ceiling, minute RSSI line, connect failures logged with their meaning (`wrong password?`, `no such network in range`) and a budget that ends in `heal::reset`; DHCP switched on 500 ms after each connect and off at disconnect; link and address monitor, gateway ping probe with the self-heal trigger, SNTP, DHCP renew on hostname change; the boot's `Mode`, the access-point task (AP+STA, scans on request into the network list) and its static stack config |
 | `src/dhcpd.rs` | DHCP server for the access point: `parse`, `build` and the lease table pure, the socket task around them; every reply broadcast |
 | `src/dnsd.rs` | captive DNS for the access point: `answer` pure (every A question is the clock, anything else an empty answer), the socket task around it |
-| `src/config.rs` | build-time env vars and compile-time defaults |
+| `core/src/config.rs` | build-time env vars and compile-time defaults |
+| `core/build.rs` | `rerun-if-env-changed` for the build-time variables `config.rs` reads |
 | `src/bin/main.rs` | pin setup, display wires with their pull-downs, executors, task spawning, panic reset hook, log timestamps, reset reason and carried time at boot, OTA rollback check, minute heartbeat log |
 
 ## Hardware facts that bite
@@ -291,9 +316,15 @@ answered or an HTTP request served bumps it, and the third such boot
 ## Sizes that bite
 
 - `http::RESPONSE_BUF` (4096) holds the whole page plus headers, and
-  overflow is a 500, not a truncation. The worst-case settings page is
-  2821 bytes with headers, the update page 3059 and the setup page with
-  twelve networks 3209; measure on the host after adding a field or label.
+  overflow is a 500, not a truncation. The headers are 88 bytes;
+  `core::http::PAGE_MAX` (3968) is what a page may take, and the
+  `form` tests build each page at its worst case and assert it
+  (2026-10-29: settings 2769, update 2989, setup with twelve
+  32-character networks 2945). `cargo host-test` after adding a field
+  or label; the test prints the sizes with `-- --nocapture`. A listed
+  SSID of 32 `"` or `&` would grow the setup page past the buffer
+  through `HtmlStr` (each is five or six bytes, twice per network);
+  not handled, see the PLAN.md backlog.
 - `http::RX_BUF` (4096) is the TCP receive window; 1 KB made an upload
   one segment per round trip. `REQUEST_BUF` (1536) still bounds the
   head; an upload's body stays on the socket.
@@ -321,22 +352,22 @@ answered or an HTTP request served bumps it, and the third such boot
 
 ## Verifying without a board
 
-The waveform encoder and panel map are pure code. A host harness that runs
-the byte stream through a behavioural model of the AiP33628 (shift on CLK
-rise, latch on DIN rise while CLK high) and checks per-sink lit time against
-level × unit caught every encoding mistake so far. It lives outside the
-repo; recreate it in a scratch crate by copying `aip33628.rs` and
-`panel.rs` and reimplementing `build_cycle` with the current constants.
-The same approach covers the other pure modules: a scratch crate with
-`form.rs`, `melody.rs`, the record part of `settings.rs`, the head parser
-from `http.rs` and `sequential-storage`'s mock flash has checked form
-bodies, page size against `RESPONSE_BUF`, record round-trips and
-migrations, melody lengths and the weekday arithmetic. `form.rs`,
-`settings.rs`, `melody.rs`, `panel.rs`, `aip33628.rs` and `config.rs`
-can be pulled in with `#[path]` as they are (embassy-sync builds on
-the host); the private head parser, `ota.rs`'s token and sector
-functions and `carry.rs`'s record codec are copied in. `PLAN.md` records
-each check under its milestone.
+`cargo host-test` runs the tests of `core/` on the host (61 on
+2026-10-29): the AiP33628 encoder against a behavioural model of the
+chip (shift on CLK rise, latch on DIN rise while CLK high), the panel
+map, the palette and brightness tables, the hostname, password and
+token rules, the record round trip and every older version, the form
+parser and the page sizes against `PAGE_MAX`, the head parser, the
+appended-hash split, the carry codec, the calendar arithmetic, the
+melodies, the UI's alarm, grace and skip logic, and the PIN and token
+header rules. `cargo clippy -p esp32clock-core --target host-tuple
+--tests` lints the tests. `.cargo/config.toml` aims every cargo
+command at the chip, which is why the alias passes `--target
+host-tuple`; the `[unstable] build-std` line there is ignored by
+stable cargo. Not under test: `scan.rs`'s `build_cycle` (the M1 lit-time
+check needs it on the host), `dhcpd.rs` and `dnsd.rs` (their pure halves
+use embassy-net's address types), `storage.rs`'s map over the flash.
+`PLAN.md` records the checks of each milestone; new ones are tests.
 
 ## Conventions
 
@@ -346,8 +377,10 @@ each check under its milestone.
   `fetch_add` or `swap`. Counters shared with the heartbeat have one
   writer and are bumped with a load and a store; anything with more than
   one writer goes behind `critical_section`.
-- Keep hardware out of `ui.rs`, `panel.rs`, `form.rs`, `melody.rs`,
-  `aip33628.rs` and the record part of `settings.rs` so they stay testable.
+- Keep hardware out of `core/`: it has no esp dependency and must
+  build for the host. New pure logic goes there with its tests; a
+  module that needs a peripheral and has a pure half is split the way
+  `clock`, `carry`, `http` and `ota` are.
 - Settings change only through `settings::update`; it is what wakes the
   display and the persist task. The HTTP handlers apply a request to a
   copy and commit it with one `update` only if everything parsed; keep
@@ -357,10 +390,11 @@ each check under its milestone.
   reordered: an older image reads a newer record by its prefix, so a
   rollback keeps the settings) and `from_record` still reading every
   older version, `form::apply_one`, `write_json` and `write_page`,
-  the `PLAN.md` entry, and a page-size check. A field that must not
-  persist, like `skip_next`, is left out of the record on purpose.
-  Read-only status goes in `form::Status`, built in `http::status`, so
-  `form.rs` stays clockless and the host check still builds.
+  the `PLAN.md` entry, and the `settings` and `form` tests (the record
+  round trip, `apply_sets_every_key`, the page sizes). A field that
+  must not persist, like `skip_next`, is left out of the record on
+  purpose. Read-only status goes in `form::Status`, built in
+  `http::status`, so `form.rs` stays clockless.
 - Tables copied from the reference docs (`BLOCKS`, `SEGMAP`, `COM_SEQ`,
   `IS_WIRE`) are verbatim; cite `3rdparty/HU-058_ESPHome/docs/` when
   changing anything near them.

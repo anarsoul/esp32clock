@@ -1,7 +1,6 @@
 fn main() {
-    for var in ["WIFI_SSID", "WIFI_PASSWORD", "TZ_OFFSET_MINUTES", "API_TOKEN", "MAX_CURRENT_STEP", "AP_PASSWORD"] {
-        println!("cargo:rerun-if-env-changed={var}");
-    }
+    // The build-time credentials and defaults are read in `core/`, whose
+    // own build.rs reruns it when they change.
     firmware_version();
     linker_be_nice();
     // make sure linkall.x is the last linker script (otherwise might cause problems with flip-link)

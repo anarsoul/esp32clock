@@ -1,23 +1,19 @@
 #![no_std]
 
-pub mod aip33628;
-pub mod auth;
+// The hardware-independent modules live in `esp32clock-core`, tested on
+// the host; re-exported so the firmware says `crate::settings` as before.
+pub use esp32clock_core::{aip33628, auth, config, form, melody, panel, settings, ui};
+
 pub mod buttons;
 pub mod buzzer;
 pub mod carry;
 pub mod clock;
-pub mod config;
 pub mod dhcpd;
 pub mod dnsd;
 pub mod display;
-pub mod form;
 pub mod heal;
 pub mod http;
-pub mod melody;
 pub mod net;
 pub mod ota;
-pub mod panel;
 pub mod scan;
-pub mod settings;
 pub mod storage;
-pub mod ui;

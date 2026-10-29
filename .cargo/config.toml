@@ -7,6 +7,10 @@ runner = "espflash flash --monitor --chip esp32c3 --partition-table partitions.c
 [env]
 ESP_LOG="info"
 
+[alias]
+# The host-testable half; `build.target` above would otherwise aim the tests at the chip.
+host-test = "test -p esp32clock-core --target host-tuple"
+
 [build]
 rustflags = [
   # Required to obtain backtraces (e.g. when using the "esp-backtrace" crate.)

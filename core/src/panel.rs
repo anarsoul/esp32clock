@@ -239,3 +239,96 @@ impl Panel {
         img
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn glyphs_use_seven_segments_and_unknown_is_blank() {
+        for c in "0123456789-AbCcdEFHhLnoPrtUuy".chars() {
+            let g = glyph(c);
+            assert!(g != 0 && g < 0x80, "{c:?} -> {g:#09b}");
+        }
+        assert_eq!(glyph(' '), 0);
+        assert_eq!(glyph('z'), 0);
+        assert_eq!(glyph('8'), 0b1111111);
+    }
+
+    #[test]
+    fn a_dark_panel_renders_dark() {
+        let img = Panel::new().render();
+        assert_eq!(img.ss, ScanImage::DARK.ss);
+        assert_eq!(img.is_step, 5);
+    }
+
+    #[test]
+    fn levels_go_to_their_bit_planes() {
+        let mut p = Panel::new();
+        p.set_color(Levels::new(1, 2, 4)); // blue in plane 0, green in plane 1, red in plane 2
+        p.set_char(1, '1'); // segments B and C: com_hi of block 1, LED 4 and LED 3
+        let img = p.render();
+        let slot = COM_SEQ.iter().position(|&c| c == BLOCKS[1].com_hi).unwrap();
+        let base = |led: u16| 3 * led - 2;
+        for (plane, ch) in (0..PLANES).zip(0u16..) {
+            let expect = (1u16 << (base(4) + ch)) | (1u16 << (base(3) + ch));
+            assert_eq!(img.ss[0][slot][plane], expect, "plane {plane}");
+        }
+        // Nothing else lit: the other slots of driver 0, and driver 1.
+        for s in 0..SLOTS {
+            if s != slot {
+                assert_eq!(img.ss[0][s], [0; PLANES]);
+            }
+            assert_eq!(img.ss[1][s], [0; PLANES]);
+        }
+    }
+
+    #[test]
+    fn annunciators_sit_on_led_one_of_their_block() {
+        let mut p = Panel::new();
+        p.set_color(Levels::new(MAX_LEVEL, MAX_LEVEL, MAX_LEVEL));
+        p.set_colon(true);
+        p.set_am(true);
+        p.set_degree(true);
+        let img = p.render();
+        let slot_of = |cs| COM_SEQ.iter().position(|&c| c == cs).unwrap();
+        let led1: u16 = 0b1110; // SEG1..SEG3, all three channels
+        // Colon: block 1, upper dot on com_hi, lower on com_lo.
+        assert_eq!(img.ss[0][slot_of(BLOCKS[1].com_hi)], [led1; PLANES]);
+        assert_eq!(img.ss[0][slot_of(BLOCKS[1].com_lo)], [led1; PLANES]);
+        // AM: block 0 com_hi. Degree: block 3 (driver 1) com_hi.
+        assert_eq!(img.ss[0][slot_of(BLOCKS[0].com_hi)], [led1; PLANES]);
+        assert_eq!(img.ss[1][slot_of(BLOCKS[3].com_hi)], [led1; PLANES]);
+        assert_eq!(img.ss[1][slot_of(BLOCKS[2].com_hi)], [0; PLANES]);
+    }
+
+    #[test]
+    fn current_step_is_clamped_and_clear_keeps_colour() {
+        let mut p = Panel::new();
+        p.set_current(99);
+        assert_eq!(p.render().is_step, 15);
+        p.set_color(Levels::new(0, 0, 1));
+        p.set_char(0, '8');
+        p.clear();
+        assert_eq!(p.render().ss, ScanImage::DARK.ss);
+        p.set_char(0, '-');
+        let img = p.render();
+        assert!(img.ss[0].iter().flatten().any(|&w| w != 0));
+    }
+
+    #[test]
+    fn lamp_test_lights_every_wired_position() {
+        let mut p = Panel::new();
+        p.set_color(Levels::new(1, 1, 1));
+        p.lamp_test();
+        let img = p.render();
+        for drv in 0..2 {
+            for slot in 0..SLOTS {
+                // LEDs 1 to 5 of every COM pair are wired, except LED 1 on
+                // the second annunciator's pair of blocks 0, 2 and 3.
+                let lit = img.ss[drv][slot][0];
+                assert!(lit & 0b0111_1111_1111_1110 != 0, "drv {drv} slot {slot} dark");
+            }
+        }
+    }
+}

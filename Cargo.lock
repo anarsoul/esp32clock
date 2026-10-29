@@ -488,6 +488,7 @@ dependencies = [
  "critical-section",
  "document-features",
  "embassy-time-driver",
+ "embassy-time-queue-utils",
  "embedded-hal 0.2.7",
  "embedded-hal 1.0.0",
  "embedded-hal-async",
@@ -1101,6 +1102,7 @@ dependencies = [
  "esp-radio",
  "esp-rtos",
  "esp-storage",
+ "esp32clock-core",
  "heapless 0.9.3",
  "log",
  "portable-atomic",
@@ -1110,6 +1112,18 @@ dependencies = [
  "sntpc-net-embassy",
  "sntpc-time-embassy",
  "static_cell",
+]
+
+[[package]]
+name = "esp32clock-core"
+version = "0.1.0"
+dependencies = [
+ "critical-section",
+ "embassy-sync 0.7.2",
+ "embassy-time",
+ "heapless 0.9.3",
+ "log",
+ "sha2 0.10.9",
 ]
 
 [[package]]

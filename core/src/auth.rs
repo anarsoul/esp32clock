@@ -182,3 +182,86 @@ pub fn with_pin(header: Option<&str>, check_pin: impl FnOnce(&str) -> Result<(),
     }
     Err(refuse("403 Forbidden", "bad credentials"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::settings::{Secret, Text};
+
+    #[test]
+    fn constant_time_compare_is_exact() {
+        assert!(bytes_eq(b"abcdefgh", b"abcdefgh"));
+        assert!(!bytes_eq(b"abcdefgh", b"abcdefg"));
+        assert!(!bytes_eq(b"abcdefgh", b"abcdefghi"));
+        assert!(!bytes_eq(b"abcdefgh", b"Abcdefgh"));
+        assert!(!bytes_eq(b"abcdefgh", b"abcdefgH"));
+        assert!(!bytes_eq(b"abcdefgh", b""));
+        assert!(bytes_eq(b"", b""));
+    }
+
+    #[test]
+    fn pin_is_one_attempt_with_a_ttl_and_a_lockout() {
+        let mut p = PinState::default();
+        assert_eq!(p.check(0, "1234"), Err(PinError::None));
+        let pin = p.issue(1000, 10_000 + 123).unwrap();
+        assert_eq!(pin, 123, "modulo ten thousand");
+        assert_eq!(p.check(2000, "0123"), Ok(()));
+        assert_eq!(p.check(2000, "0123"), Err(PinError::None), "used up");
+        // Wrong: lockout, no new PIN until it ends.
+        let pin = p.issue(3000, 4242).unwrap();
+        assert_eq!(p.check(3001, "4243"), Err(PinError::Wrong));
+        assert_eq!(p.issue(3002, 1), Err(PIN_LOCKOUT_MS - 1));
+        assert_eq!(p.check(3003, "4242"), Err(PinError::None), "a wrong try also used it up");
+        assert_eq!(p.issue(3001 + PIN_LOCKOUT_MS, 5), Ok(5));
+        let _ = pin;
+        // Expired.
+        p.issue(10_000, 7777).unwrap();
+        assert_eq!(p.check(10_000 + PIN_TTL_MS, "7777"), Ok(()));
+        p.issue(20_000, 7777).unwrap();
+        assert_eq!(p.check(20_001 + PIN_TTL_MS, "7777"), Err(PinError::Expired));
+        // The rule is four characters that parse to the number.
+        p.issue(0, 123).unwrap();
+        assert_eq!(p.check(1, "123"), Err(PinError::Wrong));
+        p.issue(PIN_LOCKOUT_MS + 1, 123).unwrap();
+        assert_eq!(p.check(PIN_LOCKOUT_MS + 2, "+123"), Ok(()), "another spelling of the same secret");
+        p.issue(PIN_LOCKOUT_MS + 3, 123).unwrap();
+        assert_eq!(p.check(PIN_LOCKOUT_MS + 4, "01234"), Err(PinError::Wrong));
+        p.issue(2 * PIN_LOCKOUT_MS + 5, 123).unwrap();
+        assert_eq!(p.check(2 * PIN_LOCKOUT_MS + 6, "012a"), Err(PinError::Wrong));
+    }
+
+    #[test]
+    fn header_rules() {
+        let pin_ok = |digits: &str| if digits == "1234" { Ok(()) } else { Err(PinError::Wrong) };
+        assert_eq!(with_pin(None, pin_ok).map_err(|r| r.status), Err("403 Forbidden"));
+        assert_eq!(with_pin(Some("PIN 1234"), pin_ok), Ok(()));
+        assert_eq!(with_pin(Some("PIN  1234 "), pin_ok), Ok(()), "trimmed");
+        assert_eq!(with_pin(Some("PIN 0000"), pin_ok).map_err(|r| r.text), Err("wrong PIN"));
+        assert_eq!(with_pin(Some("PIN 0000"), |_| Err(PinError::Expired)).map_err(|r| r.text), Err("PIN expired: reload the update page"));
+        assert_eq!(with_pin(Some("PIN 0000"), |_| Err(PinError::None)).map_err(|r| r.text), Err("no PIN issued: open the update page first"));
+        assert_eq!(with_pin(Some("Basic abc"), pin_ok).map_err(|r| r.text), Err("bad credentials"));
+        assert_eq!(with_pin(Some("pin 1234"), pin_ok).map_err(|r| r.text), Err("bad credentials"), "the scheme is case-sensitive");
+    }
+
+    #[test]
+    fn token_header_against_the_setting() {
+        // No token set: nothing matches, and the text says so.
+        settings::update(|s| s.token = Secret(Text::EMPTY));
+        assert!(!token_enabled());
+        assert!(!token_ok(b""), "an empty token never matches");
+        assert_eq!(token(Some("Bearer ")).map_err(|r| r.text), Err("no token set: build one in or set one from the update page"));
+        assert_eq!(token(None).map_err(|r| r.text), Err("no token: send Authorization: Bearer <API_TOKEN>"));
+        assert_eq!(token(Some("PIN 1234")).map_err(|r| r.text), Err("no token: send Authorization: Bearer <API_TOKEN>"));
+        settings::update(|s| s.token = Secret(Text::literal("secret-token-1")));
+        assert!(token_enabled());
+        assert_eq!(token(Some("Bearer secret-token-1")), Ok(()));
+        assert_eq!(token(Some("Bearer secret-token-1 ")), Ok(()), "trailing space trimmed");
+        assert_eq!(token(Some("Bearer secret-token-")).map_err(|r| r.text), Err("bad token"));
+        assert_eq!(token(Some("Bearer secret-token-12")).map_err(|r| r.text), Err("bad token"));
+        assert_eq!(token(Some("Bearer Secret-token-1")).map_err(|r| r.text), Err("bad token"));
+        assert_eq!(token(Some("bearer secret-token-1")).map_err(|r| r.text), Err("no token: send Authorization: Bearer <API_TOKEN>"));
+        assert_eq!(with_pin(Some("Bearer secret-token-1"), |_| Err(PinError::None)), Ok(()), "the token does for a PIN route");
+        assert_eq!(with_pin(Some("Bearer wrong-token-xx"), |_| Err(PinError::None)).map_err(|r| r.text), Err("bad token"));
+        settings::update(|s| s.token = Secret(Text::EMPTY));
+    }
+}

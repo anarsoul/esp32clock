@@ -354,3 +354,91 @@ pub fn pick(index: usize, random: u32, avoid: Option<usize>) -> usize {
     }
     i
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_tune_is_playable() {
+        assert_eq!(MELODIES[0].name, "beeps");
+        for (i, m) in MELODIES.iter().enumerate() {
+            assert!(!m.notes.is_empty());
+            for n in m.notes {
+                assert!(n.len > 0, "{}: a note without a length", m.name);
+                if n.hz != 0 {
+                    assert!(n.sounding_ms(m.bpm) > 0, "{}: a tone that does not sound", m.name);
+                    // The beeps sit on the buzzer's resonance on purpose; the
+                    // tunes stay below it so they sound even.
+                    if i == 0 {
+                        assert_eq!(n.hz, BEEP_HZ);
+                    } else {
+                        assert!(n.hz <= E6, "{}: {} Hz is above the even range", m.name, n.hz);
+                    }
+                }
+            }
+            let ms = m.duration_ms();
+            if i == 0 {
+                assert_eq!(ms, 700, "the M4 alarm: four 100 ms tones 100 ms apart");
+            } else {
+                assert!((2_000..=40_000).contains(&ms), "{}: {ms} ms", m.name);
+            }
+            assert!(m.name.bytes().all(|b| b.is_ascii_lowercase() || b == b'_'), "{}: the API name", m.name);
+        }
+        let names: Vec<&str> = MELODIES.iter().map(|m| m.name).collect();
+        let mut sorted = names.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), names.len(), "names are unique");
+    }
+
+    #[test]
+    fn note_arithmetic() {
+        let quarter = Note { hz: C5, len: 4 };
+        assert_eq!(quarter.ms(120), 500);
+        assert_eq!(quarter.sounding_ms(120), 440);
+        assert_eq!(Note { hz: C5, len: 1 }.sounding_ms(150), 85, "the gap is at least 15 ms");
+        assert_eq!(Note { hz: C5, len: 16 }.sounding_ms(60), 3940, "and at most 60 ms");
+        assert_eq!(Note { hz: REST, len: 4 }.sounding_ms(120), 0);
+        assert_eq!(duty_pct(LOW_DUTY_BELOW_HZ - 1), LOW_PCT);
+        assert_eq!(duty_pct(LOW_DUTY_BELOW_HZ), SQUARE_PCT);
+    }
+
+    #[test]
+    fn names_round_trip() {
+        for (i, m) in MELODIES.iter().enumerate() {
+            assert_eq!(index_of(m.name), Some(i));
+            assert_eq!(name(i), m.name);
+            assert_eq!(get(i).name, m.name);
+        }
+        assert_eq!(index_of(RANDOM_NAME), Some(RANDOM));
+        assert_eq!(name(RANDOM), RANDOM_NAME);
+        assert_eq!(index_of("9"), None);
+        assert_eq!(index_of(""), None);
+        assert_eq!(get(99).name, MELODIES[0].name, "out of range falls back to the beeps");
+    }
+
+    #[test]
+    fn random_pick_reaches_every_tune_but_the_beeps() {
+        for i in 0..MELODIES.len() {
+            assert_eq!(pick(i, 12345, Some(i)), i, "a fixed index is itself");
+        }
+        let mut seen = [false; MELODIES.len()];
+        let mut r: u32 = 1;
+        for _ in 0..1000 {
+            r = r.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            let i = pick(RANDOM, r, None);
+            assert!(i >= 1 && i < MELODIES.len());
+            seen[i] = true;
+        }
+        assert!(!seen[0] && seen[1..].iter().all(|&s| s), "{seen:?}");
+        for avoid in 1..MELODIES.len() {
+            for r in 0..100 {
+                assert_ne!(pick(RANDOM, r, Some(avoid)), avoid);
+            }
+        }
+        // The last tune is avoided by wrapping to the first.
+        let tunes = MELODIES.len() - 1;
+        assert_eq!(pick(RANDOM, (tunes - 1) as u32, Some(tunes)), 1);
+    }
+}

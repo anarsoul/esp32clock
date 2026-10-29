@@ -108,3 +108,86 @@ pub fn encode_pair(ss1: u16, ss2: u16, cs: u8, is_step: u8, out: &mut [u8; FRAME
     w.push(CLKS);
     w.push(0);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_wire_is_its_own_inverse() {
+        for i in 0..16u8 {
+            assert_eq!(IS_WIRE[IS_WIRE[i as usize] as usize], i);
+        }
+        assert_eq!(IS_WIRE[1], 0x8, "IS[0] goes to the top of the field");
+    }
+
+    #[test]
+    fn frame_word_layout() {
+        assert_eq!(frame_word(0xFFFF, 0, 0), 0xFFFF);
+        assert_eq!(frame_word(0, 0xFF, 0), 0xFF << 16);
+        assert_eq!(frame_word(0, 0, 1), 0x8 << 24);
+        assert_eq!(frame_word(0, 0, 15), 0xF << 24);
+        assert_eq!(frame_word(0xFFFF, 0xFF, 0xFF) >> 28, 0, "the reserved bits stay 0");
+    }
+
+    /// One AiP33628 as the datasheet describes it: shift on the CLK rising
+    /// edge, latch on a DIN rising edge while CLK is high.
+    #[derive(Default)]
+    struct Chip {
+        clk: bool,
+        din: bool,
+        shift: u32,
+        count: u32,
+        latched: Vec<(u32, u32)>,
+        din_moved_under_clk: u32,
+    }
+
+    impl Chip {
+        fn step(&mut self, clk: bool, din: bool) {
+            if clk && !self.clk {
+                self.shift |= (din as u32) << self.count;
+                self.count += 1;
+            }
+            if clk && self.clk && din != self.din {
+                // DIN changing while CLK is high: a latch if rising.
+                self.din_moved_under_clk += 1;
+                if din {
+                    self.latched.push((self.shift, self.count));
+                }
+            }
+            self.clk = clk;
+            self.din = din;
+        }
+    }
+
+    fn run(out: &[u8; FRAME_BYTES]) -> (Chip, Chip) {
+        let (mut a, mut b) = (Chip::default(), Chip::default());
+        for byte in out {
+            for nibble in [byte >> 4, byte & 0xF] {
+                a.step(nibble & BIT_CLK1 != 0, nibble & BIT_DATA1 != 0);
+                b.step(nibble & BIT_CLK2 != 0, nibble & BIT_DATA2 != 0);
+            }
+        }
+        (a, b)
+    }
+
+    #[test]
+    fn encode_pair_shifts_thirty_bits_and_latches_once() {
+        let mut out = [0u8; FRAME_BYTES];
+        for (ss1, ss2, cs, is) in [(0x0001, 0x8000, 0x30, 5), (0xFFFF, 0x0000, 0xC0, 15), (0x5A5A, 0xA5A5, 0x03, 0), (0, 0, 0, 0)] {
+            encode_pair(ss1, ss2, cs, is, &mut out);
+            let (a, b) = run(&out);
+            for (chip, ss) in [(&a, ss1), (&b, ss2)] {
+                assert_eq!(chip.count, FRAME_BITS as u32, "{ss:#06x}: bits shifted");
+                assert_eq!(chip.latched, vec![(frame_word(ss, cs, is), FRAME_BITS as u32)], "{ss:#06x}: one latch of the whole frame");
+                // The only DIN move under a high CLK is the latch itself (up, then down).
+                assert_eq!(chip.din_moved_under_clk, 2, "{ss:#06x}: DIN quiet during the shift");
+            }
+            // Trailing nibbles are zero: all wires low after the frame.
+            let last = out[FRAME_BYTES - 1];
+            assert_eq!(last & 0xF, 0);
+        }
+        assert_eq!(FRAME_NIBBLES, 29 * 3 + 2 + 4);
+        assert_eq!(FRAME_BYTES, FRAME_NIBBLES.div_ceil(2));
+    }
+}

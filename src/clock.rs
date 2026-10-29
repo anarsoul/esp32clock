@@ -24,7 +24,7 @@ use embassy_time::{Duration, Instant};
 
 use crate::{carry, settings};
 
-const SECS_PER_DAY: i64 = 86_400;
+pub use esp32clock_core::clock::LocalTime;
 
 /// Microseconds to add to the uptime to get Unix time. `None` until synced.
 static OFFSET_US: Mutex<Cell<Option<i64>>> = Mutex::new(Cell::new(None));
@@ -58,24 +58,6 @@ pub fn restore_carried() -> bool {
     }
 }
 
-/// Local time of day.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct LocalTime {
-    /// The Unix time this is the local time of.
-    pub unix: i64,
-    pub hour: u8,
-    pub minute: u8,
-    pub second: u8,
-    /// 0 is Monday, 6 is Sunday.
-    pub weekday: u8,
-}
-
-/// Day of the week of a local day count since 1970-01-01, which was a
-/// Thursday. 0 is Monday.
-pub fn weekday_of_days(days: i64) -> u8 {
-    (days + 3).rem_euclid(7) as u8
-}
-
 fn uptime_us() -> i64 {
     Instant::now().as_micros() as i64
 }
@@ -100,16 +82,7 @@ pub fn unix_secs() -> Option<i64> {
 /// Local time of day for a Unix time in seconds, in the timezone from the
 /// settings.
 pub fn local_time(unix_s: i64) -> LocalTime {
-    let tz_minutes = settings::get().tz_offset_minutes as i64;
-    let local = unix_s + tz_minutes * 60;
-    let local_s = local.rem_euclid(SECS_PER_DAY);
-    LocalTime {
-        unix: unix_s,
-        hour: (local_s / 3600) as u8,
-        minute: (local_s % 3600 / 60) as u8,
-        second: (local_s % 60) as u8,
-        weekday: weekday_of_days(local.div_euclid(SECS_PER_DAY)),
-    }
+    esp32clock_core::clock::local_time(unix_s, settings::get().tz_offset_minutes)
 }
 
 /// Local time of day, if synced, in the timezone from the settings.

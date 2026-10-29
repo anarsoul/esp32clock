@@ -27,6 +27,8 @@ use embassy_time::{Duration, with_timeout};
 use embedded_io_async::{Read, Write};
 use log::{info, warn};
 
+use esp32clock_core::http::{Method, RESPONSE_BUF, parse_head};
+
 use crate::buzzer;
 use crate::config::HTTP_PORT;
 use crate::form::{self, FormError, HealStamp, Status};
@@ -42,7 +44,6 @@ const RX_BUF: usize = 4096;
 const TX_BUF: usize = 1024;
 const REQUEST_BUF: usize = 1536;
 const BODY_MAX: usize = 512;
-const RESPONSE_BUF: usize = 4096;
 
 /// A client that stalls this long mid-transfer is dropped.
 const TIMEOUT: Duration = Duration::from_secs(5);
@@ -164,12 +165,6 @@ impl core::fmt::Write for Response {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Method {
-    Get,
-    Post,
-}
-
 /// The body of a request: read whole into the request buffer for the
 /// small ones, or left on the socket for a firmware upload, with what
 /// followed the head in the buffer and the total to expect.
@@ -186,39 +181,6 @@ struct Request<'a> {
     query: &'a str,
     authorization: Option<&'a str>,
     body: Body<'a>,
-}
-
-/// The request line, `Content-Length` and `Authorization`, borrowed
-/// from the head.
-struct Head<'a> {
-    method: Method,
-    path: &'a str,
-    query: &'a str,
-    authorization: Option<&'a str>,
-    content_length: usize,
-}
-
-fn parse_head(head: &str) -> Option<Head<'_>> {
-    let mut lines = head.split("\r\n");
-    let request_line = lines.next()?;
-    let mut words = request_line.split(' ');
-    let method = match words.next()? {
-        "GET" => Method::Get,
-        "POST" => Method::Post,
-        _ => return None,
-    };
-    let target = words.next()?;
-    let (path, query) = target.split_once('?').unwrap_or((target, ""));
-    let mut content_length = 0;
-    let mut authorization = None;
-    for (key, value) in lines.filter_map(|l| l.split_once(':')) {
-        if key.eq_ignore_ascii_case("content-length") {
-            content_length = value.trim().parse().ok()?;
-        } else if key.eq_ignore_ascii_case("authorization") {
-            authorization = Some(value.trim());
-        }
-    }
-    Some(Head { method, path, query, authorization, content_length })
 }
 
 /// Read the head and the body. `None` for anything that is not a request

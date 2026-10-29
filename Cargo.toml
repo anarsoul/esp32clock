@@ -8,7 +8,14 @@ version      = "0.1.0"
 name = "esp32clock"
 path = "./src/bin/main.rs"
 
+# The firmware is the root package, so plain cargo commands build only
+# it; `core` is the host-testable half (`cargo host-test`).
+[workspace]
+members = ["core"]
+
 [dependencies]
+esp32clock-core = { path = "core" }
+
 esp-hal = { version = "1.2.2", features = ["esp32c3", "log-04", "unstable"] }
 
 esp-rtos = { version = "0.4.0", features = [

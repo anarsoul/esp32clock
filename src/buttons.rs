@@ -6,32 +6,7 @@ use embassy_sync::channel::Channel;
 use embassy_time::{Duration, Instant, Timer};
 use esp_hal::gpio::Input;
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Button {
-    /// S1, the upper button.
-    Top,
-    /// S2, the lower button.
-    Bottom,
-    /// Both held together. Only ever `Long`.
-    Both,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Kind {
-    /// Released before the long-press threshold.
-    Short,
-    /// Held past the threshold. Emitted while still held.
-    Long,
-    /// Both buttons held for `HOLD_PRESS`, long after their `Long`.
-    /// Only ever for `Both`, once per hold.
-    Hold,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct Event {
-    pub button: Button,
-    pub kind: Kind,
-}
+pub use esp32clock_core::buttons::{Button, Event, Kind};
 
 const POLL: Duration = Duration::from_millis(10);
 const DEBOUNCE: Duration = Duration::from_millis(30);

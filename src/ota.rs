@@ -26,6 +26,9 @@ use log::{error, info, warn};
 use sha2::{Digest, Sha256};
 use static_cell::StaticCell;
 
+pub use esp32clock_core::ota::Slot;
+use esp32clock_core::ota::{DESC_MAGIC, DESC_OFFSET, DESC_VERSION, HASH_APPENDED, HASH_LEN, IMAGE_MAGIC, hash_chunk, version_from};
+
 use crate::auth::{self, Refusal, refuse};
 use crate::config::OTA_BOOT_LIMIT;
 use crate::storage::with_flash;
@@ -38,56 +41,13 @@ pub const VERSION: &str = env!("FIRMWARE_VERSION");
 /// Flash sector: the erase unit and the write granule of the upload.
 pub const SECTOR: usize = FlashStorage::SECTOR_SIZE as usize;
 
-/// Image header magic and the app descriptor's, which sits at 0x20 in
-/// every esp-idf style image (24-byte image header, 8-byte segment
-/// header, then the descriptor as the first thing in the first segment).
-const IMAGE_MAGIC: u8 = 0xE9;
-const DESC_OFFSET: usize = 0x20;
-const DESC_MAGIC: u32 = 0xABCD_5432;
-/// The 32-byte version string, NUL padded, inside the descriptor.
-const DESC_VERSION: core::ops::Range<usize> = DESC_OFFSET + 16..DESC_OFFSET + 48;
-/// Image header byte that says a SHA-256 of the rest of the image is its
-/// last 32 bytes. espflash always sets it; an image without it is
-/// refused, since nothing else can tell a truncated file from a whole one.
-const HASH_APPENDED: usize = 23;
-const HASH_LEN: usize = 32;
-
-/// An app slot, as the boot found it.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[repr(u8)]
-pub enum Slot {
-    Unknown = 0,
-    Factory = 1,
-    Ota0 = 2,
-    Ota1 = 3,
-}
-
-impl Slot {
-    pub fn name(self) -> &'static str {
-        match self {
-            Slot::Unknown => "?",
-            Slot::Factory => "factory",
-            Slot::Ota0 => "ota_0",
-            Slot::Ota1 => "ota_1",
-        }
-    }
-
-    fn from_raw(raw: u8) -> Slot {
-        match raw {
-            1 => Slot::Factory,
-            2 => Slot::Ota0,
-            3 => Slot::Ota1,
-            _ => Slot::Unknown,
-        }
-    }
-
-    fn from_subtype(sub: AppPartitionSubType) -> Slot {
-        match sub {
-            AppPartitionSubType::Factory => Slot::Factory,
-            AppPartitionSubType::Ota0 => Slot::Ota0,
-            AppPartitionSubType::Ota1 => Slot::Ota1,
-            _ => Slot::Unknown,
-        }
+/// The slot an app partition subtype names.
+fn slot_from_subtype(sub: AppPartitionSubType) -> Slot {
+    match sub {
+        AppPartitionSubType::Factory => Slot::Factory,
+        AppPartitionSubType::Ota0 => Slot::Ota0,
+        AppPartitionSubType::Ota1 => Slot::Ota1,
+        _ => Slot::Unknown,
     }
 }
 
@@ -127,7 +87,7 @@ pub fn init() {
     let mut table = [0u8; PARTITION_TABLE_MAX_LEN];
     let booted = match with_flash(|flash| partitions::read_partition_table(flash, &mut table).map(|t| t.booted_partition())) {
         Ok(Ok(Some(p))) => match p.partition_type() {
-            PartitionType::App(sub) => Slot::from_subtype(sub),
+            PartitionType::App(sub) => slot_from_subtype(sub),
             _ => Slot::Unknown,
         },
         Ok(_) => Slot::Unknown,
@@ -139,7 +99,7 @@ pub fn init() {
     BOOTED.store(booted as u8, Ordering::Relaxed);
 
     let (selected, ota_layout) = with_flash(|flash| match OtaUpdater::new(flash, &mut table) {
-        Ok(mut updater) => (updater.selected_partition().map(Slot::from_subtype).unwrap_or(Slot::Unknown), true),
+        Ok(mut updater) => (updater.selected_partition().map(slot_from_subtype).unwrap_or(Slot::Unknown), true),
         Err(_) => (Slot::Unknown, false),
     });
     info!(
@@ -226,7 +186,7 @@ pub async fn install(first: &[u8], total: usize, body: &mut impl Read) -> Result
             .ok()
             .and_then(|t| t.find_partition(PartitionType::App(next)).ok().flatten())
             .ok_or(refuse("500 Internal Server Error", "slot missing from the table"))?;
-        Ok((Slot::from_subtype(next), entry.offset(), room))
+        Ok((slot_from_subtype(next), entry.offset(), room))
     })?;
     if total > room {
         return Err(refuse("413 Payload Too Large", "image larger than a slot"));
@@ -317,31 +277,6 @@ async fn fill(buf: &mut [u8], first: &mut &[u8], body: &mut impl Read, want: usi
         }
     }
     Ok(n)
-}
-
-/// Feed the chunk at `at` of an image `total` bytes long to the hasher,
-/// except for the last `HASH_LEN` bytes of the image, which go into
-/// `tail` instead.
-fn hash_chunk(hasher: &mut Sha256, tail: &mut [u8; HASH_LEN], chunk: &[u8], at: usize, total: usize) {
-    let hashed_end = total - HASH_LEN;
-    let split = hashed_end.saturating_sub(at).min(chunk.len());
-    hasher.update(&chunk[..split]);
-    for (i, &b) in chunk[split..].iter().enumerate() {
-        tail[at + split + i - hashed_end] = b;
-    }
-}
-
-/// The descriptor's version field as text: up to the first NUL, printable
-/// ASCII only.
-fn version_from(field: &[u8]) -> heapless::String<32> {
-    let mut s = heapless::String::new();
-    for &b in field.iter().take_while(|&&b| b != 0) {
-        let c = if b.is_ascii_graphic() || b == b' ' { b as char } else { '?' };
-        if s.push(c).is_err() {
-            break;
-        }
-    }
-    s
 }
 
 /// Reboot into the new image: the time goes across as for a self-heal

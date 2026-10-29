@@ -3204,6 +3204,11 @@ the panel shows, and only in the sweep's tail.
   would mean a wider error type on every `?` in `install` and `fill`,
   or a counting reader inside `ota.rs`, which is `Counting` moved, not
   removed. Backlog item struck as "kept".
+- **The setup page can outgrow the buffer on hostile SSIDs** (found by
+  the host tests, 2026-10-29). `write_provision_page` escapes each
+  listed SSID twice; twelve SSIDs of 32 `"` or `&` are about 4.4 KB
+  of entities and the page is a `500` while they are in range. Cap the
+  escaped length or list the label only.
 
 Checked on the host: builds, clippy clean. The old tables were read
 out of git by a script (`GAMMA[96]` is 1, `GAMMA[255]` 7; the steps at
@@ -3225,95 +3230,134 @@ dash one step behind the bright one, and an armed alarm's degree mark
 must stay steady through the sweep. Open `/update`: the PIN still
 works once and a wrong one still locks out for ten seconds.
 
-### Host tests: `cargo test` for the pure modules (next) — planned 2026-10-29
+### Host tests: a library crate the host can `cargo test` — DONE, verified on the panel 2026-10-29
 
 **Problem.** Every milestone since M5 was checked on the host in a
 scratch crate that lived outside the repo and was recreated each time
 (the records above: the mock-flash record round-trips, the form parser
 and page sizes, the head parser, the token and sector functions, the
 melody lengths, the UI grace, the DHCP and DNS servers, the `Hostname`
-rule and the palette this session). Nothing of it survives the
-session, so each pass starts from the PLAN.md prose and the checks
-drift from the code they describe. The firmware crate itself cannot
-host `cargo test`: the lib depends on esp-hal and esp-radio, and
-`.cargo/config.toml` sets the riscv target for everything under the
-repo.
+rule and the palette). Nothing of it survived a session, so each pass
+started from the PLAN.md prose and the checks drifted from the code.
+The firmware crate cannot host `cargo test`: the lib depends on
+esp-hal and esp-radio, and `.cargo/config.toml` sets the riscv target
+for every cargo subcommand under the repo.
 
-**Design.** A second crate, `hosttest/`, inside the repo but not a
-workspace member, so the root `cargo build --release` does not see it.
-Tried 2026-10-29 in a throwaway directory: it builds and its tests
-pass both ways, and the firmware build is unchanged.
+**What the ecosystem does (read 2026-10-29).** Cargo has no answer for
+the target: `build.target` applies to `test` as much as to `build`,
+and the request for a build-only default (rust-lang/cargo#6784) was
+closed "not planned" on 2025-11-06. What was added is `--target
+host-tuple`, stable since Rust 1.91, so the host triple need not be
+spelled out. With that, the practice Ferrous Systems ("Testing an
+embedded application"), Veecle ("Your rust embedded unit test runs on
+the host") and Embassy's own CI share is: the hardware-independent
+code is a library crate with no HAL dependency, marked
+`#![cfg_attr(not(test), no_std)]`, with its tests in `#[cfg(test)]`
+modules next to the code, and it is tested with `cargo test -p <lib>
+--target <host>`; Ferrous puts the host crates in an outer workspace
+with no `build.target` and the firmware in an inner one, Veecle and
+Embassy pass the flag. Espressif's Rust book says only "test as much
+as possible on your host machine" and then covers on-target
+`embedded-test`. The first draft of this entry had a `hosttest/` crate
+pulling the firmware's files in by `#[path]`; that is the hack, not
+the target flag, and it was dropped for the split below.
 
-- `hosttest/Cargo.toml` with the dev-only dependencies the modules
-  need on the host: `embassy-sync`, `embassy-time` and
-  `critical-section` on their `std` features, `log`, `heapless`,
-  `embassy-net` on `udp`, `proto-ipv4` and `medium-ethernet` for
-  `dhcpd.rs` and `dnsd.rs`, and `sequential-storage` for the mock
-  flash. Versions pinned to what `Cargo.lock` at the root resolved, so
-  the host runs the same code.
-- `hosttest/.cargo/config.toml` with `build.target` set back to
-  `x86_64-unknown-linux-gnu`; the deeper config wins over the root's
-  riscv target, so `cd hosttest && cargo test` is the whole command.
-  From the root, `cargo test --manifest-path hosttest/Cargo.toml
-  --target x86_64-unknown-linux-gnu` does the same; without the flag
-  the build fails with "can't find crate for std". The root's
-  `[unstable] build-std` line is ignored by stable cargo and does not
-  interfere. `hosttest/target/` is covered by `.gitignore`'s `target/`;
-  `hosttest/Cargo.lock` is committed.
-- `hosttest/src/lib.rs` is `#![cfg(test)]` and pulls the pure modules
-  in by `#[path = "../../src/…"]`, as the scratch crates did:
-  `config.rs`, `melody.rs`, `panel.rs`, `aip33628.rs`, `settings.rs`,
-  `form.rs`, `auth.rs`, `dhcpd.rs`, `dnsd.rs`. The tests live in
-  `hosttest/src/` by module (`panel.rs` tests in `hosttest/src/panel_tests.rs`
-  and so on), not in `#[cfg(test)]` blocks inside the firmware files,
-  so the firmware sources stay free of host-only code and the
-  `#[path]` modules stay exactly the files the firmware compiles.
-- Three things were copied in by hand before and get a hardware-free
-  home instead, so they can be included rather than duplicated: the
-  head parser out of `http.rs` into `http_head.rs` (pure; `http.rs`
-  keeps the sockets), the token, `version_from`, `hash_chunk` and the
-  sector arithmetic out of `ota.rs` into `ota_image.rs`, and the
-  record codec out of `carry.rs` into `carry_record.rs` (`carry.rs`
-  keeps the RTC-RAM static and the reset reason). Each is a move, not
-  a change; the layout table in CLAUDE.md gains the three lines.
-  `ui.rs` needs `buttons::{Button, Event, Kind}` and
-  `clock::LocalTime`, both plain data: a `hosttest/src/stubs.rs`
-  provides them and `ui.rs` is included as is, the way the 2026-10-22
-  UI scratch crate did it.
-- The AiP33628 behavioural model from M1 (shift on CLK rise, latch on
-  DIN rise while CLK high, per-sink lit time against level × unit) is
-  recreated as `hosttest/src/aip_model.rs` with `build_cycle`
-  reimplemented against the current constants, and becomes a test over
-  `Panel::render` for every palette colour and every glyph.
+**Design.** The repo becomes a two-member workspace. The root package
+stays the firmware, so `cargo build --release`, `clippy` and `run` at
+the root build only it, as before. `core/` is `esp32clock-core`, a
+`#![cfg_attr(not(test), no_std)]` library with no esp dependency,
+which the firmware depends on by path and re-exports from `lib.rs`
+(`pub use esp32clock_core::{aip33628, auth, config, form, melody,
+panel, settings, ui}`), so every `crate::settings` in the firmware
+still resolves and the moved files keep their `crate::` paths, which
+now point inside `core`. The tests run with
+`cargo test -p esp32clock-core --target host-tuple`, aliased as
+`cargo host-test` in `.cargo/config.toml`.
 
-**Tests, ported from the records above in this order:** the checks of
-this session (hostname rule and `DEFAULT`, palette against the old
-gamma mapping, `dimmed`, the offered brightness steps at the default
-and at `MAX_CURRENT_STEP=15`); the record round-trips and migrations
-of every version with `sequential-storage`'s mock flash, including the
-newer-version prefix read; the form parser cases (every key, absent
-checkboxes, unknown key, bad colour, brightness off the list, `24:00`,
-timezone past the limit, malformed escape, empty body, `ssid=` empty,
-the credentials refusal) and the worst-case page, update page and
-twelve-network setup page sizes asserted below `http::RESPONSE_BUF`,
-which turns CLAUDE.md's "measure on the host after adding a field"
-into a failing test; the head parser and token cases of M9; the sector
-loop on the three image lengths; the melody lengths and `pick`; the
-UI grace and skip cases; the DHCP discover, offer, request and
-decline, and the DNS answer; the PIN rule (one attempt, TTL, lockout,
-`+123`). Sizes recorded in PLAN.md become assertions with the number
-in the test, so a change shows up as a diff, not a prose edit.
+- **Moved whole:** `aip33628.rs`, `panel.rs`, `melody.rs`,
+  `config.rs`, `settings.rs`, `form.rs`, `auth.rs`, `ui.rs`. `config`
+  reads `option_env!` when `core` compiles, so `core/build.rs` carries
+  the `rerun-if-env-changed` lines and the root `build.rs` keeps the
+  `git describe` and the linker script.
+- **Split, the pure half into `core` under the same module name:**
+  `buttons` (the `Button`, `Kind` and `Event` types; the GPIO task
+  stays and re-exports them), `clock` (`LocalTime`, `weekday_of_days`
+  and `local_time(unix, tz_minutes)`; the firmware's `local_time`
+  passes the settings' timezone), `carry` (`Carried`, `MARK`, `WORDS`,
+  `encode`, `decode`; the RTC static, `init`, `get`, `update` and
+  `freeze` stay), `http` (`Method`, `Head`, `parse_head` and
+  `RESPONSE_BUF`, so the page-size tests assert against the real
+  number; the sockets stay), `ota` (the image constants, `Slot` with
+  `name` and `from_raw`, `hash_chunk`, `version_from`; the flash,
+  the partition table and `slot_from_subtype` stay). Each is a move,
+  not a change; the firmware image is the same code.
+- **Not moved yet:** `dhcpd.rs` and `dnsd.rs` (their pure halves use
+  embassy-net's address types; moving them means embassy-net in
+  `core`'s dependencies), `storage.rs` (esp-storage; the mock-flash
+  check of M5 is not reproduced, the record codec is tested directly),
+  `scan.rs` (the AiP33628 behavioural model of M1 would need
+  `build_cycle` on the host). Three candidates for the next pass.
+- **Dependencies of `core`:** `embassy-sync`, `embassy-time`,
+  `critical-section`, `log`, `heapless`, `sha2` without default
+  features; as dev-dependencies, `embassy-time` and `critical-section`
+  on their `std` features, so the host has a time driver and a
+  critical section. Versions as the root lockfile had them.
+
+**Tests** (`#[cfg(test)] mod tests` at the end of each `core` module),
+ported from the records above: `settings` (the `Hostname` rule and
+`DEFAULT`, the record round trip and the older versions read with
+defaults, a newer version read by its prefix, the rejections, `seed`,
+`Debug` hiding the secrets, the brightness choices within the
+ceiling, `is_valid` at the edges); `panel` (the palette against the
+old gamma mapping, `render` putting a level's bits in the right
+planes, every glyph within seven segments); `aip33628` (frame word
+layout, `IS_WIRE` its own inverse, the encoder's step count and the
+latch tail); `form` (every key, absent checkboxes, the refusals, the
+credentials gate, percent decoding, the page, update page and setup
+page sizes under `RESPONSE_BUF`, the JSON hiding the secrets);
+`http` (the head parser cases of M9); `ota` (`hash_chunk` on a
+sector multiple, 1001 over and 3 over, `version_from`); `carry`
+(round trip, a wrong mark, the 2106 edge); `clock` (midnight, a
+negative timezone, the weekday); `melody` (lengths, names, `pick`);
+`ui` (the grace and skip cases of 2026-10-22, the single timer);
+`auth` (`bytes_eq`, the PIN's one attempt, TTL, lockout and `+123`).
+Sizes recorded in PLAN.md become assertions, so a change shows up as
+a failing test, not a prose edit.
 
 **Workflow after it lands.** CLAUDE.md's "Verifying without a board"
-section says `cd hosttest && cargo test` instead of "recreate it in a
-scratch crate", and the Build section lists the command. Every later
-milestone adds its host checks there and PLAN.md records "host tests
-pass" with the names of the new tests rather than the prose list.
+says `cargo host-test` instead of "recreate a scratch crate", the
+Build section lists the command, and the layout table gains `core/`.
+Later milestones add their host checks as tests and PLAN.md records
+"host tests pass" with the new tests' names.
 
-**Verify.** On the host only: `cargo test` green in `hosttest/`,
-`cargo build --release` and `cargo clippy --release` at the root
-unchanged, and the firmware image size the same before and after the
-three moves (they are moves). Nothing to look at on the panel.
+**Done, 2026-10-29.** 61 tests pass; `cargo build --release`,
+`cargo clippy --release` and `cargo clippy -p esp32clock-core --target
+host-tuple --tests` are clean. `llvm-size` against the previous
+commit, built from a worktree into a separate target directory: text
+879398 against 878570 (+828 bytes, 0.1 %), data 10480 against 10496,
+bss 335516 against 335500; the crate boundary costs a little even
+under fat LTO (the `local_time` wrapper, the re-exported statics).
+Deviations from the plan above: the page tests assert the bound
+(`PAGE_MAX`, 3968) and print the sizes (settings 2769, update 2989,
+setup with twelve 32-character networks 2945; without headers, so
+not comparable to the 2821/3059/3209 above, which counted 88 bytes
+of headers) rather than the exact
+numbers, so a label edit is not a failing test; and `tz_minutes` is
+an `i16` in `clock::local_time`, as the setting is. Two tests found
+facts, not bugs: the beeps are 700 ms on 2500 Hz on purpose (the
+tune bounds exempt index 0), and 2026-10-29 is a Thursday.
+
+**Finding, for the backlog.** The setup page lists each network twice
+through `HtmlStr` (the option's value and its label); an SSID of 32
+`"` or `&` is 160 to 192 bytes each way, and twelve of them would
+pass `RESPONSE_BUF` and turn the setup page into a 500 while that
+network is in range. Adversarial, not seen in the wild; a cap on the
+escaped length, or listing the label only, would close it.
+
+**Verify on the panel.** One flash: the clock boots, shows the time,
+`http://<ip>/` loads and a setting saved from the page sticks. The
+move touched no logic beyond the `local_time` wrapper.
+
 
 ### M11 — NTC thermometer and light sensor — planned
 

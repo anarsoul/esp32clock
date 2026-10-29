@@ -539,3 +539,237 @@ pub fn update(f: impl FnOnce(&mut Settings)) {
 pub fn receiver() -> SettingsReceiver {
     WATCH.receiver().expect("too many settings receivers")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A settings value with every field away from its default and every
+    /// string at its longest.
+    fn full() -> Settings {
+        Settings {
+            color: PALETTE.len() - 1,
+            brightness: BRIGHTNESS_STEPS.len() - 1,
+            alarm_hour: 23,
+            alarm_minute: 59,
+            alarm_armed: true,
+            twelve_hour: true,
+            tz_offset_minutes: -420,
+            hostname: Hostname::new(&"h".repeat(HOSTNAME_MAX)).unwrap(),
+            alarm_days: 0b0101010,
+            melody: melody::RANDOM,
+            skip_next: false,
+            wifi: Credentials {
+                ssid: Text::new(&"s".repeat(SSID_MAX)).unwrap(),
+                password: Secret(Text::new(&"p".repeat(PASSWORD_MAX)).unwrap()),
+            },
+            token: Secret(Text::new(&"t".repeat(TOKEN_MAX)).unwrap()),
+        }
+    }
+
+    #[test]
+    fn hostname_rule() {
+        assert_eq!(Hostname::new("Clock-01").map(|h| h.as_str().to_string()), Some("clock-01".to_string()));
+        assert!(Hostname::new("").is_none());
+        assert!(Hostname::new("-a").is_none());
+        assert!(Hostname::new("a-").is_none());
+        assert!(Hostname::new("a_b").is_none());
+        assert!(Hostname::new("a.b").is_none());
+        assert!(Hostname::new("a b").is_none());
+        assert!(Hostname::new(&"a".repeat(HOSTNAME_MAX)).is_some());
+        assert!(Hostname::new(&"a".repeat(HOSTNAME_MAX + 1)).is_none());
+        assert_eq!(Hostname::DEFAULT.as_str(), DEFAULT_HOSTNAME);
+    }
+
+    #[test]
+    fn palette_is_the_old_gamma_of_the_old_rgb() {
+        // The palette was 8-bit RGB through a gamma table until 2026-10-29;
+        // the table mapped 255 to 7, 96 to 1 and 0 to 0.
+        let old_rgb = [(255, 0, 0), (255, 96, 0), (255, 255, 0), (0, 255, 0), (0, 255, 255), (0, 0, 255), (255, 0, 255), (255, 255, 255)];
+        let g = |v: u8| match v {
+            255 => MAX_LEVEL,
+            96 => 1,
+            _ => 0,
+        };
+        for (i, (r, gr, b)) in old_rgb.iter().enumerate() {
+            assert_eq!(PALETTE[i], Levels::new(g(*b), g(*gr), g(*r)), "{}", PALETTE_NAMES[i]);
+        }
+        assert_eq!(PALETTE.len(), PALETTE_NAMES.len());
+    }
+
+    #[test]
+    fn brightness_choices_stay_within_the_ceiling() {
+        assert!(!BRIGHTNESS_STEPS.is_empty());
+        for (i, choice) in BRIGHTNESS_CHOICES.iter().enumerate().take(BRIGHTNESS_STEPS.len()) {
+            let s = Settings { brightness: i, ..Settings::DEFAULT };
+            assert_eq!(s.brightness_pct(), choice.0);
+            assert!(s.current_step() <= MAX_CURRENT_STEP, "{} % is step {}", s.brightness_pct(), s.current_step());
+        }
+        // The list is ascending in both percent and step, and the choice
+        // past the ceiling, if there is one, is really past it.
+        assert!(BRIGHTNESS_CHOICES.windows(2).all(|w| w[0].0 < w[1].0 && w[0].1 < w[1].1));
+        if let Some(next) = BRIGHTNESS_CHOICES.get(BRIGHTNESS_STEPS.len()) {
+            assert!(next.1 > MAX_CURRENT_STEP);
+        }
+        assert!(Settings::DEFAULT.brightness < BRIGHTNESS_STEPS.len());
+        assert!(Settings::DEFAULT.is_valid());
+    }
+
+    #[test]
+    fn record_round_trip() {
+        let s = full();
+        let r = s.to_record();
+        assert_eq!(r[0], RECORD_VERSION);
+        assert_eq!(Settings::from_record(&r), Some(s));
+        // `skip_next` is not stored.
+        let mut skipping = s;
+        skipping.skip_next = true;
+        assert_eq!(skipping.to_record(), r);
+    }
+
+    /// The length of a record of each older version: where its last
+    /// field ends.
+    fn prefix_len(version: u8) -> usize {
+        match version {
+            1 => 6,
+            2 => 9,
+            3 => RECORD_HOSTNAME + HOSTNAME_MAX,
+            4 => RECORD_ALARM_DAYS + 1,
+            5 => RECORD_MELODY + 1,
+            _ => RECORD_LEN,
+        }
+    }
+
+    #[test]
+    fn older_records_read_with_defaults_for_what_they_lack() {
+        let s = full();
+        let r = s.to_record();
+        for version in 1..RECORD_VERSION {
+            let mut old = r[..prefix_len(version)].to_vec();
+            old[0] = version;
+            let got = Settings::from_record(&old).unwrap_or_else(|| panic!("version {version} rejected"));
+            let d = Settings::DEFAULT;
+            assert_eq!((got.color, got.brightness, got.alarm_hour, got.alarm_minute, got.alarm_armed), (s.color, s.brightness, 23, 59, true));
+            assert_eq!(got.twelve_hour, if version >= 2 { s.twelve_hour } else { d.twelve_hour }, "v{version}");
+            assert_eq!(got.tz_offset_minutes, if version >= 2 { s.tz_offset_minutes } else { d.tz_offset_minutes });
+            assert_eq!(got.hostname, if version >= 3 { s.hostname } else { d.hostname });
+            assert_eq!(got.alarm_days, if version >= 4 { s.alarm_days } else { d.alarm_days });
+            assert_eq!(got.melody, if version >= 5 { s.melody } else { d.melody });
+            assert_eq!(got.wifi, Credentials::NONE, "v{version} has no network");
+            assert!(got.token.0.is_empty(), "v{version} has no token");
+        }
+    }
+
+    #[test]
+    fn newer_record_is_read_by_its_known_prefix() {
+        let s = full();
+        let mut r = s.to_record().to_vec();
+        r[0] = RECORD_VERSION + 1;
+        r.extend_from_slice(&[0xAA; 40]);
+        assert_eq!(Settings::from_record(&r), Some(s));
+    }
+
+    #[test]
+    fn bad_records_are_rejected_and_table_indexes_clamped() {
+        let s = full();
+        let r = s.to_record();
+        let with = |f: &dyn Fn(&mut [u8; RECORD_LEN])| {
+            let mut r = r;
+            f(&mut r);
+            Settings::from_record(&r)
+        };
+        assert!(with(&|r| r[RECORD_SSID_LEN] = SSID_MAX as u8 + 1).is_none(), "SSID length past the field");
+        assert!(with(&|r| r[RECORD_PASSWORD_LEN] = PASSWORD_MIN as u8 - 1).is_none(), "password of 7");
+        assert!(with(&|r| r[RECORD_PASSWORD_LEN] = PASSWORD_MAX as u8 + 1).is_none(), "password of 65");
+        assert!(with(&|r| r[RECORD_TOKEN_LEN] = TOKEN_MIN as u8 - 1).is_none(), "token of 7");
+        assert!(with(&|r| r[RECORD_TOKEN] = b' ').is_none(), "token with a space");
+        assert!(with(&|r| r[RECORD_SSID] = 0xFF).is_none(), "SSID not UTF-8");
+        assert!(with(&|r| r[3] = 24).is_none(), "alarm hour 24");
+        assert!(with(&|r| r[4] = 60).is_none(), "alarm minute 60");
+        assert!(with(&|r| r[2] = BRIGHTNESS_CHOICES.len() as u8).is_none(), "brightness past the whole list");
+        assert!(with(&|r| r[RECORD_ALARM_DAYS] = 0).is_none(), "no alarm day");
+        assert!(with(&|r| r[RECORD_ALARM_DAYS] = 0x80).is_none(), "an eighth day");
+        assert!(with(&|r| r[7..9].copy_from_slice(&(TZ_LIMIT_MINUTES + 1).to_le_bytes())).is_none(), "timezone past the limit");
+        // Indexes a newer image may have added land on the last entry.
+        assert_eq!(with(&|r| r[1] = 200).map(|s| s.color), Some(PALETTE.len() - 1));
+        assert_eq!(with(&|r| r[RECORD_MELODY] = 200).map(|s| s.melody), Some(melody::MELODIES.len() - 1));
+        // A record from a build with a higher current ceiling.
+        if BRIGHTNESS_STEPS.len() < BRIGHTNESS_CHOICES.len() {
+            assert_eq!(with(&|r| r[2] = BRIGHTNESS_CHOICES.len() as u8 - 1).map(|s| s.brightness), Some(BRIGHTNESS_STEPS.len() - 1));
+        }
+        // An empty network and token are fine: no network, no token.
+        let open = with(&|r| {
+            r[RECORD_SSID_LEN] = 0;
+            r[RECORD_PASSWORD_LEN] = 0;
+            r[RECORD_TOKEN_LEN] = 0;
+        })
+        .unwrap();
+        assert!(open.wifi.is_none() && open.token.0.is_empty());
+    }
+
+    #[test]
+    fn seed_fills_only_what_is_empty() {
+        let mut s = full();
+        s.seed();
+        assert_eq!(s, full());
+        let mut d = Settings::DEFAULT;
+        d.seed();
+        assert_eq!(d.wifi.is_none(), WIFI_SSID.is_empty());
+        assert_eq!(d.token.0.is_empty(), API_TOKEN.is_empty());
+    }
+
+    #[test]
+    fn debug_never_shows_a_secret() {
+        let s = full();
+        let text = format!("{s:?}");
+        assert!(text.contains(&"s".repeat(SSID_MAX)), "the SSID is shown");
+        assert!(!text.contains("pppp"), "the password is hidden");
+        assert!(!text.contains("tttt"), "the token is hidden");
+        assert_eq!(format!("{:?}", s.token), "<set>");
+        assert_eq!(format!("{:?}", Secret(Text::<8>::EMPTY)), "<none>");
+        assert_eq!(format!("{:?}", s.hostname), format!("{:?}", s.hostname.as_str()));
+    }
+
+    #[test]
+    fn token_and_password_rules() {
+        assert!(valid_token(""));
+        assert!(!valid_token(&"a".repeat(TOKEN_MIN - 1)));
+        assert!(valid_token(&"a".repeat(TOKEN_MIN)));
+        assert!(valid_token(&"~".repeat(TOKEN_MAX)));
+        assert!(!valid_token(&"a".repeat(TOKEN_MAX + 1)));
+        assert!(!valid_token("abcd efgh"));
+        assert!(!valid_token("abcdefg\x7f"));
+        assert!(!valid_token("abcdefgé"));
+        assert!(valid_password(""));
+        assert!(!valid_password(&"p".repeat(PASSWORD_MIN - 1)));
+        assert!(valid_password(&"p".repeat(PASSWORD_MIN)));
+        assert!(valid_password(&"p".repeat(PASSWORD_MAX)));
+        assert!(!valid_password(&"p".repeat(PASSWORD_MAX + 1)));
+        assert!(Text::<4>::new("abcde").is_none());
+        assert_eq!(Text::<4>::new("abcd").map(|t| t.len()), Some(4));
+    }
+
+    #[test]
+    fn is_valid_at_the_edges() {
+        let ok = full();
+        assert!(ok.is_valid());
+        let tz = |m| Settings { tz_offset_minutes: m, ..ok };
+        assert!(tz(TZ_LIMIT_MINUTES).is_valid() && tz(-TZ_LIMIT_MINUTES).is_valid());
+        assert!(!tz(TZ_LIMIT_MINUTES + 1).is_valid() && !tz(-TZ_LIMIT_MINUTES - 1).is_valid());
+        assert!(!Settings { color: PALETTE.len(), ..ok }.is_valid());
+        assert!(!Settings { brightness: BRIGHTNESS_STEPS.len(), ..ok }.is_valid());
+        assert!(Settings { melody: melody::RANDOM, ..ok }.is_valid());
+        assert!(!Settings { melody: melody::RANDOM + 1, ..ok }.is_valid());
+        assert!(Settings { alarm_days: DAYS_WEEKEND, ..ok }.alarm_on(5));
+        assert!(!Settings { alarm_days: DAYS_WEEKEND, ..ok }.alarm_on(4));
+        assert_eq!(RECORD_LEN, ok.to_record().len());
+    }
+
+    #[test]
+    fn update_publishes_and_get_reads() {
+        update(|s| s.color = 3);
+        assert_eq!(get().color, 3);
+        update(|s| s.color = 0);
+        assert_eq!(get().color, 0);
+    }
+}

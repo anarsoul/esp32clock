@@ -620,3 +620,220 @@ impl core::fmt::Display for DayOptions {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::http::PAGE_MAX;
+
+    fn status(heal: bool) -> Status {
+        Status {
+            version: "v0.1.0-123-gabcdef0-dirty-and-long",
+            slot: "ota_1",
+            mode: "sta",
+            uptime_secs: 46_296 * 86_400 + 3 * 3600 + 59 * 60,
+            heals: 4_000_000_000,
+            last_heal: heal.then_some(HealStamp { unix_secs: 1_800_000_000, weekday: 2, hour: 23, minute: 59, ago_secs: Some(400 * 86_400) }),
+        }
+    }
+
+    fn decode(src: &str) -> Option<String> {
+        let mut out = [0u8; VALUE_MAX];
+        let n = percent_decode(src.as_bytes(), &mut out)?;
+        Some(String::from_utf8(out[..n].to_vec()).unwrap())
+    }
+
+    #[test]
+    fn percent_decoding() {
+        assert_eq!(decode("a+b%20c%2Fd").as_deref(), Some("a b c/d"));
+        assert_eq!(decode("%zz"), None);
+        assert_eq!(decode("%2"), None);
+        assert_eq!(decode("%"), None);
+        assert_eq!(decode(&"a".repeat(VALUE_MAX)).map(|s| s.len()), Some(VALUE_MAX));
+        assert_eq!(decode(&"a".repeat(VALUE_MAX + 1)), None);
+    }
+
+    #[test]
+    fn days_parse_and_print() {
+        for (text, mask) in [("all", DAYS_ALL), ("weekdays", DAYS_WEEKDAYS), ("weekend", DAYS_WEEKEND), ("mon,wed", 0b0000101), ("sun", 0x40)] {
+            assert_eq!(parse_days(text), Some(mask), "{text}");
+            let mut out = String::new();
+            write_days(&mut out, mask).unwrap();
+            assert_eq!(out, text);
+        }
+        assert_eq!(parse_days(" tue , fri"), Some(0b0010010));
+        assert_eq!(parse_days(""), None);
+        assert_eq!(parse_days("mon,xyz"), None);
+        assert_eq!(parse_days("mon,"), None);
+    }
+
+    #[test]
+    fn apply_sets_every_key() {
+        let mut s = Settings::DEFAULT;
+        let body = b"color=cyan&brightness=25&alarm=06%3A30&armed=on&days=weekend&skip=1&twelve_hour=true&tz=-420&hostname=Bedroom-Clock&melody=random";
+        apply(&mut s, body, true, false).unwrap();
+        assert_eq!(s.color, PALETTE_NAMES.iter().position(|n| *n == "cyan").unwrap());
+        assert_eq!(s.brightness_pct(), 25);
+        assert_eq!((s.alarm_hour, s.alarm_minute), (6, 30));
+        assert!(s.alarm_armed && s.skip_next && s.twelve_hour);
+        assert_eq!(s.alarm_days, DAYS_WEEKEND);
+        assert_eq!(s.tz_offset_minutes, -420);
+        assert_eq!(s.hostname.as_str(), "bedroom-clock");
+        assert_eq!(s.melody, melody::RANDOM);
+        assert!(s.is_valid());
+        // The page's form: absent checkboxes turn off; the API's does not.
+        apply(&mut s, b"tz=0", true, false).unwrap();
+        assert!(!s.alarm_armed && !s.skip_next && !s.twelve_hour);
+        s.alarm_armed = true;
+        apply(&mut s, b"tz=60", false, false).unwrap();
+        assert!(s.alarm_armed);
+        // An empty body, stray separators and a key without a value.
+        apply(&mut s, b"", false, false).unwrap();
+        apply(&mut s, b"&&tz=15&", false, false).unwrap();
+        assert_eq!(s.tz_offset_minutes, 15);
+        assert_eq!(apply(&mut s, b"armed", false, false), Ok(()));
+        assert!(!s.alarm_armed);
+    }
+
+    #[test]
+    fn apply_refuses_bad_input() {
+        let s0 = Settings::DEFAULT;
+        let try_body = |body: &[u8]| {
+            let mut s = s0;
+            apply(&mut s, body, false, false)
+        };
+        assert_eq!(try_body(b"colour=red"), Err(FormError::UnknownKey));
+        assert_eq!(try_body(b"color=pink"), Err(FormError::BadValue));
+        assert_eq!(try_body(b"brightness=33"), Err(FormError::BadValue));
+        assert_eq!(try_body(b"brightness=10"), Ok(()));
+        assert_eq!(try_body(b"alarm=24:00"), Err(FormError::BadValue));
+        assert_eq!(try_body(b"alarm=23:60"), Err(FormError::BadValue));
+        assert_eq!(try_body(b"alarm=7"), Err(FormError::BadValue));
+        assert_eq!(try_body(b"tz=841"), Err(FormError::BadValue));
+        assert_eq!(try_body(b"tz=-841"), Err(FormError::BadValue));
+        assert_eq!(try_body(b"tz=840"), Ok(()));
+        assert_eq!(try_body(b"tz=%zz"), Err(FormError::BadValue));
+        assert_eq!(try_body(b"%zz=1"), Err(FormError::UnknownKey));
+        assert_eq!(try_body(b"hostname=-bad"), Err(FormError::BadValue));
+        assert_eq!(try_body(b"days="), Err(FormError::BadValue));
+        assert_eq!(try_body(b"melody=9"), Err(FormError::BadValue));
+        assert_eq!(try_body(b"version=1"), Err(FormError::UnknownKey), "a status key is not a setting");
+        assert_eq!(try_body(b"uptime=1"), Err(FormError::UnknownKey));
+        // Oversized key and value are reported before parsing.
+        let long_key = format!("{}=1", "k".repeat(17));
+        assert_eq!(try_body(long_key.as_bytes()), Err(FormError::UnknownKey));
+        let long_value = format!("hostname={}", "h".repeat(VALUE_MAX + 1));
+        assert_eq!(try_body(long_value.as_bytes()), Err(FormError::BadValue));
+    }
+
+    #[test]
+    fn network_keys_need_the_credentials_flag() {
+        let mut s = Settings::DEFAULT;
+        s.wifi.ssid = Text::new("home").unwrap();
+        // Refused on the key alone, even when the value is what is stored.
+        for body in [b"ssid=home".as_slice(), b"ssid_pick=home", b"password=", b"tz=0&password=12345678"] {
+            let mut t = s;
+            assert_eq!(apply(&mut t, body, false, false), Err(FormError::Forbidden), "{:?}", core::str::from_utf8(body));
+        }
+        let mut t = s;
+        apply(&mut t, b"ssid_pick=&ssid=Caf%C3%A9+Net&password=p%26ss+word", false, true).unwrap();
+        assert_eq!(t.wifi.ssid.as_str(), "Café Net");
+        assert_eq!(t.wifi.password.0.as_str(), "p&ss word");
+        // Empty SSID leaves the network alone; the password rule applies.
+        let mut u = t;
+        apply(&mut u, b"ssid=&ssid_pick=", false, true).unwrap();
+        assert_eq!(u.wifi.ssid, t.wifi.ssid);
+        assert_eq!(apply(&mut u, b"password=1234567", false, true), Err(FormError::BadValue));
+        apply(&mut u, b"password=", false, true).unwrap();
+        assert!(u.wifi.password.0.is_empty(), "empty is an open network");
+        let long = format!("ssid={}", "s".repeat(SSID_MAX + 1));
+        assert_eq!(apply(&mut u, long.as_bytes(), false, true), Err(FormError::BadValue));
+    }
+
+    #[test]
+    fn token_body() {
+        assert_eq!(parse_token(b"token=abcdefgh").map(|t| t.0.as_str().to_string()), Ok("abcdefgh".to_string()));
+        assert!(parse_token(b"token=").unwrap().0.is_empty(), "empty clears");
+        assert_eq!(parse_token(b"token=short"), Err(FormError::BadValue));
+        assert_eq!(parse_token(b"token=has%20space1"), Err(FormError::BadValue));
+        assert_eq!(parse_token(b"color=red"), Err(FormError::UnknownKey));
+        assert_eq!(parse_token(b""), Err(FormError::BadValue));
+    }
+
+    #[test]
+    fn json_hides_the_secrets_and_escapes_the_ssid() {
+        let mut s = Settings::DEFAULT;
+        s.wifi.ssid = Text::new("my \"net\"\\\x01").unwrap();
+        s.wifi.password = Secret(Text::new("secret-pw").unwrap());
+        s.token = Secret(Text::new("secret-token").unwrap());
+        let mut out = String::new();
+        write_json(&mut out, &s, &status(true)).unwrap();
+        assert!(out.contains(r#""ssid":"my \"net\"\\\u0001""#), "{out}");
+        assert!(out.contains(r#""password_set":true,"token_set":true"#));
+        assert!(!out.contains("secret"));
+        assert!(out.contains(r#""last_heal":1800000000}"#));
+        assert!(out.ends_with("}\n"));
+        let mut none = String::new();
+        write_json(&mut none, &Settings::DEFAULT, &status(false)).unwrap();
+        assert!(none.contains(r#""password_set":false,"token_set":false"#));
+        assert!(none.ends_with(r#""last_heal":null}"#.to_string().as_str() ) || none.ends_with("null}\n"));
+    }
+
+    #[test]
+    fn escaping() {
+        assert_eq!(format!("{}", HtmlStr("a<b>&\"c\"")), "a&lt;b&gt;&amp;&quot;c&quot;");
+        assert_eq!(format!("{}", JsonStr("a\"b\\c\n")), "a\\\"b\\\\c\\u000a");
+    }
+
+    /// The settings page at its longest: every string at its limit, the
+    /// notice, a custom day list, every checkbox, the longest status.
+    #[test]
+    fn settings_page_fits_the_response_buffer() {
+        let mut s = Settings::DEFAULT;
+        s.hostname = Hostname::new(&"h".repeat(HOSTNAME_MAX)).unwrap();
+        s.alarm_days = 0b1010101;
+        s.alarm_armed = true;
+        s.skip_next = true;
+        s.twelve_hour = true;
+        s.tz_offset_minutes = -TZ_LIMIT_MINUTES;
+        s.melody = melody::RANDOM;
+        let mut out = String::new();
+        write_page(&mut out, &s, &status(true), Some(FormError::Forbidden)).unwrap();
+        println!("settings page: {} bytes of {PAGE_MAX}", out.len());
+        assert!(out.len() <= PAGE_MAX, "{} bytes", out.len());
+        assert!(out.ends_with("</html>"));
+    }
+
+    #[test]
+    fn update_page_fits_the_response_buffer() {
+        let mut out = String::new();
+        write_update_page(&mut out, &status(true), true, Some(10)).unwrap();
+        println!("update page: {} bytes of {PAGE_MAX}", out.len());
+        assert!(out.len() <= PAGE_MAX, "{} bytes", out.len());
+        assert!(out.ends_with("</html>"));
+    }
+
+    /// The setup page with the twelve networks the scan keeps, every
+    /// SSID at its longest. (An SSID of 32 `"` would double its share
+    /// through `HtmlStr`; see PLAN.md.)
+    #[test]
+    fn provision_page_fits_the_response_buffer() {
+        let mut s = Settings::DEFAULT;
+        s.hostname = Hostname::new(&"h".repeat(HOSTNAME_MAX)).unwrap();
+        s.wifi.ssid = Text::new(&"o".repeat(SSID_MAX)).unwrap(); // stored but not listed: shown in the field
+        let networks: Vec<Network> = (0..12)
+            .map(|i| Network { ssid: Text::new(&format!("{i:02}{}", "n".repeat(SSID_MAX - 2))).unwrap(), rssi: -100, open: i % 2 == 0 })
+            .collect();
+        let mut out = String::new();
+        write_provision_page(&mut out, &s, &status(false), &networks, Some(FormError::BadValue)).unwrap();
+        println!("setup page: {} bytes of {PAGE_MAX}", out.len());
+        assert!(out.len() <= PAGE_MAX, "{} bytes", out.len());
+        assert!(out.contains("Other, typed below</option>"));
+        assert!(out.contains(&format!("value=\"{}\"", "o".repeat(SSID_MAX))), "the unlisted stored network is typed in");
+        let mut saved = String::new();
+        s.wifi.ssid = Text::new("a<b").unwrap();
+        write_saved_page(&mut saved, &s).unwrap();
+        assert!(saved.contains("<b>a&lt;b</b>"));
+        assert!(saved.len() <= PAGE_MAX);
+    }
+}
