@@ -2384,6 +2384,86 @@ with the square wave through a second temporary hook
 (`POST /play?low=NN`, Für Elise and Frère Jacques): little difference
 to the ear now, so 33 % stays and the hook was dropped uncommitted.
 
+### Fewer `unsafe` blocks (after the tunes) — DONE, verified on the panel 2026-10-29
+
+**Why.** The user asked for every `unsafe` in the tree to be looked at
+and made safe where the API allows. There were seven: two
+`unsafe impl Send` in `scan.rs`, the volatile read and write of the RTC
+record in `carry.rs`, the PAC pointer that sets the display pull-downs
+in `main.rs`, and the two `#[unsafe(no_mangle)]` hooks there.
+
+**What was found.**
+
+- `TransferBuf`'s `Send` impl was redundant: `DmaTxBuf` is `Send` on
+  its own (removing both impls and compiling left one error, and it
+  was the SPI driver's).
+- `ScanHardware`'s `Send` impl covered `SpiDma<'static, Async>`, which
+  esp-hal makes `!Send` on purpose: an async driver installs its
+  interrupt handler on the core it is created on, so the driver must
+  be created where it is used. The impl asserted exactly what the
+  marker exists to deny. Harmless on one core, but the fix is to build
+  the driver in the task that uses it.
+- The RTC record was a `static mut` because esp-hal's docs show
+  `#[ram(persistent)]` that way. The macro accepts any `static` whose
+  type is `Persistable`, and `portable_atomic::AtomicU32` is one, so an
+  array of atomics gives the same memory with a shared reference and
+  no `unsafe`.
+- The pull-downs went through the PAC because the SPI builder resets a
+  pin's pull when it connects it. esp-hal's documented way around that
+  is a frozen signal: the builder's `apply_output_config` and enables
+  are no-ops on it while the matrix connection still happens, and a
+  `Flex` handed to the builder is converted through that frozen path.
+  So the pull can be set on the `Flex` before the bus is built.
+- The two `#[unsafe(no_mangle)]` stay. Edition 2024 spells the
+  attribute that way, and esp-backtrace (`custom-halt`) and esp-println
+  (`timestamp`) resolve those exact symbol names. The functions are
+  safe; only the export is marked.
+
+**Design.**
+
+- `scan.rs`: `ScanHardware` carries the `SPI2` and `DMA_CH0`
+  singletons, the four wires as `Flex` pins with their pull-downs set,
+  and the first buffer, all `Send`. `scan_task` builds the bus
+  (`Spi::new`, `with_sio0..3`, `with_dma`, `into_async`) before its
+  first transfer, on the interrupt executor it runs on. `TransferBuf`
+  goes; the channels carry `DmaTxBuf`.
+- `main.rs`: `display_wire(pin)` makes a `Flex`, applies an
+  `OutputConfig` with `Pull::Down`, enables the input buffer as the
+  builder would have, and returns it. `pull_down_display_wires`, the
+  GPIO number table and the `esp32c3` dependency go.
+- `carry.rs`: `RECORD` is `[AtomicU32; WORDS]` from `portable-atomic`
+  (a direct dependency now; esp-hal already pulled it in), read and
+  written word by word with `Relaxed`, as the volatile array accesses
+  were. One task in thread mode touches it, as before.
+
+**Verify.** Build and clippy on the host; `grep -rn unsafe src` shows
+the two attributes only. On the bench: the panel comes up and scans as
+before (the bus is now built inside the scan task) and the heartbeat's
+restart gap is unchanged; `/reload` still carries the time, the heal
+count and the skip flag (the record still round-trips); `/update`'s
+dark panel and the moment after a deliberate reset show no stray lit
+row (the pull-downs are still set).
+
+**Measured (bench, 2026-10-29).** Uploaded over the air onto a board
+running the previous firmware. The new image booted from the record
+the old firmware had written with `write_volatile` and read it through
+the atomics at the same address (`.rtc_fast.persistent` at
+0x50000000, 32 bytes, unchanged): time carried, `ota_boots: 1`,
+confirmed good at the first probe. The scan task built the bus and
+printed its line at 338 ms, as before. Two `POST /reload`s: the time
+came back each time (within a second of the NTP sync that followed),
+and the skip flag set through `/api` before the second one came back
+as `skip_next: true`, so the new write path round-trips a non-default
+field; the flag was then cleared. The first heartbeat read a restart
+gap average of 2 µs and a maximum of 99 µs over 19269 transfers, the
+range the old firmware logged (77 to 81 µs maxima over 19264 to 19270
+transfers). The user watched the panel afterwards: it goes dark
+and nothing is faintly lit, so the pull-downs set on the `Flex` pins
+survive the builder as the esp-hal source said they would (a `Flex`
+is converted through `into_peripheral_output`, which freezes the
+signal, and the builder's `apply_output_config` is a no-op on a
+frozen one).
+
 ### M10 — Wi-Fi provisioning from an access point — planned
 
 **Scope.** Credentials become a stored setting instead of a build-time

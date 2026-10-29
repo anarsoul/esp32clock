@@ -61,7 +61,8 @@ esp-println = { version = "0.18.0", features = ["esp32c3", "log-04", "timestamp"
 critical-section = "1.2.0"
 # SHA-256 of an uploaded image, checked against the hash espflash appends.
 sha2             = { version = "0.10", default-features = false }
-esp32c3          = "0.33"
+# Atomics for the RTC-RAM carry record: esp-hal accepts them in a persistent static.
+portable-atomic  = "1.15"
 static_cell      = "2.1.1"
 embassy-futures = "0.1.2"
 

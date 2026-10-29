@@ -24,9 +24,12 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_sync::signal::Signal;
 use embassy_time::{Instant, Timer};
-use esp_hal::Async;
 use esp_hal::dma::DmaTxBuf;
-use esp_hal::spi::master::{Address, Command, DataMode, SpiDma};
+use esp_hal::gpio::Flex;
+use esp_hal::peripherals::{DMA_CH0, SPI2};
+use esp_hal::spi::Mode;
+use esp_hal::spi::master::{Address, Command, Config as SpiConfig, DataMode, Spi};
+use esp_hal::time::Rate;
 use log::{error, info};
 
 /// Dark time between one DMA transfer ending and the next starting,
@@ -147,19 +150,12 @@ pub fn build_transfer(img: &ScanImage, out: &mut [u8]) {
     encode_pair(0, 0, COM_SEQ[SLOTS - 1], img.is_step, blank.try_into().unwrap());
 }
 
-/// A DMA buffer travelling between the publisher and the scan task.
-pub struct TransferBuf(pub DmaTxBuf);
-
-// SAFETY: exactly one owner at a time; the buffer moves through a channel
-// and is never shared.
-unsafe impl Send for TransferBuf {}
-
 /// Buffers not in flight, ready to be filled. One of the two lives here
 /// while the other is being transferred.
-static FREE: Channel<CriticalSectionRawMutex, TransferBuf, 1> = Channel::new();
+static FREE: Channel<CriticalSectionRawMutex, DmaTxBuf, 1> = Channel::new();
 
 /// A filled buffer waiting for the scan task to swap it in.
-static READY: Channel<CriticalSectionRawMutex, TransferBuf, 1> = Channel::new();
+static READY: Channel<CriticalSectionRawMutex, DmaTxBuf, 1> = Channel::new();
 
 /// Set to end the scan at the next transfer boundary.
 static STOP: AtomicBool = AtomicBool::new(false);
@@ -196,7 +192,7 @@ pub fn resume() {
 
 /// Give the publisher its spare buffer. Call once, before any `publish`.
 pub fn init_spare(buf: DmaTxBuf) {
-    FREE.try_send(TransferBuf(buf)).ok().expect("spare buffer slot taken");
+    assert!(FREE.try_send(buf).is_ok(), "spare buffer slot taken");
 }
 
 /// Hand a new image to the scan engine. Builds the transfer here, in the
@@ -205,26 +201,42 @@ pub fn init_spare(buf: DmaTxBuf) {
 /// boundary, within about 3 ms.
 pub async fn publish(img: &ScanImage) {
     let mut buf = FREE.receive().await;
-    build_transfer(img, buf.0.as_mut_slice());
+    build_transfer(img, buf.as_mut_slice());
     READY.send(buf).await;
 }
 
-/// The SPI bus and the first DMA buffer the scan task owns.
+/// What the scan task builds its SPI bus from: the peripherals, the four
+/// wires with their idle pull-downs already set (the builder leaves a
+/// `Flex` pin's configuration alone, see `main.rs`), and the first DMA
+/// buffer. The async driver is built in the task rather than handed to
+/// it: esp-hal ties an async driver to the core its interrupt handler was
+/// installed on and makes it `!Send` for that reason, so it is created
+/// where it runs.
 pub struct ScanHardware {
-    pub spi: SpiDma<'static, Async>,
+    pub spi: SPI2<'static>,
+    pub dma: DMA_CH0<'static>,
+    /// SIO0 to SIO3: DATA, CLK, DATA_1, CLK_1.
+    pub wires: [Flex<'static>; 4],
     pub buf: DmaTxBuf,
 }
-
-// SAFETY: the driver is not `Send` only because of a marker; the hardware
-// is handed to the scan task exactly once and nothing else ever touches it.
-// Sending it to an interrupt executor is a single move of ownership.
-unsafe impl Send for ScanHardware {}
 
 /// Runs the display forever. Owns the SPI peripheral and the in-flight
 /// DMA buffer; swaps it for a freshly built one whenever there is one.
 #[embassy_executor::task]
 pub async fn scan_task(hw: ScanHardware) -> ! {
-    let ScanHardware { mut spi, mut buf } = hw;
+    let ScanHardware { spi, dma, wires, mut buf } = hw;
+    let [sio0, sio1, sio2, sio3] = wires;
+
+    // SPI2 in quad mode, no SCK: the four data lines are the four panel
+    // wires. See aip33628.rs for what goes down them.
+    let mut spi = Spi::new(spi, SpiConfig::default().with_frequency(Rate::from_hz(SPI_HZ)).with_mode(Mode::_0))
+        .expect("spi config")
+        .with_sio0(sio0)
+        .with_sio1(sio1)
+        .with_sio2(sio2)
+        .with_sio3(sio3)
+        .with_dma(dma)
+        .into_async();
 
     build_transfer(&ScanImage::DARK, buf.as_mut_slice());
     info!(
@@ -274,10 +286,10 @@ pub async fn scan_task(hw: ScanHardware) -> ! {
         }
 
         if let Ok(next) = READY.try_receive() {
-            let done = core::mem::replace(&mut buf, next.0);
+            let done = core::mem::replace(&mut buf, next);
             // The publisher always returns the spare before asking for
             // another, so this slot is free.
-            let _ = FREE.try_send(TransferBuf(done));
+            let _ = FREE.try_send(done);
         }
     }
 }

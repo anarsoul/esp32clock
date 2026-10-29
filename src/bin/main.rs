@@ -15,13 +15,10 @@ use embassy_time::{Duration, Instant, Timer};
 use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
 use esp_hal::dma_tx_buffer;
-use esp_hal::gpio::{DriveMode, Input, InputConfig, Level, Output, OutputConfig, Pull};
+use esp_hal::gpio::{DriveMode, Flex, Input, InputConfig, Level, Output, OutputConfig, Pull};
 use esp_hal::interrupt::Priority;
 use esp_hal::ledc::Ledc;
 use esp_hal::rng::Rng;
-use esp_hal::spi::Mode;
-use esp_hal::spi::master::{Config as SpiConfig, Spi};
-use esp_hal::time::Rate;
 use esp_hal::timer::timg::TimerGroup;
 use esp_radio::wifi::{ControllerConfig, Interface, WifiController};
 use esp_rtos::embassy::InterruptExecutor;
@@ -66,19 +63,18 @@ pub extern "Rust" fn _esp_println_timestamp() -> u64 {
     esp_hal::time::Instant::now().duration_since_epoch().as_millis()
 }
 
-/// Display wires, as GPIO numbers, for the idle pull-downs.
-const DISPLAY_GPIOS: [usize; 4] = [6, 7, 8, 9];
-
-/// Pull the four display wires low while the SPI peripheral is not driving
-/// them. The SPI driver resets the pull configuration when it takes a pin,
-/// so this has to run after the bus is built. Every frame ends with all four
-/// wires low, so a weak pull-down keeps the drivers' inputs at a defined
-/// level and no spurious edge can reach them between DMA transfers.
-fn pull_down_display_wires() {
-    let io_mux = unsafe { &*esp32c3::IO_MUX::PTR };
-    for gpio in DISPLAY_GPIOS {
-        io_mux.gpio(gpio).modify(|_, w| w.fun_wpu().clear_bit().fun_wpd().set_bit());
-    }
+/// A display wire with its idle pull-down set. Every frame ends with all
+/// four wires low, so a weak pull-down keeps the drivers' inputs at a
+/// defined level and no spurious edge can reach them between DMA
+/// transfers. The SPI builder resets the pull of a bare pin it takes, but a
+/// `Flex` reaches it as a frozen signal whose configuration it leaves
+/// alone, so the pull set here survives. The input buffer is enabled as
+/// the builder would have done on a bare pin.
+fn display_wire(pin: impl esp_hal::gpio::Pin + 'static) -> Flex<'static> {
+    let mut wire = Flex::new(pin);
+    wire.apply_output_config(&OutputConfig::default().with_pull(Pull::Down));
+    wire.set_input_enable(true);
+    wire
 }
 
 #[allow(
@@ -119,22 +115,14 @@ async fn main(spawner: Spawner) -> ! {
     let button_top = Input::new(peripherals.GPIO4, InputConfig::default().with_pull(Pull::Up));
     let button_bottom = Input::new(peripherals.GPIO3, InputConfig::default().with_pull(Pull::Up));
 
-    // Display: SPI2 in quad mode, no SCK, the four data lines are the four
-    // panel wires. See scan.rs and aip33628.rs.
-    let spi = Spi::new(
-        peripherals.SPI2,
-        SpiConfig::default()
-            .with_frequency(Rate::from_hz(scan::SPI_HZ))
-            .with_mode(Mode::_0),
-    )
-    .expect("spi config")
-    .with_sio0(peripherals.GPIO9) // DATA,   driver 1
-    .with_sio1(peripherals.GPIO8) // CLK,    driver 1
-    .with_sio2(peripherals.GPIO7) // DATA_1, driver 2
-    .with_sio3(peripherals.GPIO6) // CLK_1,  driver 2
-    .with_dma(peripherals.DMA_CH0)
-    .into_async();
-    pull_down_display_wires();
+    // Display wires, SPI2 SIO0 to SIO3. The scan task builds the bus from
+    // them; see scan.rs and aip33628.rs.
+    let wires = [
+        display_wire(peripherals.GPIO9), // DATA,   driver 1
+        display_wire(peripherals.GPIO8), // CLK,    driver 1
+        display_wire(peripherals.GPIO7), // DATA_1, driver 2
+        display_wire(peripherals.GPIO6), // CLK_1,  driver 2
+    ];
 
     // Two transfer buffers: one in flight, one being filled.
     let buf = dma_tx_buffer!(scan::TRANSFER_BYTES).expect("dma buffer");
@@ -192,7 +180,8 @@ async fn main(spawner: Spawner) -> ! {
     static SCAN_EXECUTOR: StaticCell<InterruptExecutor<1>> = StaticCell::new();
     let scan_executor = SCAN_EXECUTOR.init(InterruptExecutor::new(peripherals.FROM_CPU_INTR1));
     let scan_spawner = scan_executor.start(Priority::Priority2);
-    scan_spawner.spawn(scan::scan_task(scan::ScanHardware { spi, buf }).expect("spawn scan"));
+    let hw = scan::ScanHardware { spi: peripherals.SPI2, dma: peripherals.DMA_CH0, wires, buf };
+    scan_spawner.spawn(scan::scan_task(hw).expect("spawn scan"));
     spawner.spawn(display::display_task(stack).expect("spawn display"));
     spawner.spawn(buttons::button_task(button_top, button_bottom).expect("spawn buttons"));
     spawner.spawn(buzzer::buzzer_task(Ledc::new(peripherals.LEDC), buzzer_pin).expect("spawn buzzer"));

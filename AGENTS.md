@@ -139,7 +139,7 @@ answered or an HTTP request served bumps it, and the third such boot
 | --- | --- |
 | `src/aip33628.rs` | frame format, bit-reversed current table, quad-nibble waveform encoder; pure `core` |
 | `src/panel.rs` | COM/SEG map, font, per-position colour, gamma and brightness tables, `Panel::render` → `ScanImage` |
-| `src/scan.rs` | cycle/transfer builder, double-buffered DMA scan task, restart-gap statistics, `stop` on a blank frame before a deliberate reset or a flash write, `resume` after a failed one |
+| `src/scan.rs` | cycle/transfer builder, double-buffered DMA scan task that builds the SPI2 quad + DMA bus itself (an async esp-hal driver is `!Send`), restart-gap statistics, `stop` on a blank frame before a deliberate reset or a flash write, `resume` after a failed one |
 | `src/display.rs` | UI loop: tick, button or settings change → `ui` → draw → publish; rings the alarm; shows the IP; seeds and carries the skip flag and the time the alarm last rang |
 | `src/ui.rs` | mode state machine, pure logic, one timer for the current mode; edits the settings it is handed; alarm due check and missed-alarm grace, both gated by the carried time the alarm last rang; consumes `skip_next` |
 | `src/settings.rs` | `Settings`, palette and brightness tables, `Hostname`, shared `Watch` with change signal, versioned flash record |
@@ -155,16 +155,17 @@ answered or an HTTP request served bumps it, and the third such boot
 | `src/ota.rs` | firmware upload: token check, slot lookup and the boot-time rollback, sector writer with read-back, activate, reboot; `VERSION` from `build.rs` |
 | `src/net.rs` | Wi-Fi station with all-channel scan and transmit-power ceiling, minute RSSI line, connect failure budget that ends in `heal::reset`; DHCP switched on 500 ms after each connect and off at disconnect; link and address monitor, gateway ping probe with the self-heal trigger, SNTP, DHCP renew on hostname change |
 | `src/config.rs` | build-time env vars and compile-time defaults |
-| `src/bin/main.rs` | pin setup, SPI2 quad + DMA, executors, task spawning, panic reset hook, log timestamps, reset reason and carried time at boot, OTA rollback check, minute heartbeat log |
+| `src/bin/main.rs` | pin setup, display wires with their pull-downs, executors, task spawning, panic reset hook, log timestamps, reset reason and carried time at boot, OTA rollback check, minute heartbeat log |
 
 ## Hardware facts that bite
 
 - **Buzzer (GPIO5)** drives a PNP with its emitter at +5 V. Any driven level
   turns it on, including a 3.3 V high. Only a released open-drain line is
   silent. Never make it push-pull.
-- **Display wires (GPIO6–9)** are SPI2 SIO0–3. The SPI builder resets pin
-  pulls when it takes a pin, so the idle pull-downs are set afterwards via
-  the `esp32c3` PAC in `main.rs`.
+- **Display wires (GPIO6–9)** are SPI2 SIO0–3. The SPI builder resets the
+  pull of a bare pin it takes, but leaves a `Flex` alone (it arrives as a
+  frozen signal), so `main.rs` sets the idle pull-downs on `Flex` pins and
+  the scan task builds the bus from those. No PAC access.
 - **Buttons:** GPIO4 is the upper button, GPIO3 the lower. No board
   pull-ups; the internal ones are used.
 - **Current:** `IS` comes from brightness alone, capped at

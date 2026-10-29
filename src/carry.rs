@@ -13,6 +13,7 @@
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use esp_hal::rtc_cntl::SocResetReason;
+use portable_atomic::AtomicU32;
 
 /// Marks a record written by this firmware with this layout; a second
 /// guard behind the reset reason, against a reset that skipped the
@@ -28,8 +29,12 @@ const LAYOUT: u32 = 3;
 /// unix us high, ota boots]`. A zero time means none.
 const WORDS: usize = 8;
 
+/// Atomics so the record is a plain `static`: a persistent static must be
+/// valid in any bit pattern, which esp-hal asserts, and these are. One
+/// task in thread mode touches it; the atomics buy the shared reference,
+/// not concurrency.
 #[esp_hal::ram(unstable(rtc_fast, persistent))]
-static mut RECORD: [u32; WORDS] = [0; WORDS];
+static RECORD: [AtomicU32; WORDS] = [const { AtomicU32::new(0) }; WORDS];
 
 /// Whether this boot followed a software reset.
 static SOFT: AtomicBool = AtomicBool::new(false);
@@ -56,14 +61,13 @@ pub struct Carried {
 }
 
 fn read_raw() -> [u32; WORDS] {
-    // SAFETY: the record is read and written from thread mode only, one
-    // task at a time, through raw pointers.
-    unsafe { core::ptr::read_volatile(core::ptr::addr_of!(RECORD)) }
+    core::array::from_fn(|i| RECORD[i].load(Ordering::Relaxed))
 }
 
 fn write_raw(v: [u32; WORDS]) {
-    // SAFETY: as in `read_raw`.
-    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(RECORD), v) }
+    for (slot, word) in RECORD.iter().zip(v) {
+        slot.store(word, Ordering::Relaxed);
+    }
 }
 
 fn decode(v: [u32; WORDS]) -> Carried {
