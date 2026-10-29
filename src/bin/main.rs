@@ -29,7 +29,7 @@ use static_cell::StaticCell;
 use esp32clock::buzzer;
 use esp32clock::settings::Settings;
 use esp32clock::net::Mode;
-use esp32clock::{buttons, carry, clock, dhcpd, display, heal, http, net, ota, scan, settings, storage};
+use esp32clock::{buttons, carry, clock, dhcpd, display, dnsd, heal, http, net, ota, scan, settings, storage};
 
 // The app descriptor the esp-idf bootloader requires, with the git
 // version in it so an image file says what it is before it is flashed.
@@ -202,7 +202,8 @@ async fn main(spawner: Spawner) -> ! {
     // Station: DHCP, DNS, SNTP, the gateway probe, the HTTP listeners,
     // and headroom; no IPv4 configuration yet, the Wi-Fi task starts
     // DHCP once the station is connected and the link has settled.
-    // Access point: the fixed address, the DHCP server and the listeners.
+    // Access point: the fixed address, the DHCP and DNS servers and the
+    // listeners.
     static RESOURCES: StaticCell<StackResources<10>> = StaticCell::new();
     let stack_config = if mode == Mode::AccessPoint { net::ap_stack_config() } else { embassy_net::Config::default() };
     let (stack, runner) = embassy_net::new(interface, stack_config, RESOURCES.init(StackResources::new()), seed);
@@ -228,6 +229,7 @@ async fn main(spawner: Spawner) -> ! {
     if mode == Mode::AccessPoint {
         spawner.spawn(net::ap_task(controller, net::ap_ssid(mac)).expect("spawn ap"));
         spawner.spawn(dhcpd::dhcpd_task(stack).expect("spawn dhcpd"));
+        spawner.spawn(dnsd::dnsd_task(stack).expect("spawn dnsd"));
     } else {
         spawner.spawn(net::wifi_task(controller, stack).expect("spawn wifi"));
         spawner.spawn(net::ntp_task(stack).expect("spawn ntp"));

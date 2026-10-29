@@ -113,7 +113,11 @@ the clock comes back as an access point. A station that cannot join
 never turns into an access point by itself: a wrong password is a
 blank panel, `wrong password?` in the log every attempt, and the hold.
 `/update`, `/ota`, `/api` and `/token` work on the access point too;
-`/api` takes the network keys there without the token. `POST /ap` with
+`/api` takes the network keys there without the token. A captive DNS
+(`src/dnsd.rs`) answers every name with the clock's address and any
+path that is not a route is a `302` to `http://192.168.4.1/`, so a
+phone's connectivity probe opens the setup form in its sign-in sheet
+by itself. `POST /ap` with
 the `Bearer` token resets a running clock into the access point, for a
 bench without hands on the buttons. The access point runs as AP+STA
 with a station half that never connects, because the driver refuses a
@@ -208,6 +212,7 @@ answered or an HTTP request served bumps it, and the third such boot
 | `src/ota.rs` | firmware upload: slot lookup and the boot-time rollback, sector writer with read-back, activate, reboot; `VERSION` from `build.rs` |
 | `src/net.rs` | Wi-Fi station on the stored credentials with all-channel scan and transmit-power ceiling, minute RSSI line, connect failures logged with their meaning (`wrong password?`, `no such network in range`) and a budget that ends in `heal::reset`; DHCP switched on 500 ms after each connect and off at disconnect; link and address monitor, gateway ping probe with the self-heal trigger, SNTP, DHCP renew on hostname change; the boot's `Mode`, the access-point task (AP+STA, scans on request into the network list) and its static stack config |
 | `src/dhcpd.rs` | DHCP server for the access point: `parse`, `build` and the lease table pure, the socket task around them; every reply broadcast |
+| `src/dnsd.rs` | captive DNS for the access point: `answer` pure (every A question is the clock, anything else an empty answer), the socket task around it |
 | `src/config.rs` | build-time env vars and compile-time defaults |
 | `src/bin/main.rs` | pin setup, display wires with their pull-downs, executors, task spawning, panic reset hook, log timestamps, reset reason and carried time at boot, OTA rollback check, minute heartbeat log |
 
@@ -307,7 +312,7 @@ answered or an HTTP request served bumps it, and the third such boot
   panics at boot.
 - `StackResources<10>` in `main.rs` covers DHCP, DNS, SNTP, the gateway
   probe and the HTTP listeners with headroom (on the access point: the
-  DHCP server and the listeners); adding sockets means raising it.
+  DHCP and DNS servers and the listeners); adding sockets means raising it.
 - `HOSTNAME_MAX` (24) stays under embassy-net's 32-byte DHCP option.
 - `config::WIFI_RX_QUEUE_FRAMES` (32) is the driver's receive queue;
   esp-radio's default of 5 dropped bursts of LAN broadcasts, visible as

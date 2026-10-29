@@ -2464,7 +2464,7 @@ is converted through `into_peripheral_output`, which freezes the
 signal, and the builder's `apply_output_config` is a no-op on a
 frozen one).
 
-### M10 — Wi-Fi provisioning from an access point — steps 0 and 1 verified on the bench 2026-10-29; step 2 built and bench-checked the same day, the phone and the buttons owed
+### M10 — Wi-Fi provisioning from an access point — DONE, verified on the bench and with a phone 2026-10-29
 
 **Scope.** Credentials become a stored setting instead of a build-time
 constant, and a clock that has none raises its own network so the
@@ -3039,11 +3039,58 @@ button is down at start and begins stable-down with nothing pending,
 so the release of a press that began before the reset emits nothing.
 Three lines; not verified, since nothing was seen to fix.
 
-**Step 3, after the plain flow works: captive DNS.** A UDP task on
-port 53 that answers every A query with 192.168.4.1, so a phone's
-portal check opens the page by itself. Needs one more `StackResources`
-slot and about 60 lines; left out until a phone has been seen joining
-and provisioning through the plain flow.
+**Step 3: captive DNS (planned 2026-10-29, after the phone test).**
+`src/dnsd.rs`: a UDP task on port 53, access-point mode only, that
+answers every query for an A record with 192.168.4.1 and a 60 s TTL,
+and any other type with an empty NOERROR answer (so an AAAA lookup
+does not make the phone wait for IPv6). The pure part, `answer(query,
+out) -> Option<usize>`, checks the header (a query, opcode 0, one
+question), walks the labels to the end of the question, copies the
+question back, and writes the answer with a name pointer to it; 512
+bytes of buffer each way, about 80 lines with the task. The DHCP
+options already name the clock as the DNS server, and the stack's
+static config does too, so nothing else changes on the network side.
+The phone's connectivity probe (`connectivitycheck.gstatic.com`,
+`captive.apple.com`) then reaches the clock's HTTP server, which must
+not answer the probe's path with a `404`: in access-point mode every
+path that is not a route answers `302 Location:
+http://192.168.4.1/`, which is what both Android and iOS take as a
+captive portal and open in their sign-in sheet, with the setup form
+in it. Station mode keeps its `404`. `StackResources<10>` holds: the
+access point uses the DHCP and DNS sockets and the three listeners,
+fewer than the station's. Host check: a query for `captive.apple.com`
+A answers with the ID, the flags `0x8180`, the question copied, one
+answer with the pointer, type A, class IN, TTL 60 and the address;
+AAAA answers with no records; a response, a truncated question and a
+two-question packet are ignored. Bench: `POST /ap`, then the phone
+joining should pop the sign-in sheet by itself with the setup page in
+it, and the log shows the queries answered.
+
+*Step 3 done and verified on the panel with a phone 2026-10-29.* Built
+as planned (`dnsd.rs` 150 lines with the task and the name for the
+log; the `302` in `http::respond` for any non-route in access-point
+mode). Host check as listed, plus RD clear copied and a short output
+buffer refused. Bench, with the user's Android phone: 0.3 s after its
+lease it looked up `www.google.com` and `connectivitycheck.gstatic.com`
+and got the clock; its `GET /generate_204` got the redirect; 5 s later
+it fetched `/`, which is the sign-in sheet opening with the setup
+page, with `/generate_204` re-probed while the sheet was up and a
+`content-autofill.googleapis.com` lookup from the form; the save
+posted `esptest` unchanged and the clock was back on the network and
+synced within 6 s with `heals` 0. The requests logged after the
+"resetting into station mode" line were served by the other listeners
+in the 200 ms before the reset fired.
+
+M10 is complete: steps 0 to 3 verified on the bench and, for the
+access point, on the panel with a phone, and the user confirmed the
+whole flow on the real clock the same day. Still to read once: the
+heartbeat's `heap free` in access-point mode (the minute `alive` line
+in `main.rs`, which logs in either mode with the probe counts at zero),
+since the soft-AP has its own driver buffers in the same heap. Read
+2026-10-29 on the bench, five minutes in access-point mode with no
+phone attached: `heap free` 49820 bytes at every heartbeat from 60 s to
+300 s, against 54084 as a connected station, so the soft-AP costs
+about 4.3 KB and nothing grows while it idles.
 
 **Touches, in order.** `auth.rs` (new, out of `ota.rs`, with the
 rename), `settings.rs` (Step 0 tolerance, `Text`,

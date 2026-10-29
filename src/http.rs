@@ -7,8 +7,10 @@
 //! only with the token. `POST /token` sets the token with the PIN or
 //! the old token, `POST /pin` issues a PIN for a script. `POST /reload`
 //! resets with the token, `POST /ap` resets into the access point with
-//! it. On the access point `GET /` is the setup form and `POST /scan`
-//! refreshes its network list.
+//! it. On the access point `GET /` is the setup form, `POST /scan`
+//! refreshes its network list, and any other path is a redirect to the
+//! clock's address, so a phone's connectivity probe (sent to the clock
+//! by the captive DNS) opens the form in the sign-in sheet.
 //!
 //! Several sockets listen at once because a browser opens more
 //! connections than it uses: a speculative one alongside the page, one
@@ -522,6 +524,12 @@ fn respond(out: &mut Response, req: &Request<'_>, body: &[u8]) -> Result<Then, c
                     Ok(Then::Close)
                 }
             };
+        }
+        _ if net::mode() == Mode::AccessPoint => {
+            // The captive portal: a phone's probe lands here through the
+            // DNS and is sent to the page, which the phone then shows.
+            let [a, b, c, d] = crate::config::AP_ADDRESS;
+            write!(out, "HTTP/1.0 302 Found\r\nLocation: http://{a}.{b}.{c}.{d}/\r\nConnection: close\r\nCache-Control: no-store\r\n\r\n")?;
         }
         _ => {
             status_line(out, "404 Not Found", "text/plain")?;
