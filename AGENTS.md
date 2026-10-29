@@ -289,8 +289,10 @@ each check under its milestone.
   copy and commit it with one `update` only if everything parsed; keep
   parsing out of the watch's closure.
 - Adding a setting touches, in order: the `Settings` field and `DEFAULT`,
-  `is_valid`, `RECORD_VERSION` with `to_record`/`from_record` still reading
-  every older version, `form::apply_one`, `write_json` and `write_page`,
+  `is_valid`, `RECORD_VERSION` with the new field appended (never
+  reordered: an older image reads a newer record by its prefix, so a
+  rollback keeps the settings) and `from_record` still reading every
+  older version, `form::apply_one`, `write_json` and `write_page`,
   the `PLAN.md` entry, and a page-size check. A field that must not
   persist, like `skip_next`, is left out of the record on purpose.
   Read-only status goes in `form::Status`, built in `http::status`, so

@@ -151,8 +151,10 @@ pub struct Settings {
 /// Bytes in a stored record.
 pub const RECORD_LEN: usize = 36;
 
-/// Stored record layout version. Bump when the layout changes and teach
-/// `from_record` the old one, or the user's settings are lost.
+/// Stored record layout version. Bump when the layout changes, append
+/// the new fields and teach `from_record` the old one, or the user's
+/// settings are lost; never reorder, since an older image reads a newer
+/// record by its prefix.
 const RECORD_VERSION: u8 = 5;
 
 /// Where the hostname sits in a version 3 record.
@@ -255,9 +257,13 @@ impl Settings {
     /// Parse a flash record. Older versions lack the later fields, which
     /// take the defaults: version 1 (M5) stops after `armed`, version 2
     /// (M6) after the timezone, version 3 (M6) after the hostname, version
-    /// 4 (M7) after the alarm days. `None`
-    /// for an unknown version or a field out of range, so a bad record
-    /// falls back to the defaults.
+    /// 4 (M7) after the alarm days. Versions are append-only, so a record
+    /// from a newer image is read by the prefix this one knows, and a
+    /// colour, brightness or melody index past this image's table (an
+    /// entry a newer image added, or a higher current ceiling) lands on
+    /// the last one offered, so that a rollback keeps the user's settings
+    /// instead of starting over. `None` for a field that is out of range
+    /// whatever the version, so a bad record falls back to the defaults.
     pub fn from_record(r: &[u8]) -> Option<Settings> {
         let mut s = Settings {
             color: *r.get(1)? as usize,
@@ -284,13 +290,10 @@ impl Settings {
         if version >= 5 {
             s.melody = match *r.get(RECORD_MELODY)? {
                 RECORD_MELODY_RANDOM => melody::RANDOM,
-                m if (m as usize) < melody::MELODIES.len() => m as usize,
-                _ => return None,
+                m => (m as usize).min(melody::MELODIES.len() - 1),
             };
         }
-        if version > RECORD_VERSION {
-            return None;
-        }
+        s.color = s.color.min(PALETTE.len() - 1);
         // A record saved by a build with a higher ceiling may name a step
         // this build does not offer: land on the brightest one instead of
         // throwing the whole record away. Anything past the full list is

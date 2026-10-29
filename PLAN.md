@@ -1359,8 +1359,8 @@ Gaps:
   reset lands with a transfer in flight, the exact case the stop
   exists for. One `STOP` flag cannot represent two stoppers. Fix: a
   latched reset-pending flag that `resume` honours, or a stop count.
-- **A record from a newer image throws every setting away on rollback.**
-  `from_record` returns `None` for `version > RECORD_VERSION`, and
+- ~~**A record from a newer image throws every setting away on rollback.**~~
+  Done as M10 step 0, 2026-10-29. `from_record` returned `None` for `version > RECORD_VERSION`, and
   `is_valid` fails the whole record for a `color` or `melody` index this
   build does not know; only `brightness` is clamped. An OTA image with
   record version 6 (M10 plans exactly that) or one more melody saves a
@@ -2464,102 +2464,413 @@ is converted through `into_peripheral_output`, which freezes the
 signal, and the builder's `apply_output_config` is a no-op on a
 frozen one).
 
-### M10 — Wi-Fi provisioning from an access point — planned
+### M10 — Wi-Fi provisioning from an access point — planned in detail 2026-10-29
 
 **Scope.** Credentials become a stored setting instead of a build-time
 constant, and a clock that has none raises its own network so the
-user can give it one from a phone. While it is an access point
-there is no internet, so no time and no alarm: the panel says so and
+user can give it one from a phone. While it is an access point there
+is no internet, so no time and no alarm: the panel says `AP` and
 waits. The build-time `WIFI_SSID`/`WIFI_PASSWORD` stay as the seed
-for a board whose record has no credentials yet, and may be empty.
+for a board whose record has no credentials yet, and may now be empty.
+The sketch of 2026-10-22 is reworked below against the tree at
+5170871; where this plan departs from it the paragraph says so.
 
-**Mode decision at boot, not at run time.** esp-radio
-1.0.0-beta.1 accepts `Config::AccessPointStation` but its receive
-path has a comment saying AP+STA is not supported yet, so the clock is
-either a station or an access point for one boot. `main.rs` decides
-before it builds the stack: access point if the record has no SSID or
-if the carry record's `boot_ap` flag is set by the button hold below;
-station otherwise. One
-`StackResources` serves whichever interface runs, so a second stack
-costs no RAM. The HTTP listeners are spawned on the stack that exists.
+**Facts checked in the sources (esp-radio 1.0.0-beta.1, embassy-net
+0.9.1, smoltcp 0.13.1, sequential-storage 8.0.2).**
 
-**Getting into and out of it.** Exactly two things start the access
-point: a record with no SSID, and both buttons held for 10 seconds
-(the existing both-button hold, extended; the 2 s IP display still
-fires first and is harmless), which sets `boot_ap` in the carry
-record and resets through `heal::reset`. Nothing else does: a station
-that cannot associate keeps retrying forever, as today, so a router
-that is off for an hour or a wrong password never flips a clock on
-the wall into an access point by itself. A wrong password is
-therefore a blank clock until the user holds the buttons and enters
-it again; the station log line says `wrong password` or `no such
-network` from the disconnect reason to make that diagnosable over
-USB. The access point has no timeout: it stays up until credentials
-are saved, which clears the flag and resets into station mode, or
-until power is cut, which zeroes the carry record and so boots the
-station again if the record has an SSID.
+- `Config::AccessPoint(AccessPointConfig)` exists; `set_config` stops
+  the driver, sets the mode and calls `esp_wifi_start`, which raises
+  `AccessPointStart` before it returns, so the AP interface's link is
+  up when `set_config` returns and embassy-net sees it at once. No
+  `connect` step. The receive path registers one callback for both
+  interfaces "until we support APSTA", so AP+STA stays off the table:
+  one mode per boot.
+- `AccessPointConfig::default()` is open, channel 1, DTIM 2, 255
+  connections; WEP and an empty WPA2 password are refused by
+  `validate`. `Ssid` is up to 32 bytes, `Password` up to 64.
+  `Interface::access_point()` builds the driver half and
+  `mac_address()` gives the AP MAC from the efuse before the driver
+  is configured.
+- `connect_async` fails with `ConnectionError::Failed(DisconnectedInfo)`
+  whose `reason` is the driver's code: `NoAccessPointFound` (201),
+  `FourWayHandshakeTimeout` (15), `HandshakeTimeout` (204),
+  `AssociationFailed` (203). The first means no such network in
+  range, the next two a wrong password.
+- `embassy_net::Config::ipv4_static(StaticConfigV4 { address, gateway,
+  dns_servers })` is the static address. smoltcp accepts IPv4 packets
+  to the broadcast address and sends to `255.255.255.255` with the
+  broadcast MAC and no ARP (`lookup_hardware_addr`), so a DHCP server
+  on a `UdpSocket` can both hear a discover and answer it broadcast.
+  embassy-net has no DHCP server; `edge-dhcp` is not in the registry
+  here and is not needed.
+- A map item costs 8 bytes of header plus the key and the data padded
+  to a word; a 134-byte record is a 144-byte item, so the 128-byte
+  scratch has to grow.
+- `wait_for_access_point_connected_event_async` reports stations
+  joining and leaving by MAC, for the log.
 
-**The access point.** SSID `esp32clock-<last two MAC bytes>`, WPA2
-with the build-time `AP_PASSWORD` (default `esp32clock`, documented),
-channel 1, address 192.168.4.1/24 static. embassy-net has no DHCP
-server, and a phone will not talk to an access point that does not
-give it an address, so the clock answers DHCP itself: a UDP task that
-offers and acknowledges one of eight addresses in 192.168.4.2–.9
-with a one-hour lease, discover/request only, about 150 lines in
-`src/dhcpd.rs`, with `edge-dhcp` as the alternative if the hand-written
-one proves fiddly. A captive-portal DNS (every A query answered with
-192.168.4.1, so the phone opens the page by itself) is the second
-step once the plain flow works; until then the address is in the
-docs and on the panel.
+**The carry record starts over at a mode switch (2026-10-29).** Every
+word in the record belongs to the network mode that wrote it: the
+heal count and time describe the old network and the access point
+heals nothing, the carried Unix time is valid only within one running
+clock and after an access-point session of any length it would be
+shown as the time, drift and all, until SNTP lands, and the skip flag
+and the time the alarm last rang are keyed to that time. So both
+switch resets, the 10 s hold into the access point and the credential
+save out of it, write a fresh record instead of carrying one:
+`Carried::default()` with `ota_boots` kept, because the rollback
+counts boots of an unconfirmed image in either mode and the new image
+may be the one that cannot join the network, and `boot_ap` set or
+cleared. Neither writes the time, so they go through a second
+deliberate-reset path beside `heal::reboot` (which writes the time
+after the caller's update): `scan::stop`, the record, the pause, the
+reset. The panic path is untouched on purpose: a panic in access-point
+mode keeps the record, so the flag holds and the clock comes back as
+an access point rather than booting the station with nothing to join.
+The cost is one blank panel after a provisioning save until SNTP
+answers, where a `/reload` shows the time within a second; there is
+no time to carry out of the access point anyway.
 
-**The page in this mode.** `GET /` serves the provisioning form:
-SSID (32 bytes), password (64 bytes), timezone and hostname, the
-rest of the settings hidden since there is nothing to show for them.
-A scan list is not possible without AP+STA; the user types the SSID.
-`POST /` applies through the existing all-or-nothing path and
-answers with a page that says "rebooting into <ssid>"; the password
-is write-only, never in the page or JSON, and `/api` reports only
-whether one is set (`wifi_configured`). `form::apply` decodes values
-into 32 bytes today, so the value buffer grows to 64 for the password;
-the page-size check runs again.
+**Step 0, first and on its own: a record from a newer image survives
+a rollback.** The second-pass backlog item: `from_record` returns
+`None` for `version > RECORD_VERSION` and `is_valid` rejects a `color`
+or `melody` index this build does not know, so the version 6 record
+this milestone writes would reset every setting when the rollback or
+a USB flash boots a version 5 image, and that image's first change
+would overwrite the credentials for good. Fix: `from_record` reads the
+prefix it knows of any newer version (the versions are append-only;
+the comment says so) and clamps `color` and `melody` the way
+`brightness` is clamped. One commit, flashed over the air before the
+rest, so the image the rollback lands on already tolerates the new
+record. Host check: a version 6 record with trailing bytes read by the
+version 5 parser gives the version 5 fields.
 
-**Record.** `RECORD_VERSION` 6 adds `ssid` (32 bytes plus length) and
-`password` (64 plus length), `RECORD_LEN` about 134; the storage
-scratch buffer is 128 and grows with it. Version 5 records read as
-"no credentials" and fall back to the build-time seed, so an updated
-board keeps joining its network with no visit.
+*Done 2026-10-29, host-checked and verified on the bench the same day:
+the image went over the air into `ota_1`, booted with `settings:
+loaded from flash` and the same settings line as before (yellow, 10 %,
+alarm 14:17 armed, `test-clock`), was confirmed good and synced.* The `version > RECORD_VERSION` early return is gone, `color`
+lands on `PALETTE.len() - 1` and a melody byte past the table on the
+last tune (`0xff` stays random); the brightness rule is as it was,
+clamped within the five choices and rejected past them. The scratch
+crate (`config.rs`, `melody.rs`, `panel.rs`, `aip33628.rs` and
+`settings.rs` by `#[path]`, embassy-sync 0.7 from the registry) checked:
+a version 5 round trip; the same bytes marked version 6 with 131 bytes
+appended, and version 9 with 40 more, read as the version 5 fields;
+colour 9 lands on 7, melody 200 on the last tune, brightness 4 on the
+brightest offered and 5 is rejected; an hour of 30, no alarm days, day
+bit 7, a hostname length past its field and a truncated record are
+rejected; a version 1 prefix still reads. Bench verification is a
+flash of this image, then the M10 image over it later and a rollback
+to see the settings survive, which is step 1's check.
 
-**Panel.** Clock mode is unreachable without time. A new `Ui` mode
-`Provision` shows `AP` on the left pair and the hour digits blank,
-colon off, and both-long shows the fixed address as the IP display
-does; any other press is ignored. A station that is waiting the 3
-minutes shows the usual blank-until-synced face, so the only new
-face is `AP`.
+**Step 1: credentials as a setting, and the switch reset.** After this
+step the clock still always boots the station, but it joins the
+network in its record, and a credential change over `/api` resets it
+into the new one. Verifiable on the bench without a phone.
 
-**Touches.** `settings.rs` (fields, validity, record v6, the three
-`RECEIVERS` unchanged), `storage.rs` (scratch size), `form.rs`
-(keys, the provisioning page, write-only password), `http.rs` (serve
-the provisioning page when in AP mode), `net.rs` (AP config, the
-disconnect-reason log line, the DHCP server task), `dhcpd.rs`, `carry.rs`
-(`boot_ap`), `ui.rs`/`display.rs` (`Provision` mode), `buttons.rs`
-(10 s hold), `main.rs` (the boot decision), `config.rs`
-(`AP_PASSWORD`), `StackResources` (+2 UDP for DHCP and
-DNS), CLAUDE.md controls table.
+- `settings.rs`: a `Text<const N: usize>` (length byte plus `[u8; N]`,
+  UTF-8 in, `as_str` out, `new(&str) -> Option<Self>` with a length
+  range) and `Credentials { ssid: Text<32>, password: Text<64> }` with
+  `is_valid`: SSID 1 to 32 bytes, password empty (open network) or 8
+  to 64 bytes (`validate` in esp-radio refuses a WPA2 password under
+  8). `Credentials::NONE` is the empty SSID and means "none". The
+  `Settings` field is `wifi: Credentials`; `Settings` keeps `Copy` and
+  `PartialEq`. `Credentials` gets a hand-written `Debug` that prints
+  the SSID and `password: <set>` or `<none>`, because the boot line
+  prints the settings and the password must not reach the serial
+  port. `Hostname` could become `Text<24>` with the extra character
+  rule on top; not in this milestone, it works as it is.
+- The token is a setting too (user's call, 2026-10-29: a build with
+  a blank token must be able to get one later, from the clock, and
+  the PIN already proves what an upload rests on, that the person can
+  see the panel). `token: Text<32>` in `Settings`, valid empty (none)
+  or 8 to 32 bytes of printable ASCII without spaces, so it survives
+  a shell and a header. `auth::token_ok` reads `settings::get().token`
+  instead of the constant, still in constant time, and `token_enabled`
+  is "not empty". It is not a `form::apply` key, so it cannot arrive
+  through `/api` or the settings form, and it is never in the page,
+  the JSON (`"token_set":true` is all) or the `Debug` output. The
+  boot line says `api token: stored`, `built in` or `none`.
+- Record version 6 appends `ssid_len` at 36, the SSID at 37..69,
+  `password_len` at 69, the password at 70..134, `token_len` at 134
+  and the token at 135..167: `RECORD_LEN` 167. Version 5 and older
+  read as `Credentials::NONE` and no token. `storage::Scratch` grows
+  to 256 bytes (the item is 176) and stays word aligned.
+- `POST /token`, form-encoded `token=…`, with either `Authorization:
+  PIN dddd` from the update page or `Bearer <current token>` from a
+  script, so a token can be rotated without the panel. A second form
+  on the `/update` page, "Set API token", with a `type=password` field
+  and the PIN field, posted by the same script as the upload with the
+  PIN in the header; the page says one PIN is one action, upload or
+  token, and a reload gives a new one. An empty token clears it and
+  closes the script paths again; `token_set` in `/api` is the way to
+  confirm it. The change goes through `settings::update` and the
+  persist task like any setting. The update page grows by about 500
+  bytes from 2349; measured on the host against `RESPONSE_BUF`.
+- `POST /pin`, no body and no header, for the bench (user's call,
+  2026-10-29): it issues a PIN exactly as opening `/update` does, so
+  the panel shows it and the log prints `PIN dddd` as it does today,
+  and answers plain text, `200 PIN issued, on the panel and the
+  serial log for 5 minutes` or `403 locked out for N s` after a wrong
+  attempt. The PIN is never in the response. `scripts/pin.sh <ip>
+  <serial-log>` posts it, waits for the new PIN line in the log the
+  monitor is writing and prints the four digits, so a bench run goes
+  `PIN=$(scripts/pin.sh 10.1.1.31 clock-serial.log)` and then posts
+  `/token` or `/ota` with `Authorization: PIN $PIN`; the monitor must
+  be running before the post, as the bench notes already say.
+- The seed: `main.rs` runs `settings::seed` on the loaded value
+  before `settings::init`, which fills `wifi` from
+  `config::WIFI_SSID`/`WIFI_PASSWORD` and `token` from
+  `config::API_TOKEN` where the record has none and the build has
+  them; the persist task writes them on the next change and the
+  board then carries them in its record, after which the record wins
+  over a later build's constants, which the boot line makes visible.
+  A build with no credentials leaves `NONE`, and the boot line says
+  `wifi: no credentials stored or built in`.
+- `net.rs`: `station_config` and `log_candidates` take a
+  `&Credentials` from `settings::get().wifi` instead of `config`.
+  `wifi_task` with `NONE` stays offline as it does today with an empty
+  `WIFI_SSID` (step 2 replaces this with the access point). The
+  connect failure line adds the reason's meaning: `no such network in
+  range` for `NoAccessPointFound`, `wrong password?` for
+  `FourWayHandshakeTimeout` and `HandshakeTimeout`, the raw reason
+  otherwise, so a mistyped password is diagnosable over USB without
+  ever flipping the clock into an access point by itself.
+- The token becomes the API token (user's call, 2026-10-29: the
+  credentials are the one setting that can take the clock offline, so
+  writing them from the LAN needs the same proof as a firmware
+  upload). `OTA_TOKEN` is renamed `API_TOKEN` everywhere: the build
+  variable and `build.rs`'s rerun list, `config::API_TOKEN` and
+  `API_TOKEN_MIN`, the boot line, `scripts/ota.sh` and
+  `scripts/reload.sh`, AGENTS.md. The token and PIN code moves out of
+  `ota.rs` into `src/auth.rs` in the same commit (user's question,
+  2026-10-29: not `http.rs`, which is the caller and already the
+  largest module, and not `net.rs`, which is the link and never
+  touches a header): `token_enabled`, the constant-time `token_ok`,
+  `PinState` with its TTL and lockout, `issue_pin` and `pin_to_show`
+  (the display task's half), `Refusal` and the `authorize*`
+  functions, about 120 lines with no hardware in them, so the host
+  harness pulls the file in with `#[path]` instead of copying
+  functions out (`token_ok` reads the settings, which the harness has). `ota.rs` keeps the slots, the sector writer and the
+  rollback, imports `Refusal`, and its upload-specific refusal texts
+  stay with `install`. `http.rs` calls `auth::token` for `/reload`
+  and the credentials on `/api`, `auth::token_or_pin` for `/ota` and
+  `/token`, and `auth::issue_pin` for `/update` and `/pin`. A
+  build without a token has no script path for uploads, `/reload` or
+  credentials, as it has none for uploads today.
+- `form.rs`: keys `ssid` and `password`, both plain strings; the value
+  buffer in `apply` grows from 32 to 64 bytes for the password. The
+  key absent means unchanged, as for every key; the key present and
+  empty means an open network for `password` and a bad value for
+  `ssid`. `apply` takes a `credentials: bool`; when it is false either
+  key is `FormError::Forbidden`, which stops the request before
+  anything is applied, like the other errors. The check is on the
+  key, never on whether the value would change: a rule that refused
+  only a changed password would answer `200` to a guessed one, an
+  oracle for anyone on the LAN. `write_json` adds `"ssid":"…"` and
+  `"password_set":true`, never the password. An SSID may hold `"`, `\`, `<` or `&`, which
+  the hostname's character rule rules out today, so `form.rs` gains
+  `JsonStr` and `HtmlAttr` display wrappers (about 25 lines) that
+  escape them, and uses them for the SSID in the JSON and in the
+  page's `value=`. The settings page itself does not show the
+  credentials: a typo there would cost the user the network, and the
+  page is for things the panel can show. `http.rs`: `POST /api` passes
+  `credentials` as `auth::token(req.authorization).is_ok()`,
+  so `curl -H "Authorization: Bearer $API_TOKEN" -d ssid=… -d
+  password=…` is the way to move a clock to another network from the
+  LAN and a request without the header gets `403 token required`
+  (`Forbidden` maps to that status; `BadValue` and `UnknownKey` stay
+  `400`). `POST /` on the settings page passes false: the form has no
+  credential fields and a crafted post of them is refused the same
+  way. In AP mode (step 2) both paths pass true: the access point's
+  own WPA2 password is the gate there, and the phone cannot be
+  expected to carry the token. `scripts/configure-clock.sh` is
+  unchanged; the keys and the header are documented in AGENTS.md.
+- `carry.rs`: `LAYOUT` 4, `WORDS` 9, word 8 is `boot_ap`. An old
+  image's record is discarded by the mark, as the layout version was
+  made for.
+- `heal.rs`: `switch_mode(boot_ap: bool) -> !`, the second
+  deliberate-reset path from the carry paragraph above: log the
+  reason, `scan::stop`, write `Carried { ota_boots: carry::get()
+  .ota_boots, boot_ap, ..Carried::default() }`, pause
+  `clock::RESET_PAUSE`, reset. Not counted as a self-heal, and no
+  `carry_time`: the time is not carried across a mode switch.
+- The trigger for the AP-to-station switch, and for a re-provisioning
+  from the LAN, is one rule in `storage::persist_task`: after a save,
+  if the saved credentials differ from the ones this boot started
+  with (`settings::get().wifi` at task start, not `stored`, which is
+  `None` on a first boot with the seed), `heal::switch_mode(false)`.
+  The 2 s settle gives the HTTP response and the browser's redirect
+  time to finish, which is the same reason `RENEW_SETTLE` exists, and
+  the flash write is done before the reset by construction. A
+  credential change over `/api` in station mode therefore means "join
+  this network now", with the old network's record gone if the new
+  one is wrong; the hold in step 2 is the way back, and the token is
+  the gate. A board without
+  an `nvs` partition has no persist task and cannot be provisioned
+  from the page; its boot line already says settings will not persist.
 
-**Host checks.** Record v5 → v6 migration and round trip with the
-longest credentials; the provisioning page size; the DHCP
-discover/offer/request/ack byte layout against a captured phone
-exchange (any laptop `tcpdump` on a hotspot gives one); `Ui` in
-`Provision` ignoring presses except the hold.
+Bench check for step 1: `curl -d ssid=esptest -d password=…
+http://10.1.1.31/api` without the header answers `403 token
+required` and changes nothing; with `-H "Authorization: Bearer
+$API_TOKEN"` and the current network's own credentials it
+answers the JSON, the clock resets within 3 s with `boot: reset
+reason CoreSw, software reset: carried over Carried { heals: 0, …,
+unix_us: None, ota_boots: 0, boot_ap: false }`, the panel is blank
+until SNTP and the log says `settings: loaded from flash` with the
+SSID in the settings line and no password or token. A build without
+`WIFI_SSID` flashed over a record that has the SSID joins it anyway.
+A build without `API_TOKEN`: the boot line says `api token: none`,
+`scripts/ota.sh` gets `403`; `scripts/pin.sh` prints the PIN from
+the serial log, `curl -H "Authorization: PIN $PIN" -d token=…
+http://10.1.1.31/token` sets it, `token_set` turns true in `/api`, the script works with
+it, and after a power cycle the boot line says `stored`; a wrong PIN
+locks the form out like the upload. Post an empty token with the
+`Bearer` header: `token_set` false, the script gets `403` again.
 
-**Verify on the panel.** Flash with empty credentials: the panel
-shows `AP`, a phone sees `esp32clock-xxxx`, gets an address, opens
-192.168.4.1, saves the home network, and the clock reboots and syncs.
-Save a wrong password: the clock stays blank, the USB log says why,
-and it never shows `AP` on its own. Power the router off with the
-clock running: it reconnects when the router returns without ever
-showing `AP`. Hold both buttons 10 s on a working clock: `AP`; cut
-the power: back to the clock.
+**Step 2: the access point.**
+
+- Mode decision in `main.rs`, after `settings::init`, the seed and
+  `carry::init`, before the stack is built: access point if
+  `carry::get().boot_ap` or `settings::get().wifi` is `NONE`, station
+  otherwise. `net::set_mode(Mode)` stores it in an `AtomicBool`;
+  `net::mode()` is read by the HTTP handler and the display task. The
+  boot line says which. The interface is `Interface::access_point()`
+  or `Interface::station()`, the same type, so one `embassy_net::new`
+  call takes either; in AP mode its config is
+  `ipv4_static(192.168.4.1/24, gateway 192.168.4.1, dns [192.168.4.1])`
+  and in station mode `default()` with DHCP switched on later, as now.
+  `StackResources<10>` stays: the access point runs the DHCP server's
+  socket and the three listeners and none of the station's five.
+- `net::ap_task(controller, stack)`: `set_max_tx_power` as the
+  station does, `set_config(&Config::AccessPoint(…))` with SSID
+  `clock-xxxx` from the last two AP MAC bytes in hex, WPA2 with
+  `config::AP_PASSWORD` (build-time, default `esp32clock`, const
+  assert of 8 to 64 bytes), channel 1, the rest default; log `wifi:
+  access point clock-xxxx up, 192.168.4.1`, then loop on
+  `wait_for_access_point_connected_event_async` logging each station's
+  MAC joining or leaving. Spawned in AP mode instead of `wifi_task`,
+  `ntp_task`, `hostname_task`, `monitor_task` and `probe_task`.
+  `net_task` and the HTTP listeners are spawned in both modes.
+- `src/dhcpd.rs`: the pure part is `parse(&[u8]) -> Option<Request>`
+  (op 1, htype 1, hlen 6, the magic cookie, option 53 discover or
+  request, option 50 requested address, option 54 server id, the xid,
+  flags and chaddr) and `build(&mut [u8], &Request, Reply) -> usize`
+  (op 2, the xid and flags copied, `yiaddr`, `siaddr` 192.168.4.1,
+  chaddr copied, options 53 offer/ack/nak, 54 server id, 51 lease
+  3600 s, 1 mask /24, 3 router and 6 DNS both 192.168.4.1, 255), plus
+  `Leases`: eight slots of `Option<([u8; 6], Instant)>` for
+  192.168.4.2 to .9, a MAC keeps its slot, an expired slot is reused,
+  a ninth client is ignored. The task binds a `UdpSocket` on port 67
+  with two 600-byte buffers, answers a discover with an offer, a
+  request for the client's own slot with an ack, any other request
+  with a nak (the phone then discovers again), and sends every reply
+  to `255.255.255.255:68`, which every DHCP client accepts and which
+  needs no ARP for an address the client does not have yet. About
+  150 lines; the parse and build halves have no hardware in them.
+- `http.rs`: in AP mode `GET /` serves `form::write_provision_page`:
+  SSID (text, `maxlength=32`), password (`type=password`,
+  `maxlength=64`, "leave empty for an open network"), timezone and
+  hostname, with the firmware line and the `/update` link, so a
+  clock with a wrong password can still be updated over its own
+  network. `POST /` applies through `form::apply` with
+  `checkboxes_absent_off` false (the form has none) on a copy; on a
+  bad field it redirects to `/?error=…` as the settings page does;
+  on success it answers `200` with a short page, "Saved. The clock
+  restarts now and joins `<ssid>`. Join that network yourself and
+  open http://`<hostname>`/ or the address the clock shows on a
+  both-button press." When the posted credentials differ from the
+  stored ones the handler commits them with `settings::update` and
+  returns `Then::Close`: the persist task writes the record and makes
+  the switch, as in step 1, after the response is long gone. When they
+  equal the stored ones (a clock put into AP mode by the hold, given
+  its own network again) nothing changes and the persist task would
+  not fire, so the handler returns `Then::Join` and the listener
+  itself calls `heal::switch_mode(false)` once the response is
+  flushed; there is nothing to write first. (Departure from the
+  sketch, which had no answer to the unchanged case.) The provisioning
+  form posts without a token, see step 1; `/api` in this mode takes
+  credentials without one too, so the two paths agree. `/api` works in both modes; `write_json` adds
+  `"mode":"ap"` or `"sta"` as a read-only key. The page's `<p>` with
+  "Scriptable" and the status line are shared with the settings page.
+- `display.rs`: no new `Ui` mode (departure from the sketch, which
+  had `Provision`). The display task knows the mode and draws the
+  `AP` face, `A` and `P` in the first two digits, colon off, in place
+  of the sweep; `View::Sweep` is what `Ui` produces without a time,
+  so `ui.rs` is untouched and presses keep their meanings: colour
+  and brightness still cycle, the alarm can still be set, and the
+  both-button long press shows 192.168.4.1 through the existing IP
+  view since `stack.config_v4()` is the static address. The alarm
+  cannot ring without a time.
+- `buttons.rs`: a third `Kind::Hold`, emitted once for `Button::Both`
+  when both have been down for `HOLD_PRESS` (10 s), tracked in
+  `button_task` as the instant both became pressed; the 800 ms `Both
+  Long` fires first and starts the IP display, which is harmless.
+  `display_task` takes the event before `ui.handle`: in station mode
+  `heal::switch_mode(true)`, in AP mode `heal::switch_mode(false)` if
+  the record has credentials (the way back without a power cut; the
+  sketch only had the power cut) and nothing otherwise. The hold is
+  the only thing besides an empty record that starts the access
+  point; a station that cannot connect retries forever, as today.
+- `config.rs`: `AP_PASSWORD` and `AP_SSID_PREFIX` (`clock-`), and
+  `WIFI_SSID` documented as optional. `build.rs` adds `AP_PASSWORD`
+  to the rerun list.
+
+**Step 3, after the plain flow works: captive DNS.** A UDP task on
+port 53 that answers every A query with 192.168.4.1, so a phone's
+portal check opens the page by itself. Needs one more `StackResources`
+slot and about 60 lines; left out until a phone has been seen joining
+and provisioning through the plain flow.
+
+**Touches, in order.** `auth.rs` (new, out of `ota.rs`, with the
+rename), `settings.rs` (Step 0 tolerance, `Text`,
+`Credentials`, record 6, seed), `storage.rs` (scratch, the switch
+trigger), `form.rs` (keys, escaping, JSON, the two pages), `carry.rs`
+(`boot_ap`, layout 4), `heal.rs` (`switch_mode`), `net.rs`
+(credentials from the settings, the reason hints, `Mode`, `ap_task`),
+`dhcpd.rs`, `http.rs` (the mode, the provisioning page, `Then::Join`),
+`display.rs` (`AP` face, the hold), `buttons.rs` (`Kind::Hold`),
+`main.rs` (the seed, the mode decision, the two spawn lists),
+`config.rs` and `build.rs` (`API_TOKEN`), `scripts/ota.sh`,
+`scripts/reload.sh` and the new `scripts/pin.sh`, `lib.rs` (`dhcpd`), AGENTS.md (build section
+with the renamed variable, controls table, layout table, the sizes
+list: `RECORD_LEN` 167, scratch 256, value buffer 64; the token
+section: set from the update page, never shown).
+
+**Host checks.** Record round trip at version 6 with a 32-byte SSID,
+a 64-byte password and a 32-byte token; version 5 read as `NONE` and
+no token; the token rule at 7, 8, 32 and 33 bytes and with a space; version 6 read by
+the Step 0 parser as a version 5 prefix. `Credentials::is_valid` at
+the edges (SSID 0 and 33 bytes, password 7, 8, 64 and 65).
+`form::apply` with `ssid`/`password` through percent-decoding of a
+space and a `%26`, and refused with `Forbidden` and nothing applied
+when `credentials` is false, whatever else the body holds; `JsonStr` and `HtmlAttr` on `a"b\c<d&e`. The
+provisioning and the saved pages, and the update page with its second
+form, against `RESPONSE_BUF`. `dhcpd`:
+`parse` and `build` against a discover/offer/request/ack exchange
+captured with `tcpdump -i wlan0 -w` on a laptop hotspot with a phone
+joining; the lease table keeping a MAC on its slot, reusing an
+expired one and ignoring a ninth. `Kind::Hold` timing in a scratch
+copy of `buttons.rs` with the inputs stubbed.
+
+**Verify on the bench and the panel.** Step 1 as above. Step 2:
+flash a build without `WIFI_SSID` over an erased `nvs` (`espflash
+erase-region 0x9000 0x6000`): the boot line says `access point`, the
+panel shows `AP`, a phone sees `clock-xxxx`, joins with the password,
+gets 192.168.4.2 (the log shows the MAC joining and the DHCP
+exchange), opens 192.168.4.1 and gets the provisioning form; saving
+the bench network's credentials answers the saved page, the log shows
+`settings: saved` then the switch reset with `boot_ap: false`, the
+boot line says `station`, the clock joins and syncs, and the record
+is not carried. Save a wrong password instead: the clock stays blank,
+the log says `wrong password?` every attempt, and it never shows `AP`
+on its own; hold both buttons 10 s: `AP` again. Power the bench AP off
+with the clock running: it reconnects when the AP returns without
+showing `AP`. Hold both buttons 10 s on a working clock: `AP`; hold
+again: back to the clock, time from SNTP, `heals` 0 in the boot line
+whatever the count was before. A `/reload` in AP mode comes back as
+`AP`. Watch `heap free` in the heartbeat in AP mode against the
+station's figure; the softAP has its own driver buffers.
 
 ### M11 — NTC thermometer and light sensor — planned
 
