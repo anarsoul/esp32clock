@@ -125,6 +125,8 @@ impl Ui {
         match self.mode {
             Mode::Ringing | Mode::ShowIp | Mode::ShowPin => self.enter(Mode::Clock, now),
             Mode::Clock => match (ev.button, ev.kind) {
+                // The mode switch; the display task acts on it first.
+                (_, Kind::Hold) => {}
                 (Button::Top, Kind::Short) => {
                     settings.color = (settings.color + 1) % PALETTE.len();
                 }

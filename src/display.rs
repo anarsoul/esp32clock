@@ -7,13 +7,14 @@ use embassy_net::Stack;
 use embassy_time::{Duration, Instant, Timer};
 use log::info;
 
-use crate::buttons;
+use crate::buttons::{self, Kind};
 use crate::buzzer;
+use crate::net::{self, Mode};
 use crate::config::MAX_CURRENT_STEP;
 use crate::panel::{Panel, Rgb, ScanImage, current_step_for};
 use crate::settings::{self, Settings};
 use crate::ui::{Field, IP_STEP, Ui, View};
-use crate::{auth, carry, clock, scan};
+use crate::{auth, carry, clock, heal, scan, settings as settings_mod};
 
 /// Step time of the waiting animation and of the blink.
 const BLINK_STEP: Duration = Duration::from_millis(250);
@@ -89,6 +90,12 @@ fn draw(panel: &mut Panel, view: View, settings: &Settings, ip: Option<[u8; 4]>,
     panel.set_degree(settings.alarm_armed);
     let twelve = settings.twelve_hour;
     match view {
+        // No time to show: the sweep while the station waits for one,
+        // `AP` while the clock is the access point and will never have one.
+        View::Sweep if net::mode() == Mode::AccessPoint => {
+            panel.set_char(0, 'A');
+            panel.set_char(1, 'P');
+        }
         View::Sweep => draw_sweep(panel, settings.color(), phase_ms),
         View::Time { time, colon } => {
             draw_hhmm(panel, twelve, time.hour, time.minute, true, true);
@@ -217,6 +224,17 @@ pub async fn display_task(stack: Stack<'static>) -> ! {
         {
             Either4::First(()) => {}
             Either4::Second(ev) => {
+                if ev.kind == Kind::Hold {
+                    // The mode switch: into the access point from the
+                    // station, back to the station from the access point
+                    // when there is a network to join.
+                    match (net::mode(), settings_mod::get().wifi.is_none()) {
+                        (Mode::Station, _) => heal::switch_mode(true).await,
+                        (Mode::AccessPoint, false) => heal::switch_mode(false).await,
+                        (Mode::AccessPoint, true) => info!("display: hold ignored, no network to join yet"),
+                    }
+                    continue;
+                }
                 let now = Instant::now();
                 settings::update(|s| ui.handle(s, ev, now));
                 // Our own change; the redraw happens on this loop anyway.

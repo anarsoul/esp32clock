@@ -6,7 +6,9 @@
 //! `POST /api` takes every setting; the network (`ssid`, `password`)
 //! only with the token. `POST /token` sets the token with the PIN or
 //! the old token, `POST /pin` issues a PIN for a script. `POST /reload`
-//! resets with the token.
+//! resets with the token, `POST /ap` resets into the access point with
+//! it. On the access point `GET /` is the setup form and `POST /scan`
+//! refreshes its network list.
 //!
 //! Several sockets listen at once because a browser opens more
 //! connections than it uses: a speculative one alongside the page, one
@@ -26,6 +28,7 @@ use log::{info, warn};
 use crate::buzzer;
 use crate::config::HTTP_PORT;
 use crate::form::{self, FormError, HealStamp, Status};
+use crate::net::{self, Mode};
 use crate::{auth, clock, heal, ota, settings};
 
 /// Connections served at once, each with its own buffers and task.
@@ -41,6 +44,10 @@ const RESPONSE_BUF: usize = 4096;
 
 /// A client that stalls this long mid-transfer is dropped.
 const TIMEOUT: Duration = Duration::from_secs(5);
+
+/// A rescan asked for by the setup page takes about three seconds; past
+/// this the page comes back with whatever the list holds.
+const SCAN_WAIT: Duration = Duration::from_secs(10);
 
 /// A client that has connected but not sent its request within this long
 /// is dropped, so an idle speculative connection frees its socket.
@@ -317,6 +324,7 @@ fn status() -> Status {
     Status {
         version: ota::VERSION,
         slot: ota::booted().name(),
+        mode: if net::mode() == Mode::AccessPoint { "ap" } else { "sta" },
         uptime_secs: embassy_time::Instant::now().as_secs(),
         heals: heal::count(),
         last_heal,
@@ -331,6 +339,11 @@ enum Then {
     NewImage,
     /// Reboot as asked, with the carry record.
     Reload,
+    /// Leave the access point for the network in the record, which the
+    /// provisioning form posted unchanged, so no save will do it.
+    Join,
+    /// Reset into the access point, as asked with the token.
+    AccessPoint,
 }
 
 /// Build the response for one request with its body in hand.
@@ -338,7 +351,42 @@ fn respond(out: &mut Response, req: &Request<'_>, body: &[u8]) -> Result<Then, c
     match (req.method, req.path) {
         (Method::Get, "/") => {
             status_line(out, "200 OK", "text/html; charset=utf-8")?;
-            form::write_page(out, &settings::get(), &status(), error_from_query(req.query))?;
+            if net::mode() == Mode::AccessPoint {
+                let networks = net::networks();
+                form::write_provision_page(out, &settings::get(), &status(), &networks, error_from_query(req.query))?;
+            } else {
+                form::write_page(out, &settings::get(), &status(), error_from_query(req.query))?;
+            }
+        }
+        (Method::Post, "/") if net::mode() == Mode::AccessPoint => {
+            // The provisioning form: the network keys are allowed, since
+            // the access point's own password is the gate here. A change
+            // is saved and the persist task resets into the network; the
+            // same credentials again (an access point raised by the hold)
+            // are nothing to save, so the listener resets after answering.
+            let current = settings::get();
+            let mut trial = current;
+            match form::apply(&mut trial, body, false, true) {
+                Ok(()) if trial.wifi.is_none() => {
+                    warn!("http: setup form named no network");
+                    redirect_home(out, Some(FormError::BadValue))?;
+                }
+                Ok(()) => {
+                    status_line(out, "200 OK", "text/html; charset=utf-8")?;
+                    form::write_saved_page(out, &trial)?;
+                    if trial.wifi == current.wifi {
+                        warn!("http: network {} posted unchanged, leaving the access point", trial.wifi.ssid.as_str());
+                        settings::update(|s| *s = trial);
+                        return Ok(Then::Join);
+                    }
+                    warn!("http: network {} saved, leaving the access point once it is written", trial.wifi.ssid.as_str());
+                    settings::update(|s| *s = trial);
+                }
+                Err(e) => {
+                    warn!("http: setup form rejected: {e:?}");
+                    redirect_home(out, Some(e))?;
+                }
+            }
         }
         (Method::Post, "/") => {
             // All or nothing: the form is applied to a copy and committed
@@ -415,8 +463,9 @@ fn respond(out: &mut Response, req: &Request<'_>, body: &[u8]) -> Result<Then, c
         }
         (Method::Post, "/api") => {
             // Validate on a copy first so a bad pair changes nothing. The
-            // network keys need the token; the rest do not.
-            let credentials = auth::token(req.authorization).is_ok();
+            // network keys need the token, except on the access point,
+            // whose own password is the gate; the rest do not.
+            let credentials = net::mode() == Mode::AccessPoint || auth::token(req.authorization).is_ok();
             let mut trial = settings::get();
             match form::apply(&mut trial, body, false, credentials) {
                 Ok(()) => {
@@ -437,6 +486,24 @@ fn respond(out: &mut Response, req: &Request<'_>, body: &[u8]) -> Result<Then, c
                     })?;
                 }
             }
+        }
+        (Method::Post, "/ap") => {
+            // Into the access point from a script, with the token: the
+            // way onto a bench without hands on the buttons.
+            return match auth::token(req.authorization) {
+                Ok(()) => {
+                    warn!("http: access point mode requested");
+                    status_line(out, "200 OK", "text/plain")?;
+                    out.write_str("resetting into access point mode\n")?;
+                    Ok(Then::AccessPoint)
+                }
+                Err(e) => {
+                    warn!("http: access point mode refused: {}", e.text);
+                    status_line(out, e.status, "text/plain")?;
+                    writeln!(out, "{}", e.text)?;
+                    Ok(Then::Close)
+                }
+            };
         }
         (Method::Post, "/reload") => {
             // A deliberate reset for testing the carry: the token, not the
@@ -461,6 +528,24 @@ fn respond(out: &mut Response, req: &Request<'_>, body: &[u8]) -> Result<Then, c
             out.write_str("not found\n")?;
         }
     }
+    Ok(Then::Close)
+}
+
+/// `POST /scan` on the access point: ask the AP task for a scan, wait
+/// for it, and send the page back to `/` with the new list. The form
+/// body is ignored. Not a route anywhere else.
+async fn rescan(out: &mut Response) -> Result<Then, core::fmt::Error> {
+    if net::mode() != Mode::AccessPoint {
+        status_line(out, "404 Not Found", "text/plain")?;
+        out.write_str("not found\n")?;
+        return Ok(Then::Close);
+    }
+    info!("http: rescan asked for");
+    net::request_scan();
+    if with_timeout(SCAN_WAIT, net::scan_done()).await.is_err() {
+        warn!("http: scan not done within {} s", SCAN_WAIT.as_secs());
+    }
+    redirect_home(out, None)?;
     Ok(Then::Close)
 }
 
@@ -578,6 +663,7 @@ pub async fn http_task(stack: Stack<'static>, index: usize) -> ! {
             info!("http: L{index} {:?} {}", req.method, req.path);
             let mut out = Response::new();
             let built = match req.body {
+                Body::Inline(_) if req.method == Method::Post && req.path == "/scan" => rescan(&mut out).await,
                 Body::Inline(body) => respond(&mut out, &req, body),
                 Body::Stream { .. } => upload(&mut out, &req, &mut socket).await,
             };
@@ -604,6 +690,8 @@ pub async fn http_task(stack: Stack<'static>, index: usize) -> ! {
             Then::Close => {}
             Then::NewImage => ota::reboot().await,
             Then::Reload => heal::reboot().await,
+            Then::Join => heal::switch_mode(false).await,
+            Then::AccessPoint => heal::switch_mode(true).await,
         }
     }
 }

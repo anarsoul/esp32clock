@@ -33,6 +33,7 @@ API_TOKEN='…' scripts/ota.sh <ip>      # later updates, over the LAN
 scripts/ota.sh                          # just the image file, for http://<ip>/update
 API_TOKEN='…' scripts/reload.sh <ip>   # software reset with the carry record, waits for the clock to come back
 scripts/pin.sh <ip> <serial-log>        # POST /pin, then the four digits read back from the monitor's log
+AP_PASSWORD='…' cargo build --release   # optional: the clock's own access point's password (default esp32clock)
 ```
 
 `cargo run` flashes with espflash and opens the monitor; `.cargo/config.toml`
@@ -73,7 +74,7 @@ one costs the LAN until the password is right again. The password and
 the token are never read back: the JSON has `ssid`, `password_set` and
 `token_set`. The page ends with a read-only status
 line, and the JSON with the read-only keys `version`, `slot` (the app
-slot the firmware runs from), `uptime` (seconds), `heals` (self-heal
+slot the firmware runs from), `mode` (`sta` or `ap`), `uptime` (seconds), `heals` (self-heal
 resets since power-up) and `last_heal` (Unix seconds or null); posting
 them is refused as an unknown key. `skip_next` (page checkbox, key `skip`) is
 the one setting the record does not store: it skips one alarm and is cleared
@@ -91,8 +92,38 @@ MSRV-aware resolver picks an esp-rom-sys that esp-storage cannot build with.
 | top long | set alarm hour, then bottom short for minutes, bottom short again to leave |
 | bottom long | arm or disarm the alarm (degree mark shows armed) |
 | both long | show the IP, one octet at a time, twice |
+| both held 10 s | reset into the access point; from the access point, back to the station if a network is stored |
 
 Opening `http://<ip>/update` shows a four-digit PIN for a minute.
+
+Provisioning: a clock with no network in its record (and none built
+in), or one whose buttons were held 10 s, boots as an access point
+instead of a station for that whole boot, since the driver does not do
+both at once. The panel shows `AP`; the network is `clock-xxxx` (the
+last two bytes of the MAC), WPA2 with `AP_PASSWORD` from the build
+(default `esp32clock`), channel 1, the clock at `http://192.168.4.1/`
+with its own DHCP server (`src/dhcpd.rs`, eight leases, replies
+broadcast) and no time, so no alarm. `GET /` there is the setup form
+(network, password, timezone, hostname); saving answers a page and the
+clock resets into the network once the record is written, or at once
+if nothing changed. Both switches (`heal::switch_mode`) start the carry
+record over, keeping only the OTA boot count: no time, heals or alarm
+state crosses a mode change, and a panic in AP mode keeps the flag so
+the clock comes back as an access point. A station that cannot join
+never turns into an access point by itself: a wrong password is a
+blank panel, `wrong password?` in the log every attempt, and the hold.
+`/update`, `/ota`, `/api` and `/token` work on the access point too;
+`/api` takes the network keys there without the token. `POST /ap` with
+the `Bearer` token resets a running clock into the access point, for a
+bench without hands on the buttons. The access point runs as AP+STA
+with a station half that never connects, because the driver refuses a
+scan in AP-only mode: it scans once when it comes up and again on
+`POST /scan` (the page's Rescan button, which comes back to `/` with
+the list), and the setup form lists what it saw, strongest first, with
+an "Other" entry and a text field for a hidden network. The AP stays
+up through a scan. A `POST` of `ssid=` (empty) leaves the network
+unchanged, since the form always sends both the list's pick and the
+typed name.
 
 Any press ends ringing or the IP display. Set mode times out after 15 s,
 ringing after 5 minutes. Self-heal: once the gateway has answered a ping, ten
@@ -161,21 +192,22 @@ answered or an HTTP request served bumps it, and the third such boot
 | `src/aip33628.rs` | frame format, bit-reversed current table, quad-nibble waveform encoder; pure `core` |
 | `src/panel.rs` | COM/SEG map, font, per-position colour, gamma and brightness tables, `Panel::render` → `ScanImage` |
 | `src/scan.rs` | cycle/transfer builder, double-buffered DMA scan task that builds the SPI2 quad + DMA bus itself (an async esp-hal driver is `!Send`), restart-gap statistics, `stop` on a blank frame before a deliberate reset or a flash write, `resume` after a failed one |
-| `src/display.rs` | UI loop: tick, button or settings change → `ui` → draw → publish; rings the alarm; shows the IP; seeds and carries the skip flag and the time the alarm last rang |
+| `src/display.rs` | UI loop: tick, button or settings change → `ui` → draw → publish; rings the alarm; shows the IP, or `AP` in place of the sweep on the access point; acts on the hold before the UI sees it; seeds and carries the skip flag and the time the alarm last rang |
 | `src/ui.rs` | mode state machine, pure logic, one timer for the current mode; edits the settings it is handed; alarm due check and missed-alarm grace, both gated by the carried time the alarm last rang; consumes `skip_next` |
 | `src/settings.rs` | `Settings`, palette and brightness tables, `Hostname`, `Text`/`Secret` strings, `Credentials` and the token with their rules, the build-time `seed`, shared `Watch` with change signal, versioned append-only flash record |
 | `src/storage.rs` | the one flash handle (`with_flash`), nvs partition lookup, `sequential-storage` map over it, debounced persist task that compares records, not structs, and resets into station mode after a save that changed the credentials |
 | `src/heal.rs` | deliberate resets: `reboot` blanks the panel through `scan::stop`, carries the time and resets, for `/reload` and the OTA reboot; `reset`, the self-heal, waits out a ringing alarm and counts itself first; `switch_mode`, the reset between station and access point, which starts the carry record over and freezes it |
 | `src/auth.rs` | the API token (a setting; constant-time compare) and the panel PIN with its TTL and lockout; `token`, `token_or_pin`, `issue_pin`, `pin_to_show`; `Refusal` with its HTTP status; pure rules with the clock and the random number passed in |
 | `src/form.rs` | key=value parsing, all-or-nothing `apply` on a copy, JSON, the HTML page with its error notice and the read-only `Status` lines, the update page with its upload and token scripts, `JsonStr`/`HtmlStr` escaping for the SSID, `parse_token`; pure logic |
-| `src/http.rs` | HTTP/1.0 server, `LISTENERS` sockets each in its own task: `GET`/`POST` on `/` and `/api`, `POST /play`, `GET /update`, `POST /ota` with the body streamed to `ota::install`, `POST /reload` with the token, `POST /token` with the token or the PIN, `POST /pin`; a refused form redirects to `/?error=…`; per-listener state and counters for the heartbeat |
-| `src/buttons.rs` | debounced short/long press events, plus the two-button hold |
+| `src/http.rs` | HTTP/1.0 server, `LISTENERS` sockets each in its own task: `GET`/`POST` on `/` (the settings page, or the setup form on the access point) and `/api`, `POST /play`, `GET /update`, `POST /ota` with the body streamed to `ota::install`, `POST /reload` and `POST /ap` with the token, `POST /token` with the token or the PIN, `POST /pin`, `POST /scan` on the access point; a refused form redirects to `/?error=…`; per-listener state and counters for the heartbeat |
+| `src/buttons.rs` | debounced short/long press events, the two-button long press, and the 10 s two-button `Hold` |
 | `src/melody.rs` | alarm tunes as pitch and length data with tempo; `RANDOM` and the pure `pick` that turns it into a tune; pure |
 | `src/carry.rs` | RTC-RAM record used only after a software reset (`CoreSw`/`Cpu0Sw`; anything else zeroes it at boot): self-heal count and time, the skip flag, the time the alarm last rang, the Unix time last written, boots of an unconfirmed OTA image, the access-point flag for the next boot; the mark carries a layout version; `freeze` for a mode switch |
 | `src/buzzer.rs` | LEDC PWM on an open-drain pin; plays a melody on command, looped or once, stops within a note |
 | `src/clock.rs` | Unix time = uptime + NTP offset; local time with weekday; `carry_time`/`restore_carried` move the time across a software reset as plain Unix time, written every second by the display tick; `RESET_PAUSE` for every deliberate reset |
 | `src/ota.rs` | firmware upload: slot lookup and the boot-time rollback, sector writer with read-back, activate, reboot; `VERSION` from `build.rs` |
-| `src/net.rs` | Wi-Fi station on the stored credentials with all-channel scan and transmit-power ceiling, minute RSSI line, connect failures logged with their meaning (`wrong password?`, `no such network in range`) and a budget that ends in `heal::reset`; DHCP switched on 500 ms after each connect and off at disconnect; link and address monitor, gateway ping probe with the self-heal trigger, SNTP, DHCP renew on hostname change |
+| `src/net.rs` | Wi-Fi station on the stored credentials with all-channel scan and transmit-power ceiling, minute RSSI line, connect failures logged with their meaning (`wrong password?`, `no such network in range`) and a budget that ends in `heal::reset`; DHCP switched on 500 ms after each connect and off at disconnect; link and address monitor, gateway ping probe with the self-heal trigger, SNTP, DHCP renew on hostname change; the boot's `Mode`, the access-point task (AP+STA, scans on request into the network list) and its static stack config |
+| `src/dhcpd.rs` | DHCP server for the access point: `parse`, `build` and the lease table pure, the socket task around them; every reply broadcast |
 | `src/config.rs` | build-time env vars and compile-time defaults |
 | `src/bin/main.rs` | pin setup, display wires with their pull-downs, executors, task spawning, panic reset hook, log timestamps, reset reason and carried time at boot, OTA rollback check, minute heartbeat log |
 
@@ -255,8 +287,8 @@ answered or an HTTP request served bumps it, and the third such boot
 
 - `http::RESPONSE_BUF` (4096) holds the whole page plus headers, and
   overflow is a 500, not a truncation. The worst-case settings page is
-  2821 bytes with headers and the update page 3059; measure on the host
-  after adding a field or label.
+  2821 bytes with headers, the update page 3059 and the setup page with
+  twelve networks 3209; measure on the host after adding a field or label.
 - `http::RX_BUF` (4096) is the TCP receive window; 1 KB made an upload
   one segment per round trip. `REQUEST_BUF` (1536) still bounds the
   head; an upload's body stays on the socket.
@@ -274,7 +306,8 @@ answered or an HTTP request served bumps it, and the third such boot
   persist, hostname). Add one when a new task subscribes, or `receiver()`
   panics at boot.
 - `StackResources<10>` in `main.rs` covers DHCP, DNS, SNTP, the gateway
-  probe and the HTTP listeners with headroom; adding sockets means raising it.
+  probe and the HTTP listeners with headroom (on the access point: the
+  DHCP server and the listeners); adding sockets means raising it.
 - `HOSTNAME_MAX` (24) stays under embassy-net's 32-byte DHCP option.
 - `config::WIFI_RX_QUEUE_FRAMES` (32) is the driver's receive queue;
   esp-radio's default of 5 dropped bursts of LAN broadcasts, visible as

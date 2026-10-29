@@ -6,11 +6,20 @@ use core::fmt::Write as _;
 use crate::melody;
 use crate::settings::{
     BRIGHTNESS_STEPS, DAY_NAMES, DAYS_ALL, DAYS_WEEKDAYS, DAYS_WEEKEND, HOSTNAME_MAX, Hostname, PALETTE_NAMES,
-    PASSWORD_MAX, Secret, Settings, TOKEN_MAX, TZ_LIMIT_MINUTES, Text, valid_password, valid_token,
+    PASSWORD_MAX, PASSWORD_MIN, SSID_MAX, Secret, Settings, TOKEN_MAX, TZ_LIMIT_MINUTES, Text, valid_password,
+    valid_token,
 };
 
 /// Longest form value, decoded: the password.
 pub const VALUE_MAX: usize = PASSWORD_MAX;
+
+/// A network the access point's scan saw, for the setup page's list.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Network {
+    pub ssid: Text<SSID_MAX>,
+    pub rssi: i8,
+    pub open: bool,
+}
 
 /// Read-only status shown under the form and in the JSON. Not settings:
 /// a posted status key is refused as unknown like any other.
@@ -19,6 +28,8 @@ pub struct Status {
     /// What the firmware calls itself, and the app slot it runs from.
     pub version: &'static str,
     pub slot: &'static str,
+    /// `sta` or `ap`: joined to a network, or raising its own.
+    pub mode: &'static str,
     pub uptime_secs: u64,
     /// Self-heal resets since power-up.
     pub heals: u32,
@@ -195,12 +206,13 @@ pub fn write_days(out: &mut impl core::fmt::Write, mask: u8) -> core::fmt::Resul
 /// without the token learns nothing about the stored password.
 pub fn apply_one(s: &mut Settings, key: &str, value: &str, credentials: bool) -> Result<(), FormError> {
     match key {
-        "ssid" | "password" if !credentials => return Err(FormError::Forbidden),
-        "ssid" => {
-            if value.is_empty() {
-                return Err(FormError::BadValue);
+        "ssid" | "ssid_pick" | "password" if !credentials => return Err(FormError::Forbidden),
+        // The setup form sends both the list's choice and the typed name,
+        // one of them empty; empty means unchanged.
+        "ssid" | "ssid_pick" => {
+            if !value.is_empty() {
+                s.wifi.ssid = Text::new(value).ok_or(FormError::BadValue)?;
             }
-            s.wifi.ssid = Text::new(value).ok_or(FormError::BadValue)?;
         }
         "password" => {
             if !valid_password(value) {
@@ -315,8 +327,8 @@ pub fn parse_token(body: &[u8]) -> Result<Secret<TOKEN_MAX>, FormError> {
 
 /// The settings as JSON (the SSID, then whether a password and a token
 /// are set, never their values), followed by the read-only status keys
-/// `version`, `slot`, `uptime` (seconds), `heals` and `last_heal` (Unix
-/// seconds or null).
+/// `version`, `slot`, `mode`, `uptime` (seconds), `heals` and `last_heal`
+/// (Unix seconds or null).
 pub fn write_json(out: &mut impl core::fmt::Write, s: &Settings, st: &Status) -> core::fmt::Result {
     write!(
         out,
@@ -330,7 +342,7 @@ pub fn write_json(out: &mut impl core::fmt::Write, s: &Settings, st: &Status) ->
     write_days(out, s.alarm_days)?;
     write!(
         out,
-        "\",\"skip\":{},\"melody\":\"{}\",\"twelve_hour\":{},\"tz\":{},\"hostname\":\"{}\",\"ssid\":\"{}\",\"password_set\":{},\"token_set\":{},\"version\":\"{}\",\"slot\":\"{}\",\"uptime\":{},\"heals\":{},\"last_heal\":",
+        "\",\"skip\":{},\"melody\":\"{}\",\"twelve_hour\":{},\"tz\":{},\"hostname\":\"{}\",\"ssid\":\"{}\",\"password_set\":{},\"token_set\":{},\"version\":\"{}\",\"slot\":\"{}\",\"mode\":\"{}\",\"uptime\":{},\"heals\":{},\"last_heal\":",
         s.skip_next,
         melody::name(s.melody),
         s.twelve_hour,
@@ -341,6 +353,7 @@ pub fn write_json(out: &mut impl core::fmt::Write, s: &Settings, st: &Status) ->
         !s.token.0.is_empty(),
         st.version,
         st.slot,
+        st.mode,
         st.uptime_secs,
         st.heals,
     )?;
@@ -372,7 +385,7 @@ fn write_firmware_line(out: &mut impl core::fmt::Write, st: &Status) -> core::fm
 const HEAD: &str = "<!doctype html><html><head><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\">\
 <style>body{font-family:sans-serif;max-width:22em;margin:2em auto;padding:0 1em}\
 label{display:block;margin:.8em 0}select,input{font-size:1em;width:100%;box-sizing:border-box}input[type=checkbox]{width:auto}\
-button{font-size:1em;padding:.5em 1.5em;margin-top:1em}p.err{color:#b00}progress{width:100%}</style>";
+button{font-size:1em;padding:.5em 1.5em;margin-top:1em}p.err{color:#b00}progress{width:100%}[hidden]{display:none}</style>";
 
 /// The firmware update page: a file input and the PIN the clock is
 /// showing, posted as the raw body of `/ota` by script with the PIN in
@@ -497,6 +510,92 @@ pub fn write_page(
     write_status(out, st)?;
     out.write_str(
         "<p><small>Scriptable: <code>GET /api</code>, <code>POST /api</code> with the same fields.</small></p></body></html>",
+    )
+}
+
+/// The provisioning page, what `GET /` serves while the clock is an
+/// access point: the networks the scan saw as a list, a field for one
+/// it did not (hidden, or out of range at the time), the password, and
+/// the timezone and the hostname since they are typed too; nothing the
+/// panel cannot show without a time. The password field is empty
+/// whatever is stored (write-only); empty on submit means an open
+/// network. The Rescan button posts the form to `/scan`, which scans
+/// and comes back here.
+pub fn write_provision_page(
+    out: &mut impl core::fmt::Write,
+    s: &Settings,
+    st: &Status,
+    networks: &[Network],
+    error: Option<FormError>,
+) -> core::fmt::Result {
+    out.write_str(HEAD)?;
+    out.write_str("<title>Clock setup</title></head><body><h1>Clock setup</h1>")?;
+    match error {
+        None => out.write_str("<p>The clock has no network to join, or was asked to wait for one. Give it yours and it restarts into it.</p>")?,
+        Some(FormError::BadValue) => out.write_str("<p class=err>Nothing was saved: a field had a bad value, or no network was named.</p>")?,
+        Some(FormError::UnknownKey) => out.write_str("<p class=err>Nothing was saved: an unknown field was sent.</p>")?,
+        Some(FormError::Forbidden) => out.write_str("<p class=err>Nothing was saved.</p>")?,
+    }
+    let stored = s.wifi.ssid.as_str();
+    let listed = networks.iter().any(|n| n.ssid.as_str() == stored);
+    out.write_str("<form method=post action=/><label>Network <select name=ssid_pick id=n>")?;
+    for n in networks {
+        write!(
+            out,
+            "<option value=\"{}\"{}>{} ({} dBm{})</option>",
+            HtmlStr(n.ssid.as_str()),
+            if n.ssid.as_str() == stored { " selected" } else { "" },
+            HtmlStr(n.ssid.as_str()),
+            n.rssi,
+            if n.open { ", open" } else { "" },
+        )?;
+    }
+    write!(
+        out,
+        "<option value=\"\"{}>Other, typed below</option></select></label>\
+<label id=o>Other network name <input type=text name=ssid maxlength={smax} value=\"{}\"></label>\
+<label>Password, empty for an open network <input type=password name=password minlength={pmin} maxlength={pmax} autocomplete=off></label>\
+<label>Timezone, minutes east of UTC <input type=number name=tz min=-{lim} max={lim} step=15 value={}></label>\
+<label>Hostname, for the DHCP server <input type=text name=hostname maxlength={hmax} pattern=\"[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?\" value=\"{}\"></label>\
+<button>Save and join</button> <button formaction=/scan formnovalidate>Rescan</button></form>",
+        if listed { "" } else { " selected" },
+        HtmlStr(if listed { "" } else { stored }),
+        s.tz_offset_minutes,
+        s.hostname.as_str(),
+        smax = SSID_MAX,
+        pmin = PASSWORD_MIN,
+        pmax = PASSWORD_MAX,
+        lim = TZ_LIMIT_MINUTES,
+        hmax = HOSTNAME_MAX,
+    )?;
+    if networks.is_empty() {
+        out.write_str("<p><small>No networks seen yet; rescan, or type the name.</small></p>")?;
+    }
+    // The typed-name field only when the list's choice is "Other".
+    out.write_str(
+        "<script>var n=document.getElementById('n'),o=document.getElementById('o');\
+function f(){o.hidden=n.value!=''}n.onchange=f;f()</script>",
+    )?;
+    write_firmware_line(out, st)?;
+    out.write_str(
+        "<p><small>Scriptable: <code>POST /api</code> with <code>ssid</code> and <code>password</code>.</small></p></body></html>",
+    )
+}
+
+/// The answer to a provisioning save: the clock is about to restart
+/// into the named network.
+pub fn write_saved_page(out: &mut impl core::fmt::Write, s: &Settings) -> core::fmt::Result {
+    out.write_str(HEAD)?;
+    write!(
+        out,
+        "<title>Clock setup</title></head><body><h1>Saved</h1>\
+<p>The clock restarts now and joins <b>{}</b>. Join that network yourself and open \
+<a href=\"http://{}/\">http://{}/</a>, or the address the clock shows when both buttons are held.</p>\
+<p><small>If it does not appear within a minute the password was wrong: the panel stays blank, and holding both buttons for ten seconds brings this page back.</small></p>\
+</body></html>",
+        HtmlStr(s.wifi.ssid.as_str()),
+        s.hostname.as_str(),
+        s.hostname.as_str(),
     )
 }
 

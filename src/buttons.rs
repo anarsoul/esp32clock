@@ -22,6 +22,9 @@ pub enum Kind {
     Short,
     /// Held past the threshold. Emitted while still held.
     Long,
+    /// Both buttons held for `HOLD_PRESS`, long after their `Long`.
+    /// Only ever for `Both`, once per hold.
+    Hold,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -33,6 +36,10 @@ pub struct Event {
 const POLL: Duration = Duration::from_millis(10);
 const DEBOUNCE: Duration = Duration::from_millis(30);
 const LONG_PRESS: Duration = Duration::from_millis(800);
+
+/// Both buttons down this long is the mode switch (station or access
+/// point), far past anything a short or long press needs.
+const HOLD_PRESS: Duration = Duration::from_secs(10);
 
 static EVENTS: Channel<CriticalSectionRawMutex, Event, 8> = Channel::new();
 
@@ -52,14 +59,19 @@ struct Tracker {
 }
 
 impl Tracker {
-    fn new(button: Button) -> Self {
+    /// `held` is whether the button is down right now. A button that is
+    /// down when the firmware starts is the tail of a press that began
+    /// before the reset (the 10 s hold resets the chip while both are
+    /// still held): its release must not count as a press, so it starts
+    /// as stable-down with nothing pending.
+    fn new(button: Button, held: bool) -> Self {
         Tracker {
             button,
-            stable: false,
-            last_raw: false,
+            stable: held,
+            last_raw: held,
             changed_at: Instant::now(),
             pressed_at: None,
-            long_sent: false,
+            long_sent: true,
         }
     }
 
@@ -111,8 +123,11 @@ impl Tracker {
 /// Poll both buttons forever.
 #[embassy_executor::task]
 pub async fn button_task(top: Input<'static>, bottom: Input<'static>) -> ! {
-    let mut t = Tracker::new(Button::Top);
-    let mut b = Tracker::new(Button::Bottom);
+    let mut t = Tracker::new(Button::Top, top.is_low());
+    let mut b = Tracker::new(Button::Bottom, bottom.is_low());
+    // When both went down together, and whether the hold has been sent.
+    let mut both_since: Option<Instant> = None;
+    let mut hold_sent = false;
     loop {
         let now = Instant::now();
         t.poll(top.is_low(), now, b.pressed_at.is_some());
@@ -121,6 +136,16 @@ pub async fn button_task(top: Input<'static>, bottom: Input<'static>) -> ! {
             t.consume();
             b.consume();
             let _ = EVENTS.try_send(Event { button: Button::Both, kind: Kind::Long });
+        }
+        if t.pressed_at.is_some() && b.pressed_at.is_some() {
+            let since = *both_since.get_or_insert(now);
+            if !hold_sent && now - since >= HOLD_PRESS {
+                hold_sent = true;
+                let _ = EVENTS.try_send(Event { button: Button::Both, kind: Kind::Hold });
+            }
+        } else {
+            both_since = None;
+            hold_sent = false;
         }
         Timer::after(POLL).await;
     }

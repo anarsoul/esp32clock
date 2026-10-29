@@ -1,24 +1,37 @@
-//! Wi-Fi station, network stack and SNTP sync.
+//! Wi-Fi station, network stack and SNTP sync; or, for a clock with no
+//! network to join, the access point a phone provisions it through.
 
+use core::cell::RefCell;
 use core::net::{IpAddr, SocketAddr};
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+
+use critical_section::Mutex as CsMutex;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::signal::Signal;
 
 use embassy_net::dns::DnsQueryType;
 use embassy_net::icmp::ping::{PingManager, PingParams};
 use embassy_net::icmp::PacketMetadata as IcmpPacketMetadata;
 use embassy_net::udp::{PacketMetadata, UdpSocket};
-use embassy_net::{ConfigV4, DhcpConfig, IpAddress, Runner, Stack};
+use embassy_net::{ConfigV4, DhcpConfig, IpAddress, Ipv4Address, Ipv4Cidr, Runner, Stack, StaticConfigV4};
 use embassy_futures::select::{Either, select};
 use embassy_time::{Duration, Instant, Timer, with_timeout};
+use esp_radio::wifi::ap::{AccessPointConfig, EventInfo};
 use esp_radio::wifi::scan::{ScanConfig, ScanTypeConfig};
 use esp_radio::wifi::sta::{ScanMethod, StationConfig};
-use esp_radio::wifi::{AuthenticationMethodConfig, Config, ConnectionError, DisconnectReason, Interface, WifiController};
+use esp_radio::wifi::{
+    AuthenticationMethod, AuthenticationMethodConfig, Config, ConnectionError, DisconnectReason, Interface,
+    WifiController,
+};
+use core::fmt::Write as _;
+
 use log::{error, info, warn};
 use sntpc::{NtpContext, get_time};
 use sntpc_net_embassy::UdpSocketWrapper;
 use sntpc_time_embassy::EmbassyTimestampGenerator;
 
-use crate::settings::{Credentials, Hostname};
+use crate::form::Network;
+use crate::settings::{Credentials, Hostname, Text};
 use crate::{clock, config, heal, ota, settings};
 
 const NTP_PORT: u16 = 123;
@@ -51,6 +64,161 @@ const POKE_PORT: u16 = 12346;
 /// connection, so the page's response and the redirect that follows it
 /// must be done first.
 const RENEW_SETTLE: Duration = Duration::from_secs(3);
+
+/// Which network mode this boot runs in, decided once in `main` before
+/// the stack is built; there is no switching at run time, since the
+/// driver does not do AP+STA.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Mode {
+    Station,
+    AccessPoint,
+}
+
+static ACCESS_POINT: AtomicBool = AtomicBool::new(false);
+
+pub fn set_mode(mode: Mode) {
+    ACCESS_POINT.store(mode == Mode::AccessPoint, Ordering::Relaxed);
+}
+
+pub fn mode() -> Mode {
+    if ACCESS_POINT.load(Ordering::Relaxed) { Mode::AccessPoint } else { Mode::Station }
+}
+
+/// The access point's name: `config::AP_SSID_PREFIX` and the last two
+/// bytes of its MAC.
+pub fn ap_ssid(mac: [u8; 6]) -> heapless::String<32> {
+    let mut s = heapless::String::new();
+    let _ = write!(s, "{}{:02x}{:02x}", config::AP_SSID_PREFIX, mac[4], mac[5]);
+    s
+}
+
+/// The stack configuration in access-point mode: the fixed address,
+/// with the clock as its own router and DNS so the DHCP options and the
+/// stack agree.
+pub fn ap_stack_config() -> embassy_net::Config {
+    let [a, b, c, d] = config::AP_ADDRESS;
+    let addr = Ipv4Address::new(a, b, c, d);
+    let mut dns_servers = heapless::Vec::new();
+    let _ = dns_servers.push(addr);
+    embassy_net::Config::ipv4_static(StaticConfigV4 {
+        address: Ipv4Cidr::new(addr, config::AP_PREFIX_LEN),
+        gateway: Some(addr),
+        dns_servers,
+    })
+}
+
+/// Networks the access point's last scan saw, strongest first, for the
+/// setup page. Written by `ap_task`, read by the HTTP handler.
+pub const NETWORKS_MAX: usize = 12;
+pub type Networks = heapless::Vec<Network, NETWORKS_MAX>;
+static NETWORKS: CsMutex<RefCell<Networks>> = CsMutex::new(RefCell::new(Networks::new()));
+
+/// The page asks for a scan; the AP task says when it is done.
+static SCAN_REQUEST: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+static SCAN_DONE: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+/// The networks the last scan saw.
+pub fn networks() -> Networks {
+    critical_section::with(|cs| NETWORKS.borrow_ref(cs).clone())
+}
+
+/// Ask the access point for a scan; `scan_done` resolves when it is in.
+pub fn request_scan() {
+    SCAN_DONE.reset();
+    SCAN_REQUEST.signal(());
+}
+
+pub async fn scan_done() {
+    SCAN_DONE.wait().await
+}
+
+/// Scan every channel and keep what is worth listing: named networks,
+/// one entry per name with the strongest signal, strongest first, at
+/// most `NETWORKS_MAX`. About three seconds with the dwell that hears a
+/// far access point (see `log_candidates`).
+async fn scan_networks(controller: &mut WifiController<'static>) {
+    let scan = ScanConfig::default().with_scan_type(ScanTypeConfig::Active {
+        min: esp_hal::time::Duration::from_millis(120),
+        max: esp_hal::time::Duration::from_millis(200),
+    });
+    let mut found = Networks::new();
+    match controller.scan_async(&scan).await {
+        Ok(aps) => {
+            for ap in aps {
+                let Some(ssid) = Text::new(ap.ssid.as_str()).filter(|s| !s.is_empty()) else { continue };
+                let open = matches!(ap.auth_method, Some(AuthenticationMethod::None));
+                let net = Network { ssid, rssi: ap.signal_strength, open };
+                match found.iter_mut().find(|n| n.ssid == ssid) {
+                    Some(seen) => {
+                        if net.rssi > seen.rssi {
+                            *seen = net;
+                        }
+                    }
+                    None => {
+                        if found.push(net).is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+            found.sort_unstable_by_key(|n| core::cmp::Reverse(n.rssi));
+            info!("wifi: scan saw {} networks", found.len());
+            for n in &found {
+                info!("wifi:   {} {} dBm{}", n.ssid.as_str(), n.rssi, if n.open { ", open" } else { "" });
+            }
+        }
+        Err(e) => warn!("wifi: scan failed: {e:?}"),
+    }
+    critical_section::with(|cs| *NETWORKS.borrow_ref_mut(cs) = found);
+    SCAN_DONE.signal(());
+}
+
+/// Raise the access point and keep it up, logging stations joining and
+/// leaving, and scanning for the setup page's list once at the start
+/// and whenever asked. The driver starts the AP inside `set_config` and
+/// reports the link up before that returns, so there is nothing to wait
+/// for; the stack gets its static address at once and `dhcpd` does the
+/// rest. The mode is AP+STA with a station half that is never
+/// connected, because the driver refuses a scan in AP-only mode.
+#[embassy_executor::task]
+pub async fn ap_task(mut controller: WifiController<'static>, ssid: heapless::String<32>) -> ! {
+    match controller.set_max_tx_power(config::WIFI_MAX_TX_POWER_QDBM) {
+        Ok(()) => info!("wifi: max tx power {} dBm", config::WIFI_MAX_TX_POWER_QDBM as f32 / 4.0),
+        Err(e) => warn!("wifi: set_max_tx_power: {e:?}"),
+    }
+    let cfg = ssid.as_str().try_into().and_then(|ssid| {
+        Ok(Config::AccessPointStation(
+            StationConfig::default(),
+            AccessPointConfig::default()
+                .with_ssid(ssid)
+                .with_authentication(AuthenticationMethodConfig::Wpa2Personal(config::AP_PASSWORD.try_into()?))
+                .with_channel(config::AP_CHANNEL),
+        ))
+    });
+    let result = cfg.and_then(|cfg| controller.set_config(&cfg));
+    if let Err(e) = result {
+        error!("wifi: access point failed to start: {e:?}");
+        loop {
+            Timer::after(Duration::from_secs(3600)).await;
+        }
+    }
+    let [a, b, c, d] = config::AP_ADDRESS;
+    info!("wifi: access point {ssid} up on channel {}, page at http://{a}.{b}.{c}.{d}/", config::AP_CHANNEL);
+    scan_networks(&mut controller).await;
+    loop {
+        match select(controller.wait_for_access_point_connected_event_async(), SCAN_REQUEST.wait()).await {
+            Either::First(Ok(EventInfo::Connected(i))) => info!("wifi: station {} joined", Bssid(i.mac)),
+            Either::First(Ok(EventInfo::Disconnected(i))) => {
+                info!("wifi: station {} left: {:?}", Bssid(i.mac), i.reason)
+            }
+            Either::First(Err(e)) => {
+                warn!("wifi: access point event wait failed: {e:?}");
+                Timer::after(Duration::from_secs(1)).await;
+            }
+            Either::Second(()) => scan_networks(&mut controller).await,
+        }
+    }
+}
 
 /// A MAC address for the log.
 struct Bssid([u8; 6]);

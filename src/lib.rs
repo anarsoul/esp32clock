@@ -7,6 +7,7 @@ pub mod buzzer;
 pub mod carry;
 pub mod clock;
 pub mod config;
+pub mod dhcpd;
 pub mod display;
 pub mod form;
 pub mod heal;

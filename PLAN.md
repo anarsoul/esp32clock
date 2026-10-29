@@ -2464,7 +2464,7 @@ is converted through `into_peripheral_output`, which freezes the
 signal, and the builder's `apply_output_config` is a no-op on a
 frozen one).
 
-### M10 — Wi-Fi provisioning from an access point — steps 0 and 1 done and verified on the bench 2026-10-29, step 2 planned
+### M10 — Wi-Fi provisioning from an access point — steps 0 and 1 verified on the bench 2026-10-29; step 2 built and bench-checked the same day, the phone and the buttons owed
 
 **Scope.** Credentials become a stored setting instead of a build-time
 constant, and a clock that has none raises its own network so the
@@ -2889,6 +2889,155 @@ armed, every day, beeps, -420, `test-clock`).
 - `config.rs`: `AP_PASSWORD` and `AP_SSID_PREFIX` (`clock-`), and
   `WIFI_SSID` documented as optional. `build.rs` adds `AP_PASSWORD`
   to the rerun list.
+
+*Step 2 built 2026-10-29, host-checked, and on the bench as far as a
+bench without a phone goes; the phone and the buttons are owed.* What
+differs from the bullets above:
+
+- `dhcpd.rs` as planned, 290 lines with the task and the log lines;
+  `parse`, `build` and `Leases` take no hardware (`Leases::handle`
+  takes the clock in seconds). An offer holds its slot 60 s, a lease
+  an hour; a request names the address in option 50 or, renewing, in
+  `ciaddr`; a request with another server's id is ignored, one for an
+  address that is not ours or is someone else's is a nak. Replies are
+  padded to 300 bytes, the BOOTP minimum.
+- `net::ap_task` takes the SSID, built in `main` from
+  `Interface::access_point().mac_address()`, so `main` decides the
+  mode and both interface and config come from it; `net::Mode` is an
+  `AtomicBool` behind `set_mode`/`mode`. `AP_SSID_PREFIX` is `clock-`,
+  not `esp32clock-`: four hex digits after it fit the panel's IP view
+  of the name better and the prefix says what it is.
+- The hold toggles, as decided: from the access point it goes back to
+  the station when a network is stored and logs "hold ignored"
+  otherwise. The display task acts on `Kind::Hold` and never hands it
+  to `Ui`, whose clock-mode match gains an empty arm for it.
+- On the access point `/api` takes the network keys without the
+  token, so the page and the API agree; everything else is as in
+  station mode, `/update` and `/ota` included, so a stranded clock can
+  still be updated over its own network.
+- The `Status` has `mode` (`sta`/`ap`) for the JSON.
+
+Host checks (the scratch crate with `dhcpd.rs` by `#[path]`,
+embassy-net 0.9.1 on `udp`, `proto-ipv4` and `medium-ethernet` builds
+on the host): a discover built as a phone sends it (BOOTP head, cookie,
+options 53, 61, 55, padded to 300) parses to the expected `Request`;
+a wrong op, a missing cookie, an inform, 239 bytes and an option past
+the end are rejected; padding inside the options is skipped and option
+50 is read. The offer for it is 300 bytes with op 2, the xid and the
+broadcast flag echoed, `ciaddr` zero, `yiaddr` .2, `siaddr` and
+`chaddr` right, the cookie, and the options in order: type 2, server,
+lease 3600, mask /24, router and DNS. A request for the offered
+address from our server is an ack with type 5; one meant for another
+server is silence; one for an address that is not ours is a nak with
+only type and server and `yiaddr` zero; one for an address another
+client holds is a nak. A second client gets .3 and the first keeps .2
+across a new discover; a renewal with `ciaddr` and no option 50 is an
+ack with `ciaddr` echoed. Eight offers fill the pool, a ninth is
+ignored at 10 s and gets the first slot at 61 s, its request is acked,
+the old holder of .2 then gets .3, and a renewal at the hour is acked
+when nobody took the slot. The provisioning page with a quoted SSID and
+every field at its longest is 1424 bytes with headers (the SSID
+escaped in `value=`, the password absent), the saved page 998; the
+JSON carries `"mode":"sta"` after `slot`. `Kind::Hold` is not host
+checked: `buttons.rs` takes the GPIO type, and the logic is six lines.
+
+Bench: a build with `WIFI_SSID` empty, flashed over USB with `nvs`
+erased, booted with `settings: nothing stored`, `boot: network none,
+api token built in`, `boot: access point mode, no network to join`,
+`http: serving on port 80` at 345 ms (the static config is up before
+the radio), `wifi: access point clock-f044 up on channel 1, page at
+http://192.168.4.1/` at 1.2 s and `dhcpd: serving 192.168.4.2-9 for
+3600 s`. The host's Wi-Fi scan (`nmcli device wifi list`) showed
+`clock-f044`, channel 1, WPA2, signal 89. Joining it from the host was
+not an option: the host's only link is that Wi-Fi, and the session
+runs over it. The station build went back over USB with `nvs` erased
+and the settings restored by one `/api` post; it reports `"mode":"sta"`.
+
+Owed on the panel, by the user with a phone: `AP` on the panel; the
+phone joining `clock-f044` with `esp32clock`, getting 192.168.4.2 (the
+log shows the MAC joining, the discover and the offer, the request and
+the ack), opening 192.168.4.1 and getting the setup form; saving the
+home network: the saved page, `settings: saved`, `heal: resetting into
+station mode`, the clock joining and syncing with `heals` 0. The hold:
+both buttons 10 s on the working clock (the IP display starts at
+0.8 s and is harmless): `AP`; the hold again: back to the clock, time
+from SNTP. A `/reload` in AP mode comes back as `AP`. `heap free` in
+the heartbeat in AP mode against the station's figure.
+
+**Step 2b (user's call after the phone test, 2026-10-29): a way into
+the access point from a script, and a network list on the page.**
+
+- `POST /ap` with the `Bearer` token answers once and resets into the
+  access point through `heal::switch_mode(true)`, the same shape as
+  `/reload`; the PIN does not do, like `/reload`. It is how a bench
+  without hands gets there, and the way back is the phone's save or
+  the hold.
+- The page lists the networks in range instead of a bare text field.
+  The driver refuses a scan in access-point-only mode, so the access
+  point is raised as `Config::AccessPointStation` with a default
+  (empty-SSID) station half that is never connected: the config
+  validates (the station half checks only its beacon timeout) and
+  `scan_async` is allowed whenever a station half exists. The driver's
+  "APSTA not supported" note is about its data path, which the station
+  half never uses here; the bench says whether the AP stays up through
+  a scan, with the fallback being a station-mode scan before the AP
+  comes up and a rescan that bounces it.
+- `net::ap_task` scans once after the AP is up (all channels, 120 to
+  200 ms dwell, about 3 s) and again on `net::request_scan`, and keeps
+  up to `NETWORKS_MAX` (12) of what it saw in a static: SSID, RSSI and
+  whether open, hidden SSIDs skipped, one entry per SSID keeping the
+  strongest, sorted by RSSI. `form::Network` holds one so `form.rs`
+  stays free of the driver.
+- The setup form: `<select name=ssid_pick>` with one option per
+  network, `name (-45 dBm)` or `name (-45 dBm, open)`, the stored one
+  selected, then an "Other, typed below" option with an empty value
+  and a text field `name=ssid` for a hidden network, prefilled when
+  the stored SSID is not in the list; a "Rescan" button is a second
+  submit with `formaction=/scan formnovalidate`. `POST /scan` on the
+  access point asks the AP task for a scan, waits for it (10 s cap)
+  and redirects to `/`, so the page comes back with the new list and
+  no script; elsewhere it is a 404. Both `ssid` keys set the SSID when
+  non-empty and are ignored when empty, since the form always sends
+  both; `ssid=` on `/api` is therefore a no-op now, not a 400. A save
+  that leaves no network at all is refused with the bad-value notice.
+
+*Step 2b built 2026-10-29 and on the bench the same day.* AP+STA
+works as hoped: with `Config::AccessPointStation(StationConfig::
+default(), ap)` the access point came up at 1.2 s as before, the scan
+right after it saw six networks by 3.5 s (the bench AP and the house's
+at -40 dBm, two neighbours at -71 and -88), and the host's Wi-Fi scan
+still showed `clock-f044` afterwards, so the AP survives a scan. `POST
+/ap` without the token is `403`, with it `200` and the reset with
+`boot_ap: true`. Host checks: `ssid=` is unchanged, `ssid_pick` sets
+and needs the token, the typed name wins over an empty pick; the setup
+page with twelve 32-byte SSIDs holding `<`, `&` and `>` is 3209 bytes
+with headers (the typed-name field hidden by a line of script unless
+"Other" is chosen, user's call; without script it stays visible), the stored SSID selected when listed and "Other"
+selected with the name in the text field when not, and the empty-list
+note.
+
+Phone, 2026-10-29 (the user, with the log read here): the list came up
+with `esptest` listed; the typed-name field needed a `[hidden]
+{display:none}` rule in the page's stylesheet, since the author rule
+`label{display:block}` outranks the browser's own `[hidden]` rule. A
+save from the list with a mistyped password reset the clock into the
+station, which failed every connect with `FourWayHandshakeTimeout,
+wrong password?` (and twice `Class3FrameFromNonAssociatedStation`) at
+-39 dBm, as designed; the hold from there reset into the access point
+with the flag, the phone rejoined with a reboot-style request for its
+old address (acked, no discover), the page came back with `esptest`
+preselected, and the save with the right password brought the clock
+back on the network in 2.9 s, synced at 5.8 s, `heals` 0.
+
+**Buttons held across the reset, a precaution:** the colour and
+brightness were found changed after the holds, which the user said
+were their own short presses, so nothing was observed wrong. But the
+chip resets at the 10 s mark with both buttons still down, the new
+boot sees them released, and a release within 800 ms of the boot would
+count as two short presses. `Tracker::new` now takes whether the
+button is down at start and begins stable-down with nothing pending,
+so the release of a press that began before the reset emits nothing.
+Three lines; not verified, since nothing was seen to fix.
 
 **Step 3, after the plain flow works: captive DNS.** A UDP task on
 port 53 that answers every A query with 192.168.4.1, so a phone's

@@ -28,7 +28,8 @@ use static_cell::StaticCell;
 
 use esp32clock::buzzer;
 use esp32clock::settings::Settings;
-use esp32clock::{buttons, carry, clock, display, heal, http, net, ota, scan, settings, storage};
+use esp32clock::net::Mode;
+use esp32clock::{buttons, carry, clock, dhcpd, display, heal, http, net, ota, scan, settings, storage};
 
 // The app descriptor the esp-idf bootloader requires, with the git
 // version in it so an image file says what it is before it is flashed.
@@ -176,19 +177,35 @@ async fn main(spawner: Spawner) -> ! {
     // The drivers discard anything sent in the first 200 us after power-up.
     Timer::after(Duration::from_millis(10)).await;
 
-    // Wi-Fi station and the network stack on top of it. Built before the
-    // display task, which asks the stack for the IP to show.
+    // Station or access point, for this whole boot: the access point when
+    // there is no network to join or the button hold asked for it. The
+    // driver does not do both at once.
+    let mode = if carry::get().boot_ap {
+        info!("boot: access point mode, asked for by the button hold or POST /ap");
+        Mode::AccessPoint
+    } else if settings::get().wifi.is_none() {
+        info!("boot: access point mode, no network to join");
+        Mode::AccessPoint
+    } else {
+        Mode::Station
+    };
+    net::set_mode(mode);
+
+    // The Wi-Fi driver and the network stack on top of it. Built before
+    // the display task, which asks the stack for the IP to show.
     let wifi_config = ControllerConfig::default().with_rx_queue_size(esp32clock::config::WIFI_RX_QUEUE_FRAMES);
     let controller = WifiController::new(peripherals.WIFI, wifi_config).expect("wifi init");
-    let station = Interface::station();
+    let interface = if mode == Mode::AccessPoint { Interface::access_point() } else { Interface::station() };
+    let mac = interface.mac_address();
     let rng = Rng::new();
     let seed = (rng.random() as u64) << 32 | rng.random() as u64;
-    // DHCP, DNS, SNTP, the gateway probe, the HTTP listeners, and headroom.
-    // No IPv4 configuration yet: the Wi-Fi task starts DHCP once the
-    // station is connected and the link has settled.
+    // Station: DHCP, DNS, SNTP, the gateway probe, the HTTP listeners,
+    // and headroom; no IPv4 configuration yet, the Wi-Fi task starts
+    // DHCP once the station is connected and the link has settled.
+    // Access point: the fixed address, the DHCP server and the listeners.
     static RESOURCES: StaticCell<StackResources<10>> = StaticCell::new();
-    let (stack, runner) =
-        embassy_net::new(station, embassy_net::Config::default(), RESOURCES.init(StackResources::new()), seed);
+    let stack_config = if mode == Mode::AccessPoint { net::ap_stack_config() } else { embassy_net::Config::default() };
+    let (stack, runner) = embassy_net::new(interface, stack_config, RESOURCES.init(StackResources::new()), seed);
 
     // The scan task restarts the DMA transfer the moment one ends. In the
     // thread-mode executor a Wi-Fi task can hold it off for hundreds of
@@ -207,12 +224,17 @@ async fn main(spawner: Spawner) -> ! {
         spawner.spawn(storage::persist_task(store, stored).expect("spawn persist"));
     }
 
-    spawner.spawn(net::wifi_task(controller, stack).expect("spawn wifi"));
     spawner.spawn(net::net_task(runner).expect("spawn net"));
-    spawner.spawn(net::ntp_task(stack).expect("spawn ntp"));
-    spawner.spawn(net::hostname_task(stack).expect("spawn hostname"));
-    spawner.spawn(net::monitor_task(stack).expect("spawn monitor"));
-    spawner.spawn(net::probe_task(stack).expect("spawn probe"));
+    if mode == Mode::AccessPoint {
+        spawner.spawn(net::ap_task(controller, net::ap_ssid(mac)).expect("spawn ap"));
+        spawner.spawn(dhcpd::dhcpd_task(stack).expect("spawn dhcpd"));
+    } else {
+        spawner.spawn(net::wifi_task(controller, stack).expect("spawn wifi"));
+        spawner.spawn(net::ntp_task(stack).expect("spawn ntp"));
+        spawner.spawn(net::hostname_task(stack).expect("spawn hostname"));
+        spawner.spawn(net::monitor_task(stack).expect("spawn monitor"));
+        spawner.spawn(net::probe_task(stack).expect("spawn probe"));
+    }
     for i in 0..http::LISTENERS {
         spawner.spawn(http::http_task(stack, i).expect("spawn http"));
     }

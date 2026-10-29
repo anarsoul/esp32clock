@@ -45,6 +45,29 @@ pub const API_TOKEN: &str = match option_env!("API_TOKEN") {
     None => "",
 };
 
+/// Password of the clock's own access point, the one it raises when it
+/// has no network to join (or both buttons are held 10 s): WPA2, so
+/// `AP_PASSWORD` at build time must be 8 to 64 bytes. Documented in
+/// AGENTS.md; anyone who can join it can give the clock a network,
+/// which is the point.
+pub const AP_PASSWORD: &str = match option_env!("AP_PASSWORD") {
+    Some(s) => s,
+    None => "esp32clock",
+};
+const _: () = assert!(AP_PASSWORD.len() >= 8 && AP_PASSWORD.len() <= 64, "AP_PASSWORD must be 8 to 64 bytes");
+
+/// The access point's name is this followed by the last two bytes of
+/// its MAC in hex, `clock-3f2a`, so two clocks in one house differ.
+pub const AP_SSID_PREFIX: &str = "clock-";
+
+/// The access point's address and network (a /24), its channel, and
+/// the lease its DHCP server hands out. The page is at
+/// `http://192.168.4.1/`.
+pub const AP_ADDRESS: [u8; 4] = [192, 168, 4, 1];
+pub const AP_PREFIX_LEN: u8 = 24;
+pub const AP_CHANNEL: u8 = 1;
+pub const AP_LEASE_SECS: u32 = 3600;
+
 /// Boots an updated image gets before the previous slot is booted again.
 /// The upload sets the carried boot count to 1; each software reset
 /// before the image has been confirmed good (a gateway probe answered or
