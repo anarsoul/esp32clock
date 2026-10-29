@@ -2,8 +2,9 @@
 //! count and time, the wall clock as the Unix time last written, the
 //! volatile alarm state a reboot would otherwise lose (the skip-next
 //! flag, and when the alarm last rang so the missed-alarm grace does not
-//! ring it again), and how many times a freshly installed firmware has
-//! booted without being confirmed good.
+//! ring it again), how many times a freshly installed firmware has
+//! booted without being confirmed good, and whether the next boot is to
+//! raise the access point.
 //!
 //! The record is used only after a software reset, which is what the
 //! self-heal and the panic handler do. Any other reset reason, power-on,
@@ -21,13 +22,14 @@ use portable_atomic::AtomicU32;
 /// `ota::reboot` from a firmware with another layout leaves a record
 /// this one must not read, and the mismatch discards it, one time.
 /// Version 1 ("CARR") held an RTC-timer offset in words 6 and 7; version
-/// 2 held the handled alarm as a Unix time and a minute in words 4 and 5.
+/// 2 held the handled alarm as a Unix time and a minute in words 4 and 5;
+/// version 3 had no `boot_ap` word.
 const MARK: u32 = 0x4341_5200 | LAYOUT; // "CAR" + version
-const LAYOUT: u32 = 3;
+const LAYOUT: u32 = 4;
 
 /// `[mark, heals, last heal unix, skip, last alarm unix, unix us low,
-/// unix us high, ota boots]`. A zero time means none.
-const WORDS: usize = 8;
+/// unix us high, ota boots, boot ap]`. A zero time means none.
+const WORDS: usize = 9;
 
 /// Atomics so the record is a plain `static`: a persistent static must be
 /// valid in any bit pattern, which esp-hal asserts, and these are. One
@@ -38,6 +40,11 @@ static RECORD: [AtomicU32; WORDS] = [const { AtomicU32::new(0) }; WORDS];
 
 /// Whether this boot followed a software reset.
 static SOFT: AtomicBool = AtomicBool::new(false);
+
+/// Set by `freeze` once a mode switch has written its record: nothing
+/// may change it in the pause before the reset, and the display tick
+/// writes the time into it every second.
+static FROZEN: AtomicBool = AtomicBool::new(false);
 
 /// What was carried over.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -56,8 +63,12 @@ pub struct Carried {
     /// it fires. See `clock::restore_carried`.
     pub unix_us: Option<i64>,
     /// Boots of an updated firmware that has not yet been confirmed good;
-    /// zero when nothing is pending. See `ota::check_rollback`.
+    /// zero when nothing is pending. See `ota::init`.
     pub ota_boots: u32,
+    /// Raise the access point at this boot, set by the button hold;
+    /// cleared by the reset that follows a provisioning save, and by
+    /// any reset that is not a software one.
+    pub boot_ap: bool,
 }
 
 fn read_raw() -> [u32; WORDS] {
@@ -84,6 +95,7 @@ fn decode(v: [u32; WORDS]) -> Carried {
             (us != 0).then_some(us)
         },
         ota_boots: v[7],
+        boot_ap: v[8] != 0,
     }
 }
 
@@ -98,6 +110,7 @@ fn encode(c: &Carried) -> [u32; WORDS] {
         c.unix_us.unwrap_or(0) as u64 as u32,
         (c.unix_us.unwrap_or(0) as u64 >> 32) as u32,
         c.ota_boots,
+        c.boot_ap as u32,
     ]
 }
 
@@ -126,9 +139,19 @@ pub fn get() -> Carried {
 }
 
 /// Change the carried state. Written at once; the next software reset
-/// hands it back.
+/// hands it back. Dropped after `freeze`.
 pub fn update(f: impl FnOnce(&mut Carried)) {
+    if FROZEN.load(Ordering::Relaxed) {
+        return;
+    }
     let mut c = get();
     f(&mut c);
     write_raw(encode(&c));
+}
+
+/// Write `c` as the whole record and refuse every later `update`, for a
+/// reset that must hand over exactly this: `heal::switch_mode`.
+pub fn freeze(c: Carried) {
+    write_raw(encode(&c));
+    FROZEN.store(true, Ordering::Relaxed);
 }

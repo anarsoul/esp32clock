@@ -1,15 +1,12 @@
 //! Firmware updates over the LAN: `POST /ota` with the application image
 //! as the body writes the slot that is not running, switches `otadata`
-//! to it and reboots. The upload must prove it may: either the
-//! build-time token (`config::OTA_TOKEN`, for the script) or the PIN
-//! the clock showed on its panel when the update page was opened, so
-//! whoever uploads from the page can see the clock. Either is refused
-//! before the flash is touched.
+//! to it and reboots. The upload must prove it may, with the token or
+//! the PIN (`auth`), and is refused before the flash is touched.
 //!
 //! The bootloader only falls back on its own when an image fails its
 //! checksum, so an image that boots and then misbehaves is handled here:
-//! the carry record counts the boots of an unconfirmed image and
-//! `check_rollback` switches back once there have been too many.
+//! the carry record counts the boots of an unconfirmed image and `init`
+//! switches back once there have been too many.
 //!
 //! The flash is `storage::with_flash`, the one handle in the firmware,
 //! taken for one blocking operation at a time: the partition table is
@@ -17,14 +14,10 @@
 //! read back under it, and `otadata` is switched under it; between those
 //! the body is awaited from the socket with nothing held.
 
-use core::cell::RefCell;
 use core::sync::atomic::{AtomicU8, Ordering};
 
-use critical_section::Mutex as CsMutex;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::mutex::Mutex;
-use embassy_sync::signal::Signal;
-use embassy_time::Instant;
 use embedded_io_async::Read;
 use esp_bootloader_esp_idf::ota_updater::OtaUpdater;
 use esp_bootloader_esp_idf::partitions::{self, AppPartitionSubType, PARTITION_TABLE_MAX_LEN, PartitionType};
@@ -33,7 +26,8 @@ use log::{error, info, warn};
 use sha2::{Digest, Sha256};
 use static_cell::StaticCell;
 
-use crate::config::{OTA_BOOT_LIMIT, OTA_TOKEN, OTA_TOKEN_MIN};
+use crate::auth::{self, Refusal, refuse};
+use crate::config::OTA_BOOT_LIMIT;
 use crate::storage::with_flash;
 use crate::{carry, clock, heal, scan};
 
@@ -125,123 +119,6 @@ struct Buffers {
 static BUFFERS_CELL: StaticCell<Buffers> = StaticCell::new();
 static BUFFERS: Mutex<CriticalSectionRawMutex, Option<&'static mut Buffers>> = Mutex::new(None);
 
-/// Whether this build accepts the script's token at all. The page's PIN
-/// works regardless.
-pub fn token_enabled() -> bool {
-    OTA_TOKEN.len() >= OTA_TOKEN_MIN
-}
-
-/// A PIN is good for this long after it was issued.
-pub const PIN_TTL_MS: u64 = 5 * 60 * 1000;
-
-/// After a wrong PIN no new one is issued for this long.
-pub const PIN_LOCKOUT_MS: u64 = 10 * 1000;
-
-/// The PIN the update page must send: four digits the clock shows on
-/// its panel when the page is opened. One attempt uses it up, right or
-/// wrong, and a wrong one starts the lockout. Pure, with the clock
-/// passed in as milliseconds, so the rules are checked on the host.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct PinState {
-    /// The PIN and when it was issued.
-    pending: Option<(u16, u64)>,
-    /// No PIN is issued before this time.
-    locked_until: Option<u64>,
-}
-
-/// Why a PIN was refused.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PinError {
-    /// Nothing issued, or the last one was used up.
-    None,
-    Expired,
-    Wrong,
-}
-
-impl PinState {
-    /// Issue a PIN from a random number, or say how many milliseconds
-    /// of lockout remain. A new PIN replaces an unused one.
-    pub fn issue(&mut self, now_ms: u64, random: u32) -> Result<u16, u64> {
-        if let Some(until) = self.locked_until {
-            if now_ms < until {
-                return Err(until - now_ms);
-            }
-            self.locked_until = None;
-        }
-        let pin = (random % 10_000) as u16;
-        self.pending = Some((pin, now_ms));
-        Ok(pin)
-    }
-
-    /// Check the presented digits against the pending PIN, using it up.
-    pub fn check(&mut self, now_ms: u64, presented: &str) -> Result<(), PinError> {
-        let Some((pin, issued)) = self.pending.take() else {
-            return Err(PinError::None);
-        };
-        if now_ms.saturating_sub(issued) > PIN_TTL_MS {
-            return Err(PinError::Expired);
-        }
-        let mut digits = [0u8; 4];
-        digits[0] = b'0' + (pin / 1000) as u8;
-        digits[1] = b'0' + (pin / 100 % 10) as u8;
-        digits[2] = b'0' + (pin / 10 % 10) as u8;
-        digits[3] = b'0' + (pin % 10) as u8;
-        let p = presented.as_bytes();
-        let mut diff = 0u8;
-        for (i, &d) in digits.iter().enumerate() {
-            diff |= d ^ p.get(i).copied().unwrap_or(0);
-        }
-        if p.len() == 4 && diff == 0 {
-            Ok(())
-        } else {
-            self.locked_until = Some(now_ms + PIN_LOCKOUT_MS);
-            Err(PinError::Wrong)
-        }
-    }
-}
-
-static PIN: CsMutex<RefCell<PinState>> = CsMutex::new(RefCell::new(PinState { pending: None, locked_until: None }));
-
-/// A PIN for the display task to show, raised by `issue_pin`.
-static SHOW_PIN: Signal<CriticalSectionRawMutex, u16> = Signal::new();
-
-/// Issue a PIN for the update page: shown on the panel, logged (the
-/// serial port is physical access too, and a headless board has no
-/// panel), and remembered for `PIN_TTL_MS`. `Err` is the lockout left,
-/// in seconds rounded up, after a wrong attempt.
-pub fn issue_pin() -> Result<u16, u64> {
-    let now_ms = Instant::now().as_millis();
-    let random = esp_hal::rng::Rng::new().random();
-    let result = critical_section::with(|cs| PIN.borrow_ref_mut(cs).issue(now_ms, random));
-    match result {
-        Ok(pin) => {
-            info!("ota: PIN {pin:04} shown on the panel for the update page");
-            SHOW_PIN.signal(pin);
-            Ok(pin)
-        }
-        Err(left_ms) => {
-            warn!("ota: update page opened during the lockout, {} s left", left_ms.div_ceil(1000));
-            Err(left_ms.div_ceil(1000))
-        }
-    }
-}
-
-/// The next PIN to show on the panel.
-pub async fn pin_to_show() -> u16 {
-    SHOW_PIN.wait().await
-}
-
-/// Compare a presented token with the built-in one in time that depends
-/// only on the lengths, not on where they first differ.
-pub fn token_ok(presented: &[u8]) -> bool {
-    let token = OTA_TOKEN.as_bytes();
-    let mut diff = 0u8;
-    for (i, &t) in token.iter().enumerate() {
-        diff |= t ^ presented.get(i).copied().unwrap_or(0);
-    }
-    token_enabled() && presented.len() == token.len() && diff == 0
-}
-
 /// Read the partition table once, remember the booted and selected
 /// slots, and roll back a new image that has not been confirmed in
 /// `OTA_BOOT_LIMIT` boots. Call after `storage::init_flash` and
@@ -273,10 +150,10 @@ pub fn init() {
         selected.name(),
         if !ota_layout {
             "impossible (no OTA slots in the table)"
-        } else if token_enabled() {
+        } else if auth::token_enabled() {
             "from the page with a PIN and from the script with the token"
         } else {
-            "from the page with a PIN only (no OTA_TOKEN at build time)"
+            "from the page with a PIN only (no API token set)"
         }
     );
 
@@ -313,55 +190,6 @@ pub fn confirm() {
         carry::update(|c| c.ota_boots = 0);
         info!("ota: image {VERSION} confirmed good");
     }
-}
-
-/// Why an upload was refused, with the HTTP status it earns.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct Refusal {
-    pub status: &'static str,
-    pub text: &'static str,
-}
-
-const fn refuse(status: &'static str, text: &'static str) -> Refusal {
-    Refusal { status, text }
-}
-
-/// Check the `Authorization` header, if any: `Bearer <token>` for the
-/// script, `PIN <digits>` for the page. Checks the token with a closure
-/// and the PIN with the state, both pure, so the rules run on the host.
-pub fn authorize(header: Option<&str>) -> Result<(), Refusal> {
-    let now_ms = Instant::now().as_millis();
-    authorize_with(header, |digits| critical_section::with(|cs| PIN.borrow_ref_mut(cs).check(now_ms, digits)))
-}
-
-/// Check the header for the script's token alone; the PIN does not do.
-/// For `POST /reload`, a script's tool.
-pub fn authorize_token(header: Option<&str>) -> Result<(), Refusal> {
-    let Some(token) = header.and_then(|h| h.strip_prefix("Bearer ")) else {
-        return Err(refuse("403 Forbidden", "no token: send Authorization: Bearer <OTA_TOKEN>"));
-    };
-    if !token_enabled() {
-        return Err(refuse("403 Forbidden", "the script path is disabled: no token built in"));
-    }
-    if token_ok(token.trim().as_bytes()) { Ok(()) } else { Err(refuse("403 Forbidden", "bad token")) }
-}
-
-pub fn authorize_with(header: Option<&str>, check_pin: impl FnOnce(&str) -> Result<(), PinError>) -> Result<(), Refusal> {
-    let Some(header) = header else {
-        return Err(refuse("403 Forbidden", "no credentials: a PIN from the update page or the token"));
-    };
-    if header.starts_with("Bearer ") {
-        return authorize_token(Some(header));
-    }
-    if let Some(digits) = header.strip_prefix("PIN ") {
-        return match check_pin(digits.trim()) {
-            Ok(()) => Ok(()),
-            Err(PinError::None) => Err(refuse("403 Forbidden", "no PIN issued: open the update page first")),
-            Err(PinError::Expired) => Err(refuse("403 Forbidden", "PIN expired: reload the update page")),
-            Err(PinError::Wrong) => Err(refuse("403 Forbidden", "wrong PIN")),
-        };
-    }
-    Err(refuse("403 Forbidden", "bad credentials"))
 }
 
 /// What a finished upload reports back.

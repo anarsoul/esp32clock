@@ -2464,7 +2464,7 @@ is converted through `into_peripheral_output`, which freezes the
 signal, and the builder's `apply_output_config` is a no-op on a
 frozen one).
 
-### M10 — Wi-Fi provisioning from an access point — planned in detail 2026-10-29
+### M10 — Wi-Fi provisioning from an access point — steps 0 and 1 done and verified on the bench 2026-10-29, step 2 planned
 
 **Scope.** Credentials become a stored setting instead of a build-time
 constant, and a clock that has none raises its own network so the
@@ -2727,6 +2727,80 @@ http://10.1.1.31/token` sets it, `token_set` turns true in `/api`, the script wo
 it, and after a power cycle the boot line says `stored`; a wrong PIN
 locks the form out like the upload. Post an empty token with the
 `Bearer` header: `token_set` false, the script gets `403` again.
+
+*Step 1 done 2026-10-29, host-checked and verified on the bench the
+same day; not committed at the time of writing.* What was built
+matches the bullets above, with these particulars:
+
+- `auth.rs` takes the random number for a PIN as a parameter
+  (`issue_pin(random)`, the caller in `http.rs` reads the RNG), so the
+  file has no hardware in it and the harness pulls it in whole. The
+  PIN log line now says `auth: PIN dddd shown on the panel, good for 5
+  min`, which `scripts/pin.sh` greps for.
+- `settings.rs`: `Text<N>`, `Secret<N>` (prints `<set>`/`<none>`),
+  `Credentials` with `NONE`, `valid_password`, `valid_token` (const,
+  so the build-time constants are checked at compile time: a short
+  `WIFI_PASSWORD` or a token with a space is a build error, where a
+  short `OTA_TOKEN` used to count as none), `seed`. Record version 6
+  as laid out above, `RECORD_LEN` 167, the layout const-asserted.
+- The main stack went from 98.2 KB to 96.4 KB: `Settings` grew by 131
+  bytes and sits in several task futures, plus the 128 bytes of
+  scratch.
+- `form::Pairs` iterates a body once for `apply` and `parse_token`;
+  `HtmlStr` exists for step 2's page. The settings form gets a third
+  error notice, "the network is set with the token", on `?error=token`.
+- The `/api` refusal for a bad `Bearer` reads the same as for a
+  missing one ("token required"): `apply` only knows whether the
+  token checked out. Good enough; a wrong token on `/reload` or
+  `/token` does say `bad token`.
+- **Bug found on the bench and fixed:** the first switch reset carried
+  `unix_us`. The display tick writes the time into the record every
+  loop, and it ran during the 200 ms pause between the record reset and
+  the chip reset. `carry::freeze` writes the switch's record and drops
+  every later `update`; `switch_mode` uses it. The second run carried
+  `unix_us: None`.
+
+Host checks (the scratch crate, now with `form.rs` and `auth.rs` too,
+embassy-time and critical-section on their `std` features): version 6
+round trip with a 32-byte SSID, a 64-byte password and a 32-byte
+token; version 5 reads as none; version 7 with trailing bytes reads
+the version 6 fields; SSID length 33, password 7 and 65, token 7, a
+token with a space and a non-UTF-8 SSID are rejected; the token rule
+at the edges; `Debug` shows the SSID and `<set>`, never the values;
+`seed` fills an empty record and leaves a full one; `apply` with
+`ssid`/`password` through `+` and `%26`, `Forbidden` with nothing
+applied when `credentials` is false whatever else the body holds, the
+empty SSID, the short and the 65-byte password, `token` as an unknown
+key, the settings form leaving the network alone; `parse_token` on a
+good, an empty, a short, a spaced and a wrong-key body; the escapes;
+the JSON with a quoted SSID; the settings page at 2821 bytes with
+headers and the update page at 3059 against 4096; `auth::token` with
+a good, trimmed, short, long, PIN-shaped and missing header;
+`with_pin` through issue, use, reuse, wrong, lockout, expiry and the
+`Bearer` short-cut; the cleared token never matching.
+
+Bench (10.1.1.31, over the air onto a version 5 record): boot line
+`network built in, api token built in`, the old carry record discarded
+by the layout mark, the settings line with `password: <set>, token:
+<set>`; `ssid` without the token `403` and `color=red&ssid=x` leaving
+the colour alone; a bad `Bearer` `403`; the same credentials with the
+token `200` and no reset; `password=short` `400`; `token=` on `/api`
+`400 unknown key`; two ordinary saves without a reset. `scripts/pin.sh`
+read `9841` from the log; `/token` with it set `bench-token-1234`, the
+old token was then `403` and the new one `200` on the credentials; the
+used-up PIN `403 no PIN issued`; a wrong PIN `403`, then `/pin` `403
+locked out for 10 s`; a token with a space `400`; clearing with the
+`Bearer` gave `token_set: false` and `/reload` `403 no token set`; a
+new PIN set the original back; `GET /update` 2966 bytes. The switch:
+`password=wrongpass1` with the token answered `200`, `settings: saved`
+2 s later, `heal: resetting into station mode, carry record started
+over`, boot line `network stored, api token stored` with `carried over
+Carried { heals: 0, …, unix_us: None, ota_boots: 0, boot_ap: false }`,
+then `connect failed: … FourWayHandshakeTimeout …, wrong password?`
+every 15 s. Recovery each time: USB flash with `--erase-parts
+otadata,nvs`, `settings: nothing stored`, the seeds in the boot line,
+and the settings put back with one `/api` post (yellow, 10 %, 14:17
+armed, every day, beeps, -420, `test-clock`).
 
 **Step 2: the access point.**
 

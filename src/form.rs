@@ -1,11 +1,16 @@
 //! The settings as key=value pairs: parsing a form body or query string
 //! into changes, and the names the page and the API use. Pure code.
 
+use core::fmt::Write as _;
+
 use crate::melody;
 use crate::settings::{
-    BRIGHTNESS_STEPS, DAY_NAMES, DAYS_ALL, DAYS_WEEKDAYS, DAYS_WEEKEND, HOSTNAME_MAX, Hostname, PALETTE_NAMES, Settings,
-    TZ_LIMIT_MINUTES,
+    BRIGHTNESS_STEPS, DAY_NAMES, DAYS_ALL, DAYS_WEEKDAYS, DAYS_WEEKEND, HOSTNAME_MAX, Hostname, PALETTE_NAMES,
+    PASSWORD_MAX, Secret, Settings, TOKEN_MAX, TZ_LIMIT_MINUTES, Text, valid_password, valid_token,
 };
+
+/// Longest form value, decoded: the password.
+pub const VALUE_MAX: usize = PASSWORD_MAX;
 
 /// Read-only status shown under the form and in the JSON. Not settings:
 /// a posted status key is refused as unknown like any other.
@@ -61,6 +66,47 @@ impl core::fmt::Display for Span {
 pub enum FormError {
     UnknownKey,
     BadValue,
+    /// A credential key (`ssid`, `password`) from a request that did not
+    /// carry the token.
+    Forbidden,
+}
+
+/// A string inside JSON quotes: `"` and `\` escaped, control characters
+/// as `\uXXXX`. The SSID can hold anything; the other strings are
+/// validated to plain characters.
+pub struct JsonStr<'a>(pub &'a str);
+
+impl core::fmt::Display for JsonStr<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        for c in self.0.chars() {
+            match c {
+                '"' => f.write_str("\\\"")?,
+                '\\' => f.write_str("\\\\")?,
+                c if (c as u32) < 0x20 => write!(f, "\\u{:04x}", c as u32)?,
+                c => f.write_char(c)?,
+            }
+        }
+        Ok(())
+    }
+}
+
+/// A string inside a double-quoted HTML attribute or in text: `&`, `<`,
+/// `>` and `"` as entities.
+pub struct HtmlStr<'a>(pub &'a str);
+
+impl core::fmt::Display for HtmlStr<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        for c in self.0.chars() {
+            match c {
+                '&' => f.write_str("&amp;")?,
+                '<' => f.write_str("&lt;")?,
+                '>' => f.write_str("&gt;")?,
+                '"' => f.write_str("&quot;")?,
+                c => f.write_char(c)?,
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Decode `%XX` and `+` of one form token into `out`. Returns the decoded
@@ -142,9 +188,26 @@ pub fn write_days(out: &mut impl core::fmt::Write, mask: u8) -> core::fmt::Resul
     }
 }
 
-/// Apply one key and value to `s`.
-pub fn apply_one(s: &mut Settings, key: &str, value: &str) -> Result<(), FormError> {
+/// Apply one key and value to `s`. `credentials` says whether the
+/// request may set the network (`ssid`, `password`): only with the
+/// token, or on the access point's own page. The check is on the key,
+/// never on whether the value would change anything, so a request
+/// without the token learns nothing about the stored password.
+pub fn apply_one(s: &mut Settings, key: &str, value: &str, credentials: bool) -> Result<(), FormError> {
     match key {
+        "ssid" | "password" if !credentials => return Err(FormError::Forbidden),
+        "ssid" => {
+            if value.is_empty() {
+                return Err(FormError::BadValue);
+            }
+            s.wifi.ssid = Text::new(value).ok_or(FormError::BadValue)?;
+        }
+        "password" => {
+            if !valid_password(value) {
+                return Err(FormError::BadValue);
+            }
+            s.wifi.password = Secret(Text::new(value).ok_or(FormError::BadValue)?);
+        }
         "color" => {
             s.color = PALETTE_NAMES.iter().position(|n| *n == value).ok_or(FormError::BadValue)?;
         }
@@ -181,33 +244,79 @@ pub fn apply_one(s: &mut Settings, key: &str, value: &str) -> Result<(), FormErr
 
 /// Apply every `key=value` pair of a form body or query string to `s`.
 /// With `checkboxes_absent_off`, as for the page's form, the boolean
-/// fields are turned off unless the body turns them on. The first bad
-/// pair stops and is reported; earlier pairs stay applied.
-pub fn apply(s: &mut Settings, body: &[u8], checkboxes_absent_off: bool) -> Result<(), FormError> {
+/// fields are turned off unless the body turns them on. `credentials`
+/// is passed to `apply_one`. The first bad pair stops and is reported;
+/// earlier pairs stay applied, so the caller works on a copy.
+pub fn apply(s: &mut Settings, body: &[u8], checkboxes_absent_off: bool, credentials: bool) -> Result<(), FormError> {
     if checkboxes_absent_off {
         s.alarm_armed = false;
         s.twelve_hour = false;
         s.skip_next = false;
     }
-    for pair in body.split(|&c| c == b'&').filter(|p| !p.is_empty()) {
-        let (k, v) = match pair.iter().position(|&c| c == b'=') {
-            Some(i) => (&pair[..i], &pair[i + 1..]),
-            None => (pair, &pair[pair.len()..]),
-        };
+    for (key, value) in Pairs(body) {
         let mut kbuf = [0u8; 16];
-        let mut vbuf = [0u8; 32];
-        let kn = percent_decode(k, &mut kbuf).ok_or(FormError::UnknownKey)?;
-        let vn = percent_decode(v, &mut vbuf).ok_or(FormError::BadValue)?;
+        let mut vbuf = [0u8; VALUE_MAX];
+        let kn = percent_decode(key, &mut kbuf).ok_or(FormError::UnknownKey)?;
+        let vn = percent_decode(value, &mut vbuf).ok_or(FormError::BadValue)?;
         let key = core::str::from_utf8(&kbuf[..kn]).map_err(|_| FormError::UnknownKey)?;
         let value = core::str::from_utf8(&vbuf[..vn]).map_err(|_| FormError::BadValue)?;
-        apply_one(s, key, value)?;
+        apply_one(s, key, value, credentials)?;
     }
     Ok(())
 }
 
-/// The settings as JSON, followed by the read-only status keys `version`,
-/// `slot`, `uptime` (seconds), `heals` and `last_heal` (Unix seconds or
-/// null).
+/// The `key=value` pairs of a form body, undecoded, empty pairs skipped.
+struct Pairs<'a>(&'a [u8]);
+
+impl<'a> Iterator for Pairs<'a> {
+    type Item = (&'a [u8], &'a [u8]);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if self.0.is_empty() {
+                return None;
+            }
+            let (pair, rest) = match self.0.iter().position(|&c| c == b'&') {
+                Some(i) => (&self.0[..i], &self.0[i + 1..]),
+                None => (self.0, &self.0[self.0.len()..]),
+            };
+            self.0 = rest;
+            if pair.is_empty() {
+                continue;
+            }
+            return Some(match pair.iter().position(|&c| c == b'=') {
+                Some(i) => (&pair[..i], &pair[i + 1..]),
+                None => (pair, &pair[pair.len()..]),
+            });
+        }
+    }
+}
+
+/// The new token from a `POST /token` body: the `token` key, decoded and
+/// checked against `settings::valid_token`; empty clears it. Any other
+/// key is unknown, so a settings form posted here by mistake changes
+/// nothing.
+pub fn parse_token(body: &[u8]) -> Result<Secret<TOKEN_MAX>, FormError> {
+    let mut token = None;
+    for (key, value) in Pairs(body) {
+        if key != b"token" {
+            return Err(FormError::UnknownKey);
+        }
+        let mut vbuf = [0u8; VALUE_MAX];
+        let vn = percent_decode(value, &mut vbuf).ok_or(FormError::BadValue)?;
+        let value = core::str::from_utf8(&vbuf[..vn]).map_err(|_| FormError::BadValue)?;
+        if !valid_token(value) {
+            return Err(FormError::BadValue);
+        }
+        token = Some(Secret(Text::new(value).ok_or(FormError::BadValue)?));
+    }
+    token.ok_or(FormError::BadValue)
+}
+
+/// The settings as JSON (the SSID, then whether a password and a token
+/// are set, never their values), followed by the read-only status keys
+/// `version`, `slot`, `uptime` (seconds), `heals` and `last_heal` (Unix
+/// seconds or null).
 pub fn write_json(out: &mut impl core::fmt::Write, s: &Settings, st: &Status) -> core::fmt::Result {
     write!(
         out,
@@ -221,12 +330,15 @@ pub fn write_json(out: &mut impl core::fmt::Write, s: &Settings, st: &Status) ->
     write_days(out, s.alarm_days)?;
     write!(
         out,
-        "\",\"skip\":{},\"melody\":\"{}\",\"twelve_hour\":{},\"tz\":{},\"hostname\":\"{}\",\"version\":\"{}\",\"slot\":\"{}\",\"uptime\":{},\"heals\":{},\"last_heal\":",
+        "\",\"skip\":{},\"melody\":\"{}\",\"twelve_hour\":{},\"tz\":{},\"hostname\":\"{}\",\"ssid\":\"{}\",\"password_set\":{},\"token_set\":{},\"version\":\"{}\",\"slot\":\"{}\",\"uptime\":{},\"heals\":{},\"last_heal\":",
         s.skip_next,
         melody::name(s.melody),
         s.twelve_hour,
         s.tz_offset_minutes,
         s.hostname.as_str(),
+        JsonStr(s.wifi.ssid.as_str()),
+        !s.wifi.password.0.is_empty(),
+        !s.token.0.is_empty(),
         st.version,
         st.slot,
         st.uptime_secs,
@@ -266,10 +378,17 @@ button{font-size:1em;padding:.5em 1.5em;margin-top:1em}p.err{color:#b00}progress
 /// showing, posted as the raw body of `/ota` by script with the PIN in
 /// the header, which is what the curl path sends with its token, so the
 /// server needs no multipart. `XMLHttpRequest` for the progress bar;
-/// after a `200` the page polls `/api` until the clock is back.
+/// after a `200` the page polls `/api` until the clock is back. A
+/// second form sets the API token the same way, `POST /token` with the
+/// PIN in the header; `token_set` says whether one is set now.
 /// `lockout_secs` is set when no PIN was issued because of a wrong
 /// attempt just before.
-pub fn write_update_page(out: &mut impl core::fmt::Write, st: &Status, lockout_secs: Option<u64>) -> core::fmt::Result {
+pub fn write_update_page(
+    out: &mut impl core::fmt::Write,
+    st: &Status,
+    token_set: bool,
+    lockout_secs: Option<u64>,
+) -> core::fmt::Result {
     out.write_str(HEAD)?;
     out.write_str("<title>Clock update</title></head><body><h1>Clock update</h1>")?;
     write_firmware_line(out, st)?;
@@ -278,22 +397,37 @@ pub fn write_update_page(out: &mut impl core::fmt::Write, st: &Status, lockout_s
             out,
             "<p class=err>A wrong PIN was entered. Reload this page in {secs} s to get a new one.</p>"
         )?,
-        None => out.write_str("<p>The clock is showing a four-digit PIN. Enter it below.</p>")?,
+        None => out.write_str("<p>The clock is showing a four-digit PIN. Enter it below. One PIN is one action; reload for another.</p>")?,
     }
     out.write_str(
-        "<label>Image file (<code>scripts/ota.sh</code> makes it)<input type=file id=f></label>\
-<label>PIN on the clock<input type=text inputmode=numeric pattern=[0-9]* maxlength=4 autocomplete=off id=t></label>\
+        "<label>PIN on the clock<input type=text inputmode=numeric pattern=[0-9]* maxlength=4 autocomplete=off id=t></label>\
+<label>Image file (<code>scripts/ota.sh</code> makes it)<input type=file id=f></label>\
 <button id=b>Upload</button><progress id=p value=0 max=1 hidden></progress>\
-<p id=s>The panel goes dark for about ten seconds while the image is written. Do not unplug.</p>\
-<p><a href=/>Back to the settings</a></p>\
+<p id=s>The panel goes dark for about ten seconds while the image is written. Do not unplug.</p>",
+    )?;
+    write!(
+        out,
+        "<h2>API token</h2><p><small>What the scripts send as <code>Bearer</code>; never shown. {}. Empty clears it.</small></p>\
+<label>New token, 8 to 32 characters<input type=password maxlength={} autocomplete=new-password id=k></label>\
+<button id=c>Set token</button>",
+        if token_set { "One is set" } else { "None is set" },
+        TOKEN_MAX
+    )?;
+    out.write_str(
+        "<p><a href=/>Back to the settings</a></p>\
 <script>\
-var $=function(i){return document.getElementById(i)},f=$('f'),t=$('t'),b=$('b'),p=$('p'),s=$('s');\
+var $=function(i){return document.getElementById(i)},f=$('f'),t=$('t'),b=$('b'),p=$('p'),s=$('s'),k=$('k'),c=$('c');\
 function say(m,e){s.textContent=m;s.className=e?'err':''}\
+function pin(){if(/^[0-9]{4}$/.test(t.value))return true;say('Enter the four digits the clock is showing.',1);return false}\
+c.onclick=function(){if(!pin())return;var y=new XMLHttpRequest();y.open('POST','/token');\
+y.setRequestHeader('Authorization','PIN '+t.value);y.setRequestHeader('Content-Type','application/x-www-form-urlencoded');\
+y.onload=function(){say(y.status+': '+y.responseText.trim(),y.status!=200)};y.onerror=function(){say('Request failed.',1)};\
+y.send('token='+encodeURIComponent(k.value))};\
 function poll(n){fetch('/api',{cache:'no-store'}).then(function(x){return x.json()})\
 .then(function(j){say('Back up: firmware '+j.version+' in '+j.slot+'.')})\
 .catch(function(){if(n>0)setTimeout(function(){poll(n-1)},2000);else say('The clock has not come back; check it.',1)})}\
 b.onclick=function(){if(!f.files[0]){say('Choose an image file.',1);return}\
-if(!/^[0-9]{4}$/.test(t.value)){say('Enter the four digits the clock is showing.',1);return}\
+if(!pin())return;\
 var x=new XMLHttpRequest();x.open('POST','/ota');x.setRequestHeader('Authorization','PIN '+t.value);\
 x.upload.onprogress=function(e){if(e.lengthComputable)p.value=e.loaded/e.total};\
 x.onload=function(){b.disabled=false;if(x.status==200){say(x.responseText.trim()+' Waiting for the clock to come back.');setTimeout(function(){poll(20)},5000)}\
@@ -318,6 +452,7 @@ pub fn write_page(
         None => {}
         Some(FormError::BadValue) => out.write_str("<p class=err>Nothing was saved: a field had a bad value.</p>")?,
         Some(FormError::UnknownKey) => out.write_str("<p class=err>Nothing was saved: an unknown field was sent.</p>")?,
+        Some(FormError::Forbidden) => out.write_str("<p class=err>Nothing was saved: the network is set with the token.</p>")?,
     }
     out.write_str("<form method=post action=/>")?;
     out.write_str("<label>Colour <select name=color>")?;

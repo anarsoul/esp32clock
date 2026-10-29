@@ -27,11 +27,12 @@ generator with DMA; see `PLAN.md` for the full design and its history.
 ```
 cargo build --release
 cargo clippy --release
-WIFI_SSID='…' WIFI_PASSWORD='…' TZ_OFFSET_MINUTES=-420 OTA_TOKEN='…' cargo run --release
+WIFI_SSID='…' WIFI_PASSWORD='…' TZ_OFFSET_MINUTES=-420 API_TOKEN='…' cargo run --release
 MAX_CURRENT_STEP=8 cargo build --release   # optional: raise the drive-current ceiling (default 5)
-OTA_TOKEN='…' scripts/ota.sh <ip>      # later updates, over the LAN
+API_TOKEN='…' scripts/ota.sh <ip>      # later updates, over the LAN
 scripts/ota.sh                          # just the image file, for http://<ip>/update
-OTA_TOKEN='…' scripts/reload.sh <ip>   # software reset with the carry record, waits for the clock to come back
+API_TOKEN='…' scripts/reload.sh <ip>   # software reset with the carry record, waits for the clock to come back
+scripts/pin.sh <ip> <serial-log>        # POST /pin, then the four digits read back from the monitor's log
 ```
 
 `cargo run` flashes with espflash and opens the monitor; `.cargo/config.toml`
@@ -40,10 +41,15 @@ sets the runner and `ESP_LOG=info`. The runner passes `partitions.csv`
 `otadata` so a USB flash always boots `ota_0`, where espflash put the
 image. `scripts/ota.sh` builds, makes the application image with
 `espflash save-image` and posts it to `/ota` with the token; the clock
-writes the other slot, selects it and reboots. A build without
-`OTA_TOKEN` (or with one under `config::OTA_TOKEN_MIN` characters) has
-no script path: a `Bearer` upload is `403`, the page's PIN still works,
-and the boot line says which paths are open. For a network debugging run set
+writes the other slot, selects it and reboots. The token is
+`API_TOKEN` at build time and a setting after that (`src/auth.rs`): a
+build without one has no script path (a `Bearer` request is `403`)
+until one is set from `/update` with the PIN or by `POST /token`, and
+the boot line says `api token: stored`, `built in` or `none`. The
+Wi-Fi credentials are seeds the same way, and `WIFI_SSID` may be
+empty: whatever the record lacks is filled from the build at boot, the
+next save carries it, and from then on the record wins over a later
+build's constants (`settings::Settings::seed`). For a network debugging run set
 `ESP_LOG='info,embassy_net=debug,esp_radio=debug'` on the command line
 (it overrides the config, and esp-println compiles the filter in); the
 extra lines are DHCP state and driver events, not packets. Every log
@@ -51,13 +57,21 @@ line carries the uptime in ms. `scripts/watch-clock.sh <ip>` sends a
 full-size ping and fetches `/api` from the host every 30 s for the other
 side of the story.
 
-Credentials, the default timezone and the OTA token are read at build
+Credentials, the default timezone and the API token are read at build
 time by `src/config.rs`; `build.rs` reruns the build when they change,
 and exports `git describe --always --dirty` as `FIRMWARE_VERSION`, which
 goes into the app descriptor, the boot line, the page and `/api`. The timezone, 12/24 hour, colour, brightness, alarm, alarm days,
-alarm melody and DHCP hostname are settings: saved in the `nvs` partition,
-editable from the buttons and from `http://<ip>/` (form) or `/api`
-(form-encoded keys, JSON back). The page ends with a read-only status
+alarm melody, DHCP hostname, Wi-Fi network and API token are settings:
+saved in the `nvs` partition, editable from the buttons and from
+`http://<ip>/` (form) or `/api` (form-encoded keys, JSON back). The
+network keys `ssid` and `password` are taken on `/api` only with the
+`Bearer` token, refused as `403` on the key alone (never on whether the
+value would change, which would make a password oracle), and never on
+the settings form; a saved change resets the clock into the new network
+(`heal::switch_mode`, with the carry record started over), so a wrong
+one costs the LAN until the password is right again. The password and
+the token are never read back: the JSON has `ssid`, `password_set` and
+`token_set`. The page ends with a read-only status
 line, and the JSON with the read-only keys `version`, `slot` (the app
 slot the firmware runs from), `uptime` (seconds), `heals` (self-heal
 resets since power-up) and `last_heal` (Unix seconds or null); posting
@@ -106,10 +120,17 @@ or its timeout, before blanking and resetting.
 then resets the chip the deliberate way: panel blanked, time and alarm
 state carried, not counted as a self-heal and not held for a ringing
 alarm. It is the way to exercise the carry record from a script:
-`curl -X POST -H "Authorization: Bearer $OTA_TOKEN" http://<ip>/reload`.
+`curl -X POST -H "Authorization: Bearer $API_TOKEN" http://<ip>/reload`.
+
+`POST /token` with `token=<new>` (8 to 32 printable characters without
+spaces, empty to clear) and either `Bearer <current token>` or `PIN
+<digits>` sets the API token; the update page has a form for it next
+to the upload. `POST /pin` issues a PIN without the page, on the panel
+and in the serial log and never in the response, for a bench script
+(`scripts/pin.sh`). One PIN is one action, upload or token.
 
 Firmware updates: `POST /ota` with the application image as the body
-and an `Authorization` header: `Bearer <OTA_TOKEN>` from `scripts/ota.sh`,
+and an `Authorization` header: `Bearer <API_TOKEN>` from `scripts/ota.sh`,
 or `PIN <digits>` from the `/update` page. Opening the page makes the
 clock draw four random digits, show them on the panel for a minute
 (any press ends it; ringing and alarm-set take precedence) and log them,
@@ -142,18 +163,19 @@ answered or an HTTP request served bumps it, and the third such boot
 | `src/scan.rs` | cycle/transfer builder, double-buffered DMA scan task that builds the SPI2 quad + DMA bus itself (an async esp-hal driver is `!Send`), restart-gap statistics, `stop` on a blank frame before a deliberate reset or a flash write, `resume` after a failed one |
 | `src/display.rs` | UI loop: tick, button or settings change → `ui` → draw → publish; rings the alarm; shows the IP; seeds and carries the skip flag and the time the alarm last rang |
 | `src/ui.rs` | mode state machine, pure logic, one timer for the current mode; edits the settings it is handed; alarm due check and missed-alarm grace, both gated by the carried time the alarm last rang; consumes `skip_next` |
-| `src/settings.rs` | `Settings`, palette and brightness tables, `Hostname`, shared `Watch` with change signal, versioned flash record |
-| `src/storage.rs` | the one flash handle (`with_flash`), nvs partition lookup, `sequential-storage` map over it, debounced persist task that compares records, not structs |
-| `src/heal.rs` | deliberate resets: `reboot` blanks the panel through `scan::stop`, carries the time and resets, for `/reload` and the OTA reboot; `reset`, the self-heal, waits out a ringing alarm and counts itself first |
-| `src/form.rs` | key=value parsing, all-or-nothing `apply` on a copy, JSON, the HTML page with its error notice and the read-only `Status` lines, the update page with its upload script; pure logic |
-| `src/http.rs` | HTTP/1.0 server, `LISTENERS` sockets each in its own task: `GET`/`POST` on `/` and `/api`, `POST /play`, `GET /update`, `POST /ota` with the body streamed to `ota::install`, `POST /reload` with the token; a refused form redirects to `/?error=…`; per-listener state and counters for the heartbeat |
+| `src/settings.rs` | `Settings`, palette and brightness tables, `Hostname`, `Text`/`Secret` strings, `Credentials` and the token with their rules, the build-time `seed`, shared `Watch` with change signal, versioned append-only flash record |
+| `src/storage.rs` | the one flash handle (`with_flash`), nvs partition lookup, `sequential-storage` map over it, debounced persist task that compares records, not structs, and resets into station mode after a save that changed the credentials |
+| `src/heal.rs` | deliberate resets: `reboot` blanks the panel through `scan::stop`, carries the time and resets, for `/reload` and the OTA reboot; `reset`, the self-heal, waits out a ringing alarm and counts itself first; `switch_mode`, the reset between station and access point, which starts the carry record over and freezes it |
+| `src/auth.rs` | the API token (a setting; constant-time compare) and the panel PIN with its TTL and lockout; `token`, `token_or_pin`, `issue_pin`, `pin_to_show`; `Refusal` with its HTTP status; pure rules with the clock and the random number passed in |
+| `src/form.rs` | key=value parsing, all-or-nothing `apply` on a copy, JSON, the HTML page with its error notice and the read-only `Status` lines, the update page with its upload and token scripts, `JsonStr`/`HtmlStr` escaping for the SSID, `parse_token`; pure logic |
+| `src/http.rs` | HTTP/1.0 server, `LISTENERS` sockets each in its own task: `GET`/`POST` on `/` and `/api`, `POST /play`, `GET /update`, `POST /ota` with the body streamed to `ota::install`, `POST /reload` with the token, `POST /token` with the token or the PIN, `POST /pin`; a refused form redirects to `/?error=…`; per-listener state and counters for the heartbeat |
 | `src/buttons.rs` | debounced short/long press events, plus the two-button hold |
 | `src/melody.rs` | alarm tunes as pitch and length data with tempo; `RANDOM` and the pure `pick` that turns it into a tune; pure |
-| `src/carry.rs` | RTC-RAM record used only after a software reset (`CoreSw`/`Cpu0Sw`; anything else zeroes it at boot): self-heal count and time, the skip flag, the time the alarm last rang, the Unix time last written, boots of an unconfirmed OTA image; the mark carries a layout version |
+| `src/carry.rs` | RTC-RAM record used only after a software reset (`CoreSw`/`Cpu0Sw`; anything else zeroes it at boot): self-heal count and time, the skip flag, the time the alarm last rang, the Unix time last written, boots of an unconfirmed OTA image, the access-point flag for the next boot; the mark carries a layout version; `freeze` for a mode switch |
 | `src/buzzer.rs` | LEDC PWM on an open-drain pin; plays a melody on command, looped or once, stops within a note |
 | `src/clock.rs` | Unix time = uptime + NTP offset; local time with weekday; `carry_time`/`restore_carried` move the time across a software reset as plain Unix time, written every second by the display tick; `RESET_PAUSE` for every deliberate reset |
-| `src/ota.rs` | firmware upload: token check, slot lookup and the boot-time rollback, sector writer with read-back, activate, reboot; `VERSION` from `build.rs` |
-| `src/net.rs` | Wi-Fi station with all-channel scan and transmit-power ceiling, minute RSSI line, connect failure budget that ends in `heal::reset`; DHCP switched on 500 ms after each connect and off at disconnect; link and address monitor, gateway ping probe with the self-heal trigger, SNTP, DHCP renew on hostname change |
+| `src/ota.rs` | firmware upload: slot lookup and the boot-time rollback, sector writer with read-back, activate, reboot; `VERSION` from `build.rs` |
+| `src/net.rs` | Wi-Fi station on the stored credentials with all-channel scan and transmit-power ceiling, minute RSSI line, connect failures logged with their meaning (`wrong password?`, `no such network in range`) and a budget that ends in `heal::reset`; DHCP switched on 500 ms after each connect and off at disconnect; link and address monitor, gateway ping probe with the self-heal trigger, SNTP, DHCP renew on hostname change |
 | `src/config.rs` | build-time env vars and compile-time defaults |
 | `src/bin/main.rs` | pin setup, display wires with their pull-downs, executors, task spawning, panic reset hook, log timestamps, reset reason and carried time at boot, OTA rollback check, minute heartbeat log |
 
@@ -233,7 +255,7 @@ answered or an HTTP request served bumps it, and the third such boot
 
 - `http::RESPONSE_BUF` (4096) holds the whole page plus headers, and
   overflow is a 500, not a truncation. The worst-case settings page is
-  2833 bytes with headers and the update page 2349; measure on the host
+  2821 bytes with headers and the update page 3059; measure on the host
   after adding a field or label.
 - `http::RX_BUF` (4096) is the TCP receive window; 1 KB made an upload
   one segment per round trip. `REQUEST_BUF` (1536) still bounds the
@@ -241,9 +263,13 @@ answered or an HTTP request served bumps it, and the third such boot
 - An OTA image must fit a slot (`partitions.csv`, 0x1E0000 = 1920 KB);
   the release image is about 650 KB. Static RAM: `ota.rs` holds 11 KB
   of buffers, and what the statics leave of DRAM is the main stack,
-  about 98 KB now; check `.stack` in `llvm-readelf -S` after adding one.
-- `form::apply` decodes each key into 16 bytes and each value into 32;
-  longer input is reported as a bad key or value before parsing.
+  about 96 KB now (`Settings` is 167 bytes of record and sits in several
+  task futures); check `.stack` in `llvm-readelf -S` after adding one.
+- `form::apply` decodes each key into 16 bytes and each value into 64
+  (`form::VALUE_MAX`, the password); longer input is reported as a bad
+  key or value before parsing. The record is `settings::RECORD_LEN`
+  (167) bytes and the map scratch in `storage.rs` 256, which must hold
+  the item (record plus 9 bytes, padded to a word).
 - `settings::RECEIVERS` is the number of `Watch` receivers (display,
   persist, hostname). Add one when a new task subscribes, or `receiver()`
   panics at boot.

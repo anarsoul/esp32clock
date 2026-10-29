@@ -137,7 +137,25 @@ async fn main(spawner: Spawner) -> ! {
     if let Some(store) = store.as_mut() {
         stored = store.load().await;
     }
-    settings::init(stored.unwrap_or(Settings::DEFAULT));
+    // The build's network and token fill in what the record lacks; the
+    // first save carries them from then on.
+    let mut boot_settings = stored.unwrap_or(Settings::DEFAULT);
+    let (stored_wifi, stored_token) = (!boot_settings.wifi.is_none(), !boot_settings.token.0.is_empty());
+    boot_settings.seed();
+    settings::init(boot_settings);
+    info!(
+        "boot: network {}, api token {}",
+        match (stored_wifi, boot_settings.wifi.is_none()) {
+            (true, _) => "stored",
+            (false, false) => "built in",
+            (false, true) => "none",
+        },
+        match (stored_token, boot_settings.token.0.is_empty()) {
+            (true, _) => "stored",
+            (false, false) => "built in",
+            (false, true) => "none",
+        }
+    );
     let (reason, kept) = carry::init();
     if kept {
         info!("boot: reset reason {reason:?}, software reset: carried over {:?}", carry::get());

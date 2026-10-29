@@ -11,8 +11,8 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::watch::{Receiver, Watch};
 
 use crate::config::{
-    DEFAULT_ALARM, DEFAULT_BRIGHTNESS, DEFAULT_COLOR, DEFAULT_HOSTNAME, DEFAULT_TWELVE_HOUR, DEFAULT_TZ_OFFSET_MINUTES,
-    MAX_CURRENT_STEP,
+    API_TOKEN, DEFAULT_ALARM, DEFAULT_BRIGHTNESS, DEFAULT_COLOR, DEFAULT_HOSTNAME, DEFAULT_TWELVE_HOUR,
+    DEFAULT_TZ_OFFSET_MINUTES, MAX_CURRENT_STEP, WIFI_PASSWORD, WIFI_SSID,
 };
 use crate::melody;
 use crate::panel::{Rgb, current_step_for};
@@ -125,6 +125,149 @@ impl core::fmt::Debug for Hostname {
     }
 }
 
+/// A short string stored in place: a length byte and `N` bytes of
+/// UTF-8. The settings are `Copy`, so everything in them is.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct Text<const N: usize> {
+    len: u8,
+    bytes: [u8; N],
+}
+
+impl<const N: usize> Text<N> {
+    pub const EMPTY: Self = Text { len: 0, bytes: [0; N] };
+
+    /// Store a string of up to `N` bytes.
+    pub fn new(s: &str) -> Option<Self> {
+        let src = s.as_bytes();
+        if src.len() > N {
+            return None;
+        }
+        let mut bytes = [0u8; N];
+        bytes[..src.len()].copy_from_slice(src);
+        Some(Text { len: src.len() as u8, bytes })
+    }
+
+    /// `new` for a build-time constant; the length is checked at compile time.
+    pub const fn literal(s: &str) -> Self {
+        let src = s.as_bytes();
+        assert!(src.len() <= N, "build-time string too long");
+        let mut bytes = [0u8; N];
+        let mut i = 0;
+        while i < src.len() {
+            bytes[i] = src[i];
+            i += 1;
+        }
+        Text { len: src.len() as u8, bytes }
+    }
+
+    /// From a stored length and field; `None` if the length is past the
+    /// field or the bytes are not UTF-8.
+    fn from_record(len: u8, field: &[u8]) -> Option<Self> {
+        Self::new(core::str::from_utf8(field.get(..len as usize)?).ok()?)
+    }
+
+    pub fn as_str(&self) -> &str {
+        // Only `&str` gets in, so this cannot fail.
+        core::str::from_utf8(&self.bytes[..self.len as usize]).unwrap_or("")
+    }
+
+    pub fn len(&self) -> usize {
+        self.len as usize
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+}
+
+impl<const N: usize> core::fmt::Debug for Text<N> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{:?}", self.as_str())
+    }
+}
+
+/// A `Text` whose value never reaches a log line: the Wi-Fi password
+/// and the API token print as set or not.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct Secret<const N: usize>(pub Text<N>);
+
+impl<const N: usize> core::fmt::Debug for Secret<N> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(if self.0.is_empty() { "<none>" } else { "<set>" })
+    }
+}
+
+/// Longest SSID and password the driver takes.
+pub const SSID_MAX: usize = 32;
+pub const PASSWORD_MAX: usize = 64;
+
+/// A WPA2 password is at least this long; shorter is refused by the
+/// driver. Empty means an open network.
+pub const PASSWORD_MIN: usize = 8;
+
+/// The network the station joins. `NONE` (an empty SSID) means the
+/// clock has no network and raises its own.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Credentials {
+    pub ssid: Text<SSID_MAX>,
+    pub password: Secret<PASSWORD_MAX>,
+}
+
+impl Credentials {
+    pub const NONE: Credentials = Credentials { ssid: Text::EMPTY, password: Secret(Text::EMPTY) };
+
+    /// The build-time seed, checked at compile time.
+    const BUILT_IN: Credentials =
+        Credentials { ssid: Text::literal(WIFI_SSID), password: Secret(Text::literal(WIFI_PASSWORD)) };
+
+    pub fn is_none(&self) -> bool {
+        self.ssid.is_empty()
+    }
+
+    /// The password is empty (open network) or WPA2 length; the SSID is
+    /// any length the field holds, empty for none.
+    pub fn is_valid(&self) -> bool {
+        valid_password(self.password.0.as_str())
+    }
+}
+
+/// Empty (open network) or `PASSWORD_MIN` to `PASSWORD_MAX` bytes.
+pub fn valid_password(p: &str) -> bool {
+    p.is_empty() || (PASSWORD_MIN..=PASSWORD_MAX).contains(&p.len())
+}
+
+/// Longest and shortest API token. Shorter than the minimum is refused;
+/// empty means none, which closes the script paths.
+pub const TOKEN_MAX: usize = 32;
+pub const TOKEN_MIN: usize = 8;
+
+/// Empty, or `TOKEN_MIN` to `TOKEN_MAX` bytes of printable ASCII without
+/// spaces, so it survives a shell and a header.
+pub const fn valid_token(t: &str) -> bool {
+    let b = t.as_bytes();
+    if b.is_empty() {
+        return true;
+    }
+    if b.len() < TOKEN_MIN || b.len() > TOKEN_MAX {
+        return false;
+    }
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] <= b' ' || b[i] > b'~' {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+const _: () = assert!(WIFI_SSID.len() <= SSID_MAX, "WIFI_SSID is longer than 32 bytes");
+const _: () = assert!(
+    WIFI_PASSWORD.is_empty() || (WIFI_PASSWORD.len() >= PASSWORD_MIN && WIFI_PASSWORD.len() <= PASSWORD_MAX),
+    "WIFI_PASSWORD must be empty or 8 to 64 bytes"
+);
+const _: () = assert!(valid_token(API_TOKEN), "API_TOKEN must be empty or 8 to 32 printable characters without spaces");
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Settings {
     pub color: usize,
@@ -146,16 +289,20 @@ pub struct Settings {
     /// reboot clears it, and `to_record` leaves it out so toggling it
     /// does not write flash.
     pub skip_next: bool,
+    /// The network to join; `Credentials::NONE` for none.
+    pub wifi: Credentials,
+    /// The API token; empty for none. Never shown.
+    pub token: Secret<TOKEN_MAX>,
 }
 
 /// Bytes in a stored record.
-pub const RECORD_LEN: usize = 36;
+pub const RECORD_LEN: usize = 167;
 
 /// Stored record layout version. Bump when the layout changes, append
 /// the new fields and teach `from_record` the old one, or the user's
 /// settings are lost; never reorder, since an older image reads a newer
 /// record by its prefix.
-const RECORD_VERSION: u8 = 5;
+const RECORD_VERSION: u8 = 6;
 
 /// Where the hostname sits in a version 3 record.
 const RECORD_HOSTNAME_LEN: usize = 9;
@@ -170,6 +317,16 @@ const RECORD_MELODY: usize = 35;
 /// The melody byte for `melody::RANDOM`: out of any table's reach, so a
 /// tune added later does not change what a stored record means.
 const RECORD_MELODY_RANDOM: u8 = 0xff;
+
+/// Where the credentials and the token sit in a version 6 record: each
+/// a length byte and its field.
+const RECORD_SSID_LEN: usize = 36;
+const RECORD_SSID: usize = 37;
+const RECORD_PASSWORD_LEN: usize = RECORD_SSID + SSID_MAX;
+const RECORD_PASSWORD: usize = RECORD_PASSWORD_LEN + 1;
+const RECORD_TOKEN_LEN: usize = RECORD_PASSWORD + PASSWORD_MAX;
+const RECORD_TOKEN: usize = RECORD_TOKEN_LEN + 1;
+const _: () = assert!(RECORD_TOKEN + TOKEN_MAX == RECORD_LEN, "RECORD_LEN does not match the layout");
 
 /// Day names, Monday first, for the page and the API.
 pub const DAY_NAMES: [&str; 7] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
@@ -202,7 +359,22 @@ impl Settings {
         alarm_days: DAYS_ALL,
         melody: 0,
         skip_next: false,
+        wifi: Credentials::NONE,
+        token: Secret(Text::EMPTY),
     };
+
+    /// Fill in what the build has and the record lacks: the network and
+    /// the token. Run once on the loaded value before `init`; the next
+    /// save then carries them in the record, after which the record wins
+    /// over a later build's constants.
+    pub fn seed(&mut self) {
+        if self.wifi.is_none() && !Credentials::BUILT_IN.is_none() {
+            self.wifi = Credentials::BUILT_IN;
+        }
+        if self.token.0.is_empty() && !API_TOKEN.is_empty() {
+            self.token = Secret(Text::literal(API_TOKEN));
+        }
+    }
 
     pub fn color(&self) -> Rgb {
         PALETTE[self.color % PALETTE.len()]
@@ -222,6 +394,8 @@ impl Settings {
             && self.alarm_days != 0
             && self.alarm_days & !DAYS_ALL == 0
             && self.melody <= melody::RANDOM
+            && self.wifi.is_valid()
+            && valid_token(self.token.0.as_str())
     }
 
     /// Whether the alarm rings on `weekday` (0 Monday to 6 Sunday).
@@ -232,7 +406,8 @@ impl Settings {
     /// The flash record: version, colour, brightness, alarm hour, alarm
     /// minute, armed, twelve-hour, timezone offset as little-endian i16,
     /// hostname length, hostname padded to 24 bytes, alarm days, melody
-    /// (`0xff` for random).
+    /// (`0xff` for random), then the SSID, the password and the token,
+    /// each a length byte and a padded field.
     pub fn to_record(&self) -> [u8; RECORD_LEN] {
         let tz = self.tz_offset_minutes.to_le_bytes();
         let mut r = [0u8; RECORD_LEN];
@@ -251,13 +426,20 @@ impl Settings {
         r[RECORD_HOSTNAME..RECORD_HOSTNAME + HOSTNAME_MAX].copy_from_slice(&self.hostname.bytes);
         r[RECORD_ALARM_DAYS] = self.alarm_days;
         r[RECORD_MELODY] = if self.melody == melody::RANDOM { RECORD_MELODY_RANDOM } else { self.melody as u8 };
+        r[RECORD_SSID_LEN] = self.wifi.ssid.len;
+        r[RECORD_SSID..RECORD_SSID + SSID_MAX].copy_from_slice(&self.wifi.ssid.bytes);
+        r[RECORD_PASSWORD_LEN] = self.wifi.password.0.len;
+        r[RECORD_PASSWORD..RECORD_PASSWORD + PASSWORD_MAX].copy_from_slice(&self.wifi.password.0.bytes);
+        r[RECORD_TOKEN_LEN] = self.token.0.len;
+        r[RECORD_TOKEN..RECORD_TOKEN + TOKEN_MAX].copy_from_slice(&self.token.0.bytes);
         r
     }
 
     /// Parse a flash record. Older versions lack the later fields, which
     /// take the defaults: version 1 (M5) stops after `armed`, version 2
     /// (M6) after the timezone, version 3 (M6) after the hostname, version
-    /// 4 (M7) after the alarm days. Versions are append-only, so a record
+    /// 4 (M7) after the alarm days, version 5 (M8) after the melody, so
+    /// those read as no network and no token. Versions are append-only, so a record
     /// from a newer image is read by the prefix this one knows, and a
     /// colour, brightness or melody index past this image's table (an
     /// entry a newer image added, or a higher current ceiling) lands on
@@ -292,6 +474,16 @@ impl Settings {
                 RECORD_MELODY_RANDOM => melody::RANDOM,
                 m => (m as usize).min(melody::MELODIES.len() - 1),
             };
+        }
+        if version >= 6 {
+            s.wifi = Credentials {
+                ssid: Text::from_record(*r.get(RECORD_SSID_LEN)?, r.get(RECORD_SSID..RECORD_SSID + SSID_MAX)?)?,
+                password: Secret(Text::from_record(
+                    *r.get(RECORD_PASSWORD_LEN)?,
+                    r.get(RECORD_PASSWORD..RECORD_PASSWORD + PASSWORD_MAX)?,
+                )?),
+            };
+            s.token = Secret(Text::from_record(*r.get(RECORD_TOKEN_LEN)?, r.get(RECORD_TOKEN..RECORD_TOKEN + TOKEN_MAX)?)?);
         }
         s.color = s.color.min(PALETTE.len() - 1);
         // A record saved by a build with a higher ceiling may name a step

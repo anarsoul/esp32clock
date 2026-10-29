@@ -28,6 +28,7 @@ use sequential_storage::cache::{Cache, Uncached};
 use sequential_storage::map::{MapConfig, MapStorage};
 
 use crate::settings::{self, RECORD_LEN, Settings};
+use crate::heal;
 
 /// The one map key.
 const KEY: u8 = 0;
@@ -98,12 +99,12 @@ type Map = MapStorage<u8, AsyncFlash, NoCache>;
 
 type MapError = sequential_storage::Error<FlashStorageError>;
 
-/// Scratch for the map: key, record, item header, rounded up; a stale
-/// record of another length fits too. Word aligned
-/// so `esp-storage` reads into it directly instead of through a sector
-/// buffer on the stack.
+/// Scratch for the map: key, record, item header, rounded up (a 167-byte
+/// record is a 176-byte item); a stale record of another length fits
+/// too. Word aligned so `esp-storage` reads into it directly instead of
+/// through a sector buffer on the stack.
 #[repr(C, align(4))]
-struct Scratch([u8; 128]);
+struct Scratch([u8; 256]);
 
 /// The settings map in the `nvs` partition.
 pub struct Store {
@@ -146,7 +147,7 @@ impl Store {
                 return None;
             }
         };
-        Some(Store { map: Map::new(AsyncFlash, config, NoCache::new_uncached()), scratch: Scratch([0; 128]) })
+        Some(Store { map: Map::new(AsyncFlash, config, NoCache::new_uncached()), scratch: Scratch([0; 256]) })
     }
 
     /// The stored settings, if there is a valid record. A map that cannot
@@ -187,9 +188,19 @@ impl Store {
 
 /// Write the settings to flash whenever they change, once they have been
 /// stable for [`SETTLE`]. `stored` is what the flash holds at start.
+///
+/// A save that changed the Wi-Fi credentials is followed by a reset
+/// into station mode (`heal::switch_mode`): that is how a provisioning
+/// save leaves the access point, and how a credential change over the
+/// API moves a running clock to another network. The settle time is
+/// what lets the HTTP response out first, and the write is done before
+/// the reset by construction. The comparison is with the credentials
+/// this boot started with, not with `stored`, which is `None` on a
+/// first boot that runs on the build-time seed.
 #[embassy_executor::task]
 pub async fn persist_task(mut store: Store, mut stored: Option<Settings>) -> ! {
     let mut rx = settings::receiver();
+    let boot_wifi = settings::get().wifi;
     // The boot value is already in flash (or is the default); do not
     // rewrite it.
     let _ = rx.try_changed();
@@ -210,6 +221,9 @@ pub async fn persist_task(mut store: Store, mut stored: Option<Settings>) -> ! {
             Ok(()) => {
                 info!("settings: saved");
                 stored = Some(s);
+                if s.wifi != boot_wifi {
+                    heal::switch_mode(false).await
+                }
             }
             Err(e) => warn!("settings: save failed: {e:?}"),
         }

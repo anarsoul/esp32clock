@@ -12,13 +12,13 @@ use embassy_futures::select::{Either, select};
 use embassy_time::{Duration, Instant, Timer, with_timeout};
 use esp_radio::wifi::scan::{ScanConfig, ScanTypeConfig};
 use esp_radio::wifi::sta::{ScanMethod, StationConfig};
-use esp_radio::wifi::{AuthenticationMethodConfig, Config, Interface, WifiController};
+use esp_radio::wifi::{AuthenticationMethodConfig, Config, ConnectionError, DisconnectReason, Interface, WifiController};
 use log::{error, info, warn};
 use sntpc::{NtpContext, get_time};
 use sntpc_net_embassy::UdpSocketWrapper;
 use sntpc_time_embassy::EmbassyTimestampGenerator;
 
-use crate::settings::Hostname;
+use crate::settings::{Credentials, Hostname};
 use crate::{clock, config, heal, ota, settings};
 
 const NTP_PORT: u16 = 123;
@@ -62,7 +62,7 @@ impl core::fmt::Display for Bssid {
     }
 }
 
-/// Build the station configuration from the build-time credentials.
+/// Build the station configuration from the stored credentials.
 ///
 /// The scan method matters with more than one access point on the SSID.
 /// The driver's default, `Fast`, takes the first beacon it hears on any
@@ -70,12 +70,12 @@ impl core::fmt::Display for Bssid {
 /// authenticate. `AllChannels` scans every channel first and, with the
 /// by-signal sort order esp-radio sets, connects to the strongest. It
 /// costs a second or two more at connect time.
-fn station_config() -> Result<Config, esp_radio::wifi::WifiError> {
-    let ssid = config::WIFI_SSID.try_into()?;
-    let auth = if config::WIFI_PASSWORD.is_empty() {
+fn station_config(creds: &Credentials) -> Result<Config, esp_radio::wifi::WifiError> {
+    let ssid = creds.ssid.as_str().try_into()?;
+    let auth = if creds.password.0.is_empty() {
         AuthenticationMethodConfig::Open
     } else {
-        AuthenticationMethodConfig::Wpa2Personal(config::WIFI_PASSWORD.try_into()?)
+        AuthenticationMethodConfig::Wpa2Personal(creds.password.0.as_str().try_into()?)
     };
     Ok(Config::Station(
         StationConfig::default()
@@ -91,14 +91,14 @@ fn station_config() -> Result<Config, esp_radio::wifi::WifiError> {
 /// 10 to 20 ms per channel missed every AP but a strong one, since a far
 /// AP's probe response takes longer than that to arrive; ESP-IDF's own
 /// default is 120 ms.
-async fn log_candidates(controller: &mut WifiController<'static>) {
-    let Ok(ssid) = config::WIFI_SSID.try_into() else { return };
+async fn log_candidates(controller: &mut WifiController<'static>, creds: &Credentials) {
+    let Ok(ssid) = creds.ssid.as_str().try_into() else { return };
     let scan = ScanConfig::default().with_ssid(ssid).with_scan_type(ScanTypeConfig::Active {
         min: esp_hal::time::Duration::from_millis(120),
         max: esp_hal::time::Duration::from_millis(200),
     });
     match controller.scan_async(&scan).await {
-        Ok(aps) if aps.is_empty() => warn!("wifi: scan found no AP for {}", config::WIFI_SSID),
+        Ok(aps) if aps.is_empty() => warn!("wifi: scan found no AP for {}", creds.ssid.as_str()),
         Ok(aps) => {
             for ap in aps {
                 info!("wifi: candidate {} channel {} rssi {}", Bssid(ap.bssid), ap.channel, ap.signal_strength);
@@ -130,14 +130,15 @@ fn log_status(controller: &WifiController<'static>, since: Instant) {
 /// `config::CONNECT_RESET_SECS`, resets the chip through `heal::reset`.
 #[embassy_executor::task]
 pub async fn wifi_task(mut controller: WifiController<'static>, stack: Stack<'static>) -> ! {
-    if config::WIFI_SSID.is_empty() {
-        error!("wifi: WIFI_SSID was not set at build time, staying offline");
+    let creds = settings::get().wifi;
+    if creds.is_none() {
+        error!("wifi: no network stored or built in, staying offline");
         loop {
             Timer::after(Duration::from_secs(3600)).await;
         }
     }
 
-    let cfg = match station_config() {
+    let cfg = match station_config(&creds) {
         Ok(c) => c,
         Err(e) => {
             error!("wifi: bad credentials: {e:?}");
@@ -164,8 +165,8 @@ pub async fn wifi_task(mut controller: WifiController<'static>, stack: Stack<'st
             Timer::after(RECONNECT_DELAY).await;
             continue;
         }
-        log_candidates(&mut controller).await;
-        info!("wifi: connecting to {}", config::WIFI_SSID);
+        log_candidates(&mut controller, &creds).await;
+        info!("wifi: connecting to {}", creds.ssid.as_str());
         match controller.connect_async().await {
             Ok(info) => {
                 info!("wifi: connected to {} channel {}", Bssid(info.bssid), info.channel);
@@ -176,7 +177,8 @@ pub async fn wifi_task(mut controller: WifiController<'static>, stack: Stack<'st
                 failures += 1;
                 let since = first_failure.get_or_insert_with(Instant::now).elapsed();
                 warn!(
-                    "wifi: connect failed: {e:?} (attempt {failures} of {}, {} s of {})",
+                    "wifi: connect failed: {e:?}{} (attempt {failures} of {}, {} s of {})",
+                    failure_hint(&e),
                     config::CONNECT_RESET_ATTEMPTS,
                     since.as_secs(),
                     config::CONNECT_RESET_SECS
@@ -216,6 +218,19 @@ pub async fn wifi_task(mut controller: WifiController<'static>, stack: Stack<'st
         }
         stop_dhcp(stack);
         Timer::after(RECONNECT_DELAY).await;
+    }
+}
+
+/// What a connect failure most likely means, for the log, so a mistyped
+/// password is diagnosable over USB.
+fn failure_hint(e: &ConnectionError) -> &'static str {
+    match e {
+        ConnectionError::Failed(info) => match info.reason {
+            DisconnectReason::NoAccessPointFound => ", no such network in range",
+            DisconnectReason::FourWayHandshakeTimeout | DisconnectReason::HandshakeTimeout => ", wrong password?",
+            _ => "",
+        },
+        _ => "",
     }
 }
 

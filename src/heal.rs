@@ -4,12 +4,14 @@
 //! also counted there, so the boot log, the heartbeat and the page can
 //! say it happened even when nobody was watching the serial port at the
 //! time; `POST /reload` and the reboot into a new image take the same
-//! path without the count.
+//! path without the count. A switch between station and access point
+//! (`switch_mode`) is the one reset that starts the record over.
 
 use embassy_time::{Duration, Instant, Timer};
 use log::{error, warn};
 
-use crate::{carry, clock, display, scan, ui};
+use crate::carry::{self, Carried};
+use crate::{clock, display, scan, ui};
 
 /// How often the hold for a ringing alarm looks at the flag again.
 const HOLD_POLL: Duration = Duration::from_secs(1);
@@ -65,6 +67,25 @@ pub async fn reboot() -> ! {
     scan::stop().await;
     clock::carry_time();
     // Let the last log line leave the serial port.
+    Timer::after(clock::RESET_PAUSE).await;
+    esp_hal::system::software_reset()
+}
+
+/// Reset into the other network mode: the access point when `boot_ap`,
+/// the station otherwise. The carry record starts over, because every
+/// word in it belongs to the mode that wrote it (the heal count, the
+/// time, the alarm state), except the boots of an unconfirmed image,
+/// which the rollback counts in either mode. No time is carried: there
+/// is none worth having across a stay in the access point, and the
+/// record is frozen so the display tick cannot write one back in
+/// during the pause.
+pub async fn switch_mode(boot_ap: bool) -> ! {
+    warn!(
+        "heal: resetting into {} mode, carry record started over",
+        if boot_ap { "access point" } else { "station" }
+    );
+    scan::stop().await;
+    carry::freeze(Carried { ota_boots: carry::get().ota_boots, boot_ap, ..Carried::default() });
     Timer::after(clock::RESET_PAUSE).await;
     esp_hal::system::software_reset()
 }

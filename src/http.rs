@@ -3,6 +3,11 @@
 //! mode and never touches the scan path, except that a firmware upload
 //! (`POST /ota`, streamed into `ota::install`) stops it for the write.
 //!
+//! `POST /api` takes every setting; the network (`ssid`, `password`)
+//! only with the token. `POST /token` sets the token with the PIN or
+//! the old token, `POST /pin` issues a PIN for a script. `POST /reload`
+//! resets with the token.
+//!
 //! Several sockets listen at once because a browser opens more
 //! connections than it uses: a speculative one alongside the page, one
 //! for the favicon, a fresh one for the redirect after a form post. With
@@ -21,7 +26,7 @@ use log::{info, warn};
 use crate::buzzer;
 use crate::config::HTTP_PORT;
 use crate::form::{self, FormError, HealStamp, Status};
-use crate::{clock, heal, ota, settings};
+use crate::{auth, clock, heal, ota, settings};
 
 /// Connections served at once, each with its own buffers and task.
 pub const LISTENERS: usize = 3;
@@ -268,6 +273,7 @@ fn redirect_home(out: &mut Response, error: Option<FormError>) -> core::fmt::Res
         None => "",
         Some(FormError::BadValue) => "?error=value",
         Some(FormError::UnknownKey) => "?error=key",
+        Some(FormError::Forbidden) => "?error=token",
     };
     write!(out, "HTTP/1.0 303 See Other\r\nLocation: /{suffix}\r\nConnection: close\r\n\r\n")
 }
@@ -277,6 +283,7 @@ fn error_from_query(query: &str) -> Option<FormError> {
     match query_value(query, "error") {
         Some("value") => Some(FormError::BadValue),
         Some("key") => Some(FormError::UnknownKey),
+        Some("token") => Some(FormError::Forbidden),
         _ => None,
     }
 }
@@ -287,6 +294,11 @@ fn query_value<'a>(query: &'a str, key: &str) -> Option<&'a str> {
         Some((k, v)) if k == key => Some(v),
         _ => None,
     })
+}
+
+/// A random number for a PIN.
+fn random() -> u32 {
+    esp_hal::rng::Rng::new().random()
 }
 
 /// The read-only status for the page and the JSON.
@@ -334,7 +346,7 @@ fn respond(out: &mut Response, req: &Request<'_>, body: &[u8]) -> Result<Then, c
             // browser sent empty, say) cannot leave the checkboxes, which
             // `apply` resets first, half applied.
             let mut trial = settings::get();
-            let result = form::apply(&mut trial, body, true);
+            let result = form::apply(&mut trial, body, true, false);
             match result {
                 Ok(()) => {
                     settings::update(|s| *s = trial);
@@ -347,7 +359,7 @@ fn respond(out: &mut Response, req: &Request<'_>, body: &[u8]) -> Result<Then, c
             // Preview the sound chosen in the form without saving anything:
             // the form is applied to a scratch copy and only its melody used.
             let mut trial = settings::get();
-            if let Err(e) = form::apply(&mut trial, body, true) {
+            if let Err(e) = form::apply(&mut trial, body, true, false) {
                 warn!("http: play form rejected: {e:?}");
             }
             buzzer::preview(trial.melody);
@@ -355,28 +367,73 @@ fn respond(out: &mut Response, req: &Request<'_>, body: &[u8]) -> Result<Then, c
         }
         (Method::Get, "/update") => {
             // Opening the page puts a PIN on the panel; the page asks for it.
-            let lockout_secs = ota::issue_pin().err();
+            let lockout_secs = auth::issue_pin(random()).err();
             status_line(out, "200 OK", "text/html; charset=utf-8")?;
-            form::write_update_page(out, &status(), lockout_secs)?;
+            form::write_update_page(out, &status(), auth::token_enabled(), lockout_secs)?;
+        }
+        (Method::Post, "/pin") => {
+            // A PIN without the page, for a script that reads the serial
+            // log. The digits are never in the response.
+            match auth::issue_pin(random()) {
+                Ok(_) => {
+                    status_line(out, "200 OK", "text/plain")?;
+                    writeln!(out, "PIN issued, on the panel and the serial log for {} min", auth::PIN_TTL_MS / 60_000)?;
+                }
+                Err(secs) => {
+                    status_line(out, "403 Forbidden", "text/plain")?;
+                    writeln!(out, "locked out for {secs} s after a wrong PIN")?;
+                }
+            }
+        }
+        (Method::Post, "/token") => {
+            // A new API token, with the PIN from the update page or the
+            // current token. The value is never logged or echoed.
+            if let Err(e) = auth::token_or_pin(req.authorization) {
+                warn!("http: token change refused: {}", e.text);
+                status_line(out, e.status, "text/plain")?;
+                writeln!(out, "{}", e.text)?;
+                return Ok(Then::Close);
+            }
+            match form::parse_token(body) {
+                Ok(token) => {
+                    let set = !token.0.is_empty();
+                    settings::update(|s| s.token = token);
+                    warn!("http: API token {}", if set { "set" } else { "cleared" });
+                    status_line(out, "200 OK", "text/plain")?;
+                    out.write_str(if set { "token set\n" } else { "token cleared; the script paths are closed\n" })?;
+                }
+                Err(e) => {
+                    warn!("http: token change rejected: {e:?}");
+                    status_line(out, "400 Bad Request", "text/plain")?;
+                    out.write_str("bad token: 8 to 32 printable characters without spaces, or empty to clear\n")?;
+                }
+            }
         }
         (Method::Get, "/api") => {
             status_line(out, "200 OK", "application/json")?;
             form::write_json(out, &settings::get(), &status())?;
         }
         (Method::Post, "/api") => {
-            // Validate on a copy first so a bad pair changes nothing.
+            // Validate on a copy first so a bad pair changes nothing. The
+            // network keys need the token; the rest do not.
+            let credentials = auth::token(req.authorization).is_ok();
             let mut trial = settings::get();
-            match form::apply(&mut trial, body, false) {
+            match form::apply(&mut trial, body, false, credentials) {
                 Ok(()) => {
                     settings::update(|s| *s = trial);
                     status_line(out, "200 OK", "application/json")?;
                     form::write_json(out, &trial, &status())?;
                 }
+                Err(FormError::Forbidden) => {
+                    warn!("http: network change without the token refused");
+                    status_line(out, "403 Forbidden", "text/plain")?;
+                    out.write_str("token required for ssid and password: send Authorization: Bearer <API_TOKEN>\n")?;
+                }
                 Err(e) => {
                     status_line(out, "400 Bad Request", "text/plain")?;
                     out.write_str(match e {
                         FormError::UnknownKey => "unknown key\n",
-                        FormError::BadValue => "bad value\n",
+                        _ => "bad value\n",
                     })?;
                 }
             }
@@ -384,7 +441,7 @@ fn respond(out: &mut Response, req: &Request<'_>, body: &[u8]) -> Result<Then, c
         (Method::Post, "/reload") => {
             // A deliberate reset for testing the carry: the token, not the
             // PIN, and no hold for a ringing alarm.
-            return match ota::authorize_token(req.authorization) {
+            return match auth::token(req.authorization) {
                 Ok(()) => {
                     warn!("http: reload requested, rebooting with the time carried over");
                     status_line(out, "200 OK", "text/plain")?;
@@ -459,7 +516,7 @@ async fn upload(out: &mut Response, req: &Request<'_>, socket: &mut TcpSocket<'_
         return Ok(Then::Close);
     };
     let mut body = Counting { socket, taken: 0 };
-    let result = match ota::authorize(req.authorization) {
+    let result = match auth::token_or_pin(req.authorization) {
         Ok(()) => ota::install(first, total, &mut body).await,
         Err(e) => {
             warn!("http: upload refused: {}", e.text);

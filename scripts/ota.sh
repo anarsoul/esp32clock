@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Build the firmware, turn it into an application image and post it to
-# the clock's /ota. Needs espflash and curl, and OTA_TOKEN in the
+# the clock's /ota. Needs espflash and curl, and API_TOKEN in the
 # environment (the same value the firmware was built with).
-# Usage: OTA_TOKEN=… scripts/ota.sh <ip-or-hostname> [app.bin]
+# Usage: API_TOKEN=… scripts/ota.sh <ip-or-hostname> [app.bin]
 #        scripts/ota.sh              build the image file only and print
 #                                    its path, for the clock's /update page
 #
@@ -26,7 +26,7 @@ if [ "$host" = - ]; then
     printf '%s (%s bytes)\n' "$image" "$(stat -c %s "$image")"
     exit 0
 fi
-: "${OTA_TOKEN:?set OTA_TOKEN to the token the firmware was built with}"
+: "${API_TOKEN:?set API_TOKEN to the token the firmware was built with}"
 printf 'posting %s (%s bytes) to http://%s/ota\n' "$image" "$(stat -c %s "$image")" "$host"
-curl -sS --max-time 300 -H "Authorization: Bearer $OTA_TOKEN" -H 'Expect:' \
+curl -sS --max-time 300 -H "Authorization: Bearer $API_TOKEN" -H 'Expect:' \
     --data-binary "@$image" -w 'HTTP %{http_code}, %{time_total}s\n' "http://$host/ota"

@@ -7,14 +7,19 @@
 //! WIFI_SSID=home WIFI_PASSWORD=secret TZ_OFFSET_MINUTES=-420 cargo run --release
 //! ```
 //!
-//! `OTA_TOKEN` is the fourth: a firmware update over the LAN must carry
-//! it, and a build without one has no update path at all. `MAX_CURRENT_STEP`
-//! is the fifth, optional: the ceiling on the panel's drive current, for a
+//! `API_TOKEN` is the fourth: what a script must carry for a firmware
+//! update, a reset, the Wi-Fi credentials or a new token; a build
+//! without one can be given one later from the update page. The
+//! credentials and the token are seeds: the first saved record carries
+//! them from then on (`settings::Settings::seed`). `MAX_CURRENT_STEP` is
+//! the fifth, optional: the ceiling on the panel's drive current, for a
 //! supply that cannot carry the top steps.
 //!
 //! `build.rs` re-runs the build when any of them changes.
 
-/// Wi-Fi network name. Empty when the variable was not set at build time.
+/// Wi-Fi network name. Empty when the variable was not set at build
+/// time, in which case a clock with no network in its record raises its
+/// own access point to be given one.
 pub const WIFI_SSID: &str = match option_env!("WIFI_SSID") {
     Some(s) => s,
     None => "",
@@ -26,18 +31,19 @@ pub const WIFI_PASSWORD: &str = match option_env!("WIFI_PASSWORD") {
     None => "",
 };
 
-/// Token a firmware upload must carry, as `Authorization: Bearer <token>`
-/// on `POST /ota`. Empty when the variable was not set at build time,
-/// which disables updates over the air: every upload is refused and the
-/// boot line says so. Compiled in as a string, so anyone with the image
-/// file can read it out, the same standing as the Wi-Fi password.
-pub const OTA_TOKEN: &str = match option_env!("OTA_TOKEN") {
+/// Token a script must carry, as `Authorization: Bearer <token>`, for
+/// `POST /ota`, `/reload`, `/token` and the Wi-Fi credentials on
+/// `/api`. Empty when the variable was not set at build time, which
+/// closes those paths until a token is set from the update page with
+/// the PIN; the boot line says which. Must be empty or 8 to 32
+/// printable characters without spaces (`settings::valid_token`,
+/// checked at compile time). Compiled in as a string, so anyone with
+/// the image file can read it out, the same standing as the Wi-Fi
+/// password.
+pub const API_TOKEN: &str = match option_env!("API_TOKEN") {
     Some(s) => s,
     None => "",
 };
-
-/// Shortest token that enables updates. A shorter one counts as none.
-pub const OTA_TOKEN_MIN: usize = 8;
 
 /// Boots an updated image gets before the previous slot is booted again.
 /// The upload sets the carried boot count to 1; each software reset

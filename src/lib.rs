@@ -1,6 +1,7 @@
 #![no_std]
 
 pub mod aip33628;
+pub mod auth;
 pub mod buttons;
 pub mod buzzer;
 pub mod carry;

@@ -24,7 +24,7 @@ pub const IP_STEP: Duration = Duration::from_millis(2000);
 const IP_ROUNDS: u64 = 2;
 
 /// The update page's PIN stays on the panel this long, unless a press
-/// ends it. The PIN itself is good for longer; see `ota::PIN_TTL_MS`.
+/// ends it. The PIN itself is good for longer; see `auth::PIN_TTL_MS`.
 pub const PIN_SHOW: Duration = Duration::from_secs(60);
 
 /// After a power cut the clock comes back and gets a valid time some

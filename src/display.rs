@@ -13,7 +13,7 @@ use crate::config::MAX_CURRENT_STEP;
 use crate::panel::{Panel, Rgb, ScanImage, current_step_for};
 use crate::settings::{self, Settings};
 use crate::ui::{Field, IP_STEP, Ui, View};
-use crate::{carry, clock, ota, scan};
+use crate::{auth, carry, clock, scan};
 
 /// Step time of the waiting animation and of the blink.
 const BLINK_STEP: Duration = Duration::from_millis(250);
@@ -211,7 +211,7 @@ pub async fn display_task(stack: Stack<'static>) -> ! {
             Timer::after(wait + Duration::from_millis(2)),
             buttons::next_event(),
             changes.changed(),
-            ota::pin_to_show(),
+            auth::pin_to_show(),
         )
         .await
         {
