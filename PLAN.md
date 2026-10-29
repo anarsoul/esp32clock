@@ -1272,7 +1272,7 @@ Found in the same review, not yet done, in rough order of value:
   `config.rs` without a range check, so a wild value wraps silently and
   `Settings::DEFAULT` is never run through `is_valid`. A const assert
   against `TZ_LIMIT_MINUTES` catches it at compile time.
-- **Unused public API.** `Panel::set_time`, `set_segment`,
+- ~~**Unused public API.**~~ Done after M10 (colour in levels, dead state and nits), 2026-10-29; `set_position_color` went too once the trail was dropped. `Panel::set_time`, `set_segment`,
   `set_position_color`, `set_dash`, `Levels::OFF`, `clock::is_synced`,
   `aip33628::IS_MA_TENTHS` and `scan::SLOT_US` have no callers; the lib
   crate hides the warnings. `Panel::lamp_test` is also unused but worth
@@ -1313,7 +1313,8 @@ Bugs, in rough order of value:
   uplink death in twelve. Fix: bound the wait (`with_timeout(PROBE_PERIOD,
   wait_config_up())`) and, once armed, count a period with the link up
   and no address as a failed probe.
-- **The sweep's trailing dash is dark and blinks the armed mark.**
+- ~~**The sweep's trailing dash is dark and blinks the armed mark.**~~
+  Done after M10 (colour in levels, dead state and nits), 2026-10-29.
   `display::dimmed` scales components by 64/256, so none exceeds 63,
   and `GAMMA[0..=76]` is 0: `Levels::from_rgb(dimmed(c))` is (0,0,0)
   for every palette colour. `set_digit_color(tail, …)` therefore sets
@@ -1472,7 +1473,8 @@ and the buzzer's per-note timer (the LEDC API).
 
 In rough order of value:
 
-- **Sub-second time on a minute display.** The clock is an `i64` of
+- ~~**Sub-second time on a minute display.**~~
+  Dropped by the user 2026-10-29: kept as it is. The clock is an `i64` of
   microseconds; `query_ntp` adds the NTP fraction, half the round trip
   and the microseconds since the reply landed (measured in the same
   function, so zero); `restore_carried` adds `RESET_PAUSE` back, which
@@ -1486,7 +1488,8 @@ In rough order of value:
   uptime, which is where the whole seconds tick anyway. About 25 lines
   and one carry word go; the remaining error per sync or reset is under
   a second.
-- **Colour through 8-bit RGB and two lookup tables.** The palette is
+- ~~**Colour through 8-bit RGB and two lookup tables.**~~
+  Done after M10 (colour in levels, dead state and nits), 2026-10-29; 75 % is step 9, not 8. The palette is
   eight `Rgb` values whose components are 0, 96 or 255; `GAMMA[256]`
   turns those three inputs into levels 0, 1 and 7; `BRIGHTNESS_STEP[101]`
   turns five percentages into steps 1, 2, 5, 8 and 15. The sweep's
@@ -1498,7 +1501,8 @@ In rough order of value:
   `current_step_for`, and dim the tail by halving levels with a floor
   of 1, which fixes the sweep bug by construction. About 60 lines go;
   `Panel::set_color` takes a `Levels`. The page keeps its colour names.
-- **Instrumentation from the dropout campaign.** Four pieces measured a
+- ~~**Instrumentation from the dropout campaign.**~~
+  Dropped by the user 2026-10-29: kept as it is. Four pieces measured a
   problem that is now understood and healed: the per-listener `State`,
   `Listener`, `LISTENER` and `log_status` in `http.rs` (70 lines in the
   heartbeat, "the shape of a wedged server"); `net::monitor_task` (link
@@ -1513,13 +1517,13 @@ In rough order of value:
   lines, one task, one `StackResources` slot and two seconds per
   connect go. Whether the serial log is still being watched for these
   is the user's call; `scripts/watch-clock.sh` covers the other side.
-- **Dead state.** `ota::SELECTED` is stored at `init` and never read
+- ~~**Dead state.**~~ Done after M10 (colour in levels, dead state and nits), 2026-10-29. `ota::SELECTED` is stored at `init` and never read
   (the log line uses the local); `carry::SOFT` and `soft_reset` have no
   caller; `clock::is_synced` neither (first-pass item). With the panel
   methods of the first pass (`set_time`, `set_segment`,
   `set_position_color`, `set_dash`, `Levels::OFF`, `IS_MA_TENTHS`,
   `SLOT_US`) that is about 50 lines the lib crate hides warnings for.
-- **Nits.** `PinState::check` compares a one-attempt, four-digit PIN in
+- ~~**Nits.**~~ Done after M10 (colour in levels, dead state and nits), 2026-10-29, except `Counting`, kept. `PinState::check` compares a one-attempt, four-digit PIN in
   constant time; `presented.parse::<u16>() == Some(pin)` with a length
   check is the whole rule. The three `try_changed` calls in
   `display_task` save one loop iteration whose render equals `last` and
@@ -1546,8 +1550,9 @@ In rough order of value:
 ## 7. Roadmap (2026-10-22)
 
 Next work, in priority order: over-the-air updates first, then
-Wi-Fi provisioning from an access point, then the two sensors the board
-already carries. Each entry is the design as planned; it gets the
+Wi-Fi provisioning from an access point, then (added 2026-10-29) a
+`hosttest/` crate so the scratch-crate checks become `cargo test`,
+then the two sensors the board already carries. Each entry is the design as planned; it gets the
 measured facts and the "verified" mark the way the milestones above
 did, and the review backlog stays separate. The hardware facts came
 from `3rdparty/HU-058_ESPHome/docs/hardware.md` (socket pinout), the
@@ -3141,6 +3146,174 @@ again: back to the clock, time from SNTP, `heals` 0 in the boot line
 whatever the count was before. A `/reload` in AP mode comes back as
 `AP`. Watch `heap free` in the heartbeat in AP mode against the
 station's figure; the softAP has its own driver buffers.
+
+### Colour in levels, dead state and nits from the third review pass (after M10) — DONE, verified on the panel 2026-10-29 (colours, brightness, then the single-dash sweep; the PIN not re-checked)
+
+Items 2, 4 and 5 of the third-pass backlog, chosen by the user; items
+1 (sub-second time) and 3 (dropout instrumentation) were dropped by the
+user and struck from the backlog as "keep". Only the first changes what
+the panel shows, and only in the sweep's tail.
+
+- **Colour in duty levels, not 8-bit RGB.** `settings::PALETTE` is
+  eight `panel::Levels` written in the panel's blue-green-red order:
+  red `(0, 0, 7)`, orange `(0, 1, 7)`, yellow `(0, 7, 7)`, green
+  `(0, 7, 0)`, cyan `(7, 7, 0)`, blue `(7, 0, 0)`, magenta `(7, 0, 7)`,
+  white `(7, 7, 7)`: exactly what `GAMMA` made of the old `Rgb` values
+  (255 → 7, 96 → 1), so the panel's colours do not change. `Rgb`,
+  `GAMMA`, `Levels::from_rgb` and `Panel::set_digit_color` are gone;
+  `Panel::set_color` and `set_position_color` take a `Levels`.
+  Brightness: `BRIGHTNESS_CHOICES` is five `(percent, step)` pairs,
+  `(10, 1)`, `(25, 2)`, `(50, 5)`, `(75, 9)`, `(100, 15)`, read off
+  the old `BRIGHTNESS_STEP[101]` table (the backlog said 8 for 75 %;
+  the table says 9). `brightness_count` compares the step directly;
+  `Settings::current_step` returns it; `BRIGHTNESS_STEP` and
+  `current_step_for` are gone. The display no longer clamps the step
+  to `MAX_CURRENT_STEP`: every offered choice is within the ceiling by
+  construction of `BRIGHTNESS_STEPS`, and the stored index is reduced
+  modulo its length. The sweep's tail is `Levels::dimmed`, each
+  channel halved rounding up (7 → 4, 1 → 1, 0 → 0), applied with
+  `set_position_color` to the tail's dash segment only. That is the
+  second-pass fix for "the trailing dash is dark and blinks the armed
+  mark": the old `dimmed` scaled RGB by a quarter and `GAMMA` of
+  anything under 77 is 0, so the tail was never lit and the degree
+  mark went dark one step in four. Both halves struck. **Seen on the
+  panel 2026-10-29, the user asked for the single dash instead:** the
+  tail, `Levels::dimmed` and `set_position_color` are gone and
+  `draw_sweep` lights one dash per step. The degree mark is steady by
+  construction now, since nothing recolours a block during the sweep.
+- **Dead state.** `ota::SELECTED` (stored, never read), `carry::SOFT`
+  and `soft_reset`, `clock::is_synced`, `Panel::set_time` with its
+  `digit` helper, `set_segment`, `set_dash`, `Levels::OFF`,
+  `aip33628::IS_MA_TENTHS` and `scan::SLOT_US` (folded into
+  `CYCLE_US`) are deleted. `set_position_color` stays, now with a
+  caller. `Panel::lamp_test` stays as the hardware aid the first pass
+  kept it for. `settings::update` no longer returns whether it
+  changed anything; the display was the only reader.
+- **Nits.** `PinState::check` compares the digits as a number:
+  `presented.len() == 4 && presented.parse::<u16>() == Ok(pin)`.
+  A one-attempt, four-digit PIN with a lockout gains nothing from a
+  constant-time compare; `bytes_eq` stays for the token. The three
+  `try_changed` calls in `display_task` are gone: the loop's own
+  update wakes its receiver once more, renders the same image and
+  publishes nothing. `Hostname::new` is a `const fn` (a `while` loop
+  over the bytes instead of `zip`) and `Hostname::DEFAULT` is
+  `new(DEFAULT_HOSTNAME).expect(…)`, evaluated at compile time, so the
+  fifteen-line duplicate of the rule is gone and a bad
+  `DEFAULT_HOSTNAME` is still a build error. `http::Counting` was
+  looked at and kept: returning the consumed count from `ota::install`
+  would mean a wider error type on every `?` in `install` and `fill`,
+  or a counting reader inside `ota.rs`, which is `Counting` moved, not
+  removed. Backlog item struck as "kept".
+
+Checked on the host: builds, clippy clean. The old tables were read
+out of git by a script (`GAMMA[96]` is 1, `GAMMA[255]` 7; the steps at
+10, 25, 50, 75 and 100 % are 1, 2, 5, 9 and 15). A scratch crate with
+`config.rs`, `melody.rs`, `panel.rs` and `settings.rs` pulled in by
+`#[path]` checked `Hostname::new` on the old cases (empty, leading or
+trailing dash, `_` and `.`, 24 and 25 characters, upper case lowered),
+`Hostname::DEFAULT` against `DEFAULT_HOSTNAME`, every palette entry
+against the old gamma mapping, that `dimmed` keeps every lit channel
+lit (7 → 4, 1 → 1) and that the default build offers 10, 25 and 50 %
+as steps 1, 2 and 5. (`parse::<u16>` would also take `+123` for PIN
+`0123`: another spelling of the same secret, not a second guess.)
+
+**Verify.** Flash over USB. The colours and brightnesses must look as
+before through the top and bottom buttons (red, orange, yellow, green,
+cyan, blue, magenta, white; 10, 25, 50 %). Before the first sync, or
+after `/reload` with the uplink pulled, the sweep must show a dimmer
+dash one step behind the bright one, and an armed alarm's degree mark
+must stay steady through the sweep. Open `/update`: the PIN still
+works once and a wrong one still locks out for ten seconds.
+
+### Host tests: `cargo test` for the pure modules (next) — planned 2026-10-29
+
+**Problem.** Every milestone since M5 was checked on the host in a
+scratch crate that lived outside the repo and was recreated each time
+(the records above: the mock-flash record round-trips, the form parser
+and page sizes, the head parser, the token and sector functions, the
+melody lengths, the UI grace, the DHCP and DNS servers, the `Hostname`
+rule and the palette this session). Nothing of it survives the
+session, so each pass starts from the PLAN.md prose and the checks
+drift from the code they describe. The firmware crate itself cannot
+host `cargo test`: the lib depends on esp-hal and esp-radio, and
+`.cargo/config.toml` sets the riscv target for everything under the
+repo.
+
+**Design.** A second crate, `hosttest/`, inside the repo but not a
+workspace member, so the root `cargo build --release` does not see it.
+Tried 2026-10-29 in a throwaway directory: it builds and its tests
+pass both ways, and the firmware build is unchanged.
+
+- `hosttest/Cargo.toml` with the dev-only dependencies the modules
+  need on the host: `embassy-sync`, `embassy-time` and
+  `critical-section` on their `std` features, `log`, `heapless`,
+  `embassy-net` on `udp`, `proto-ipv4` and `medium-ethernet` for
+  `dhcpd.rs` and `dnsd.rs`, and `sequential-storage` for the mock
+  flash. Versions pinned to what `Cargo.lock` at the root resolved, so
+  the host runs the same code.
+- `hosttest/.cargo/config.toml` with `build.target` set back to
+  `x86_64-unknown-linux-gnu`; the deeper config wins over the root's
+  riscv target, so `cd hosttest && cargo test` is the whole command.
+  From the root, `cargo test --manifest-path hosttest/Cargo.toml
+  --target x86_64-unknown-linux-gnu` does the same; without the flag
+  the build fails with "can't find crate for std". The root's
+  `[unstable] build-std` line is ignored by stable cargo and does not
+  interfere. `hosttest/target/` is covered by `.gitignore`'s `target/`;
+  `hosttest/Cargo.lock` is committed.
+- `hosttest/src/lib.rs` is `#![cfg(test)]` and pulls the pure modules
+  in by `#[path = "../../src/…"]`, as the scratch crates did:
+  `config.rs`, `melody.rs`, `panel.rs`, `aip33628.rs`, `settings.rs`,
+  `form.rs`, `auth.rs`, `dhcpd.rs`, `dnsd.rs`. The tests live in
+  `hosttest/src/` by module (`panel.rs` tests in `hosttest/src/panel_tests.rs`
+  and so on), not in `#[cfg(test)]` blocks inside the firmware files,
+  so the firmware sources stay free of host-only code and the
+  `#[path]` modules stay exactly the files the firmware compiles.
+- Three things were copied in by hand before and get a hardware-free
+  home instead, so they can be included rather than duplicated: the
+  head parser out of `http.rs` into `http_head.rs` (pure; `http.rs`
+  keeps the sockets), the token, `version_from`, `hash_chunk` and the
+  sector arithmetic out of `ota.rs` into `ota_image.rs`, and the
+  record codec out of `carry.rs` into `carry_record.rs` (`carry.rs`
+  keeps the RTC-RAM static and the reset reason). Each is a move, not
+  a change; the layout table in CLAUDE.md gains the three lines.
+  `ui.rs` needs `buttons::{Button, Event, Kind}` and
+  `clock::LocalTime`, both plain data: a `hosttest/src/stubs.rs`
+  provides them and `ui.rs` is included as is, the way the 2026-10-22
+  UI scratch crate did it.
+- The AiP33628 behavioural model from M1 (shift on CLK rise, latch on
+  DIN rise while CLK high, per-sink lit time against level × unit) is
+  recreated as `hosttest/src/aip_model.rs` with `build_cycle`
+  reimplemented against the current constants, and becomes a test over
+  `Panel::render` for every palette colour and every glyph.
+
+**Tests, ported from the records above in this order:** the checks of
+this session (hostname rule and `DEFAULT`, palette against the old
+gamma mapping, `dimmed`, the offered brightness steps at the default
+and at `MAX_CURRENT_STEP=15`); the record round-trips and migrations
+of every version with `sequential-storage`'s mock flash, including the
+newer-version prefix read; the form parser cases (every key, absent
+checkboxes, unknown key, bad colour, brightness off the list, `24:00`,
+timezone past the limit, malformed escape, empty body, `ssid=` empty,
+the credentials refusal) and the worst-case page, update page and
+twelve-network setup page sizes asserted below `http::RESPONSE_BUF`,
+which turns CLAUDE.md's "measure on the host after adding a field"
+into a failing test; the head parser and token cases of M9; the sector
+loop on the three image lengths; the melody lengths and `pick`; the
+UI grace and skip cases; the DHCP discover, offer, request and
+decline, and the DNS answer; the PIN rule (one attempt, TTL, lockout,
+`+123`). Sizes recorded in PLAN.md become assertions with the number
+in the test, so a change shows up as a diff, not a prose edit.
+
+**Workflow after it lands.** CLAUDE.md's "Verifying without a board"
+section says `cd hosttest && cargo test` instead of "recreate it in a
+scratch crate", and the Build section lists the command. Every later
+milestone adds its host checks there and PLAN.md records "host tests
+pass" with the names of the new tests rather than the prose list.
+
+**Verify.** On the host only: `cargo test` green in `hosttest/`,
+`cargo build --release` and `cargo clippy --release` at the root
+unchanged, and the firmware image size the same before and after the
+three moves (they are moves). Nothing to look at on the panel.
 
 ### M11 — NTC thermometer and light sensor — planned
 

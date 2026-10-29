@@ -24,11 +24,6 @@ pub const IS_WIRE: [u8; 16] = [
     0x0, 0x8, 0x4, 0xC, 0x2, 0xA, 0x6, 0xE, 0x1, 0x9, 0x5, 0xD, 0x3, 0xB, 0x7, 0xF,
 ];
 
-/// Current step to mA per lit sink, in tenths of a mA, from the datasheet.
-pub const IS_MA_TENTHS: [u16; 16] = [
-    25, 51, 76, 101, 126, 152, 177, 202, 227, 253, 278, 303, 328, 354, 379, 404,
-];
-
 /// Nibble bit that drives each wire. The bit index is the SPI SIO line.
 pub const BIT_DATA1: u8 = 1 << 0; // SIO0 -> DATA,   driver 1
 pub const BIT_CLK1: u8 = 1 << 1; // SIO1 -> CLK,    driver 1

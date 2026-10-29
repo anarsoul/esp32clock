@@ -64,31 +64,8 @@ pub const SEG_ANNUN: usize = 7;
 pub const SEG_ANNUN2: usize = 8;
 pub const SEGS: usize = SEGMAP.len();
 
-/// 8-bit colour as a person would pick it. Perceptual, not linear.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct Rgb {
-    pub r: u8,
-    pub g: u8,
-    pub b: u8,
-}
-
-impl Rgb {
-    pub const fn new(r: u8, g: u8, b: u8) -> Self {
-        Rgb { r, g, b }
-    }
-
-    pub const BLACK: Rgb = Rgb::new(0, 0, 0);
-    pub const RED: Rgb = Rgb::new(255, 0, 0);
-    pub const GREEN: Rgb = Rgb::new(0, 255, 0);
-    pub const BLUE: Rgb = Rgb::new(0, 0, 255);
-    pub const YELLOW: Rgb = Rgb::new(255, 255, 0);
-    pub const CYAN: Rgb = Rgb::new(0, 255, 255);
-    pub const MAGENTA: Rgb = Rgb::new(255, 0, 255);
-    pub const WHITE: Rgb = Rgb::new(255, 255, 255);
-    pub const ORANGE: Rgb = Rgb::new(255, 96, 0);
-}
-
-/// Duty level per channel, 0..=MAX_LEVEL, linear light.
+/// Duty level per channel, 0..=MAX_LEVEL, linear light. The panel's
+/// colours are written in this form directly; there is no RGB in between.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct Levels {
     pub blue: u8,
@@ -97,60 +74,14 @@ pub struct Levels {
 }
 
 impl Levels {
-    pub const OFF: Levels = Levels { blue: 0, green: 0, red: 0 };
-
-    /// Linearise an 8-bit colour into duty levels.
-    pub fn from_rgb(c: Rgb) -> Self {
-        Levels {
-            blue: GAMMA[c.b as usize],
-            green: GAMMA[c.g as usize],
-            red: GAMMA[c.r as usize],
-        }
+    pub const fn new(blue: u8, green: u8, red: u8) -> Self {
+        Levels { blue, green, red }
     }
 
     /// Levels in SEG order within an LED triple: +0 blue, +1 green, +2 red.
     pub const fn by_channel(self) -> [u8; 3] {
         [self.blue, self.green, self.red]
     }
-}
-
-/// 8-bit component to duty level 0..=MAX_LEVEL, gamma 2.2.
-const GAMMA: [u8; 256] = [
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1,
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2,
-    2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
-    2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
-    3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
-    3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4,
-    4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
-    4, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
-    5, 5, 5, 5, 5, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6,
-    6, 6, 6, 6, 6, 6, 6, 7, 7, 7, 7, 7, 7, 7, 7, 7,
-];
-
-/// Brightness percent to current step. Perceived output is interpolated
-/// between the 2.5 mA floor and 40.4 mA with gamma 2.8 and snapped to the
-/// nearest step, as the reference firmware does, so all sixteen steps are
-/// spread across the range rather than a third of it being clamped at the
-/// floor.
-const BRIGHTNESS_STEP: [u8; 101] = [
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-    1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3,
-    3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 5, 5, 6, 6, 6,
-    6, 6, 6, 7, 7, 7, 7, 7, 8, 8, 8, 8, 8, 8, 9, 9, 9, 9, 10, 10,
-    10, 10, 10, 11, 11, 11, 11, 12, 12, 12, 12, 13, 13, 13, 13, 14, 14, 14, 14, 15,
-    15,
-];
-
-/// Current step (0..=15) for a brightness in percent.
-pub const fn current_step_for(percent: u8) -> u8 {
-    BRIGHTNESS_STEP[if percent > 100 { 100 } else { percent as usize }]
 }
 
 /// Seven segment font, bit 0 = A through bit 6 = G.
@@ -230,7 +161,7 @@ impl Panel {
     pub const fn new() -> Self {
         Panel {
             on: [[false; SEGS]; 4],
-            level: [[Levels { blue: 0, green: 0, red: MAX_LEVEL }; SEGS]; 4],
+            level: [[Levels::new(0, 0, MAX_LEVEL); SEGS]; 4],
             is_step: 5,
         }
     }
@@ -241,29 +172,14 @@ impl Panel {
     }
 
     /// Colour of the whole panel.
-    pub fn set_color(&mut self, color: Rgb) {
-        let l = Levels::from_rgb(color);
-        self.level = [[l; SEGS]; 4];
-    }
-
-    /// Colour of one digit block, annunciators included.
-    pub fn set_digit_color(&mut self, block: usize, color: Rgb) {
-        self.level[block] = [Levels::from_rgb(color); SEGS];
-    }
-
-    /// Colour of one position.
-    pub fn set_position_color(&mut self, block: usize, seg: usize, color: Rgb) {
-        self.level[block][seg] = Levels::from_rgb(color);
+    pub fn set_color(&mut self, color: Levels) {
+        self.level = [[color; SEGS]; 4];
     }
 
     /// Constant-current step, 0 (2.5 mA) to 15 (40.4 mA) per lit sink.
     /// This is brightness. It must never be derived from what is lit.
     pub fn set_current(&mut self, is_step: u8) {
         self.is_step = is_step.min(15);
-    }
-
-    pub fn set_segment(&mut self, block: usize, seg: usize, on: bool) {
-        self.on[block][seg] = on;
     }
 
     /// Write one character into a digit. Leaves the annunciators alone.
@@ -285,22 +201,8 @@ impl Panel {
         self.on[0][SEG_ANNUN] = on;
     }
 
-    pub fn set_dash(&mut self, on: bool) {
-        self.on[2][SEG_ANNUN] = on;
-    }
-
     pub fn set_degree(&mut self, on: bool) {
         self.on[3][SEG_ANNUN] = on;
-    }
-
-    /// HH:MM with the leading zero of the hour suppressed.
-    pub fn set_time(&mut self, hour: u8, minute: u8) {
-        let hour = hour % 24;
-        let minute = minute % 60;
-        self.set_char(0, if hour >= 10 { digit(hour / 10) } else { ' ' });
-        self.set_char(1, digit(hour % 10));
-        self.set_char(2, digit(minute / 10));
-        self.set_char(3, digit(minute % 10));
     }
 
     /// Light every wired position. A hardware check; keep the current low.
@@ -336,8 +238,4 @@ impl Panel {
         }
         img
     }
-}
-
-const fn digit(d: u8) -> char {
-    (b'0' + d) as char
 }

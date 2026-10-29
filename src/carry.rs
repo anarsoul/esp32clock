@@ -38,9 +38,6 @@ const WORDS: usize = 9;
 #[esp_hal::ram(unstable(rtc_fast, persistent))]
 static RECORD: [AtomicU32; WORDS] = [const { AtomicU32::new(0) }; WORDS];
 
-/// Whether this boot followed a software reset.
-static SOFT: AtomicBool = AtomicBool::new(false);
-
 /// Set by `freeze` once a mode switch has written its record: nothing
 /// may change it in the pause before the reset, and the display tick
 /// writes the time into it every second.
@@ -124,13 +121,7 @@ pub fn init() -> (Option<SocResetReason>, bool) {
     if !keep {
         write_raw(encode(&Carried::default()));
     }
-    SOFT.store(soft, Ordering::Relaxed);
     (reason, keep)
-}
-
-/// Whether this boot followed a software reset.
-pub fn soft_reset() -> bool {
-    SOFT.load(Ordering::Relaxed)
 }
 
 /// The carried state as it stands now.

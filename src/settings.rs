@@ -5,7 +5,7 @@
 //! the persist task each hold a [`Receiver`] and wake when something did.
 //! Pure logic apart from the `embassy-sync` watch, so host-testable.
 
-use core::cell::{Cell, RefCell};
+use core::cell::RefCell;
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::watch::{Receiver, Watch};
@@ -15,33 +15,40 @@ use crate::config::{
     DEFAULT_TZ_OFFSET_MINUTES, MAX_CURRENT_STEP, WIFI_PASSWORD, WIFI_SSID,
 };
 use crate::melody;
-use crate::panel::{Rgb, current_step_for};
+use crate::panel::{Levels, MAX_LEVEL};
 
-/// Colours the top button cycles through.
-pub const PALETTE: [Rgb; 8] = [
-    Rgb::RED,
-    Rgb::ORANGE,
-    Rgb::YELLOW,
-    Rgb::GREEN,
-    Rgb::CYAN,
-    Rgb::BLUE,
-    Rgb::MAGENTA,
-    Rgb::WHITE,
+/// A channel fully lit.
+const F: u8 = MAX_LEVEL;
+
+/// Colours the top button cycles through, as duty levels in the panel's
+/// blue-green-red order. Orange has a touch of green.
+pub const PALETTE: [Levels; 8] = [
+    Levels::new(0, 0, F), // red
+    Levels::new(0, 1, F), // orange
+    Levels::new(0, F, F), // yellow
+    Levels::new(0, F, 0), // green
+    Levels::new(F, F, 0), // cyan
+    Levels::new(F, 0, 0), // blue
+    Levels::new(F, 0, F), // magenta
+    Levels::new(F, F, F), // white
 ];
 
 /// Names of the palette entries, for the page and the API.
 pub const PALETTE_NAMES: [&str; 8] = ["red", "orange", "yellow", "green", "cyan", "blue", "magenta", "white"];
 
-/// Every brightness the firmware knows, in percent, ascending. A stored
-/// brightness is an index into this list, whatever the build's ceiling.
-const BRIGHTNESS_CHOICES: [u8; 5] = [10, 25, 50, 75, 100];
+/// Every brightness the firmware knows, as a percent for the page and
+/// the current step (0 is 2.5 mA, 15 is 40.4 mA per lit sink) it means,
+/// ascending. A stored brightness is an index into this list, whatever
+/// the build's ceiling. The steps are the stock firmware's curve, gamma
+/// 2.8 between the floor and the top step, read at these five points.
+const BRIGHTNESS_CHOICES: [(u8, u8); 5] = [(10, 1), (25, 2), (50, 5), (75, 9), (100, 15)];
 
 /// How many of the choices stay within `config::MAX_CURRENT_STEP`. The
-/// list is ascending and the current table monotonic, so they are a
-/// prefix. 10 % is step 1, so any ceiling from 1 up keeps at least one.
+/// list is ascending, so they are a prefix. 10 % is step 1, so any
+/// ceiling from 1 up keeps at least one.
 const fn brightness_count() -> usize {
     let mut n = 0;
-    while n < BRIGHTNESS_CHOICES.len() && current_step_for(BRIGHTNESS_CHOICES[n]) <= MAX_CURRENT_STEP {
+    while n < BRIGHTNESS_CHOICES.len() && BRIGHTNESS_CHOICES[n].1 <= MAX_CURRENT_STEP {
         n += 1;
     }
     n
@@ -55,7 +62,7 @@ pub const BRIGHTNESS_STEPS: [u8; brightness_count()] = {
     let mut out = [0u8; brightness_count()];
     let mut i = 0;
     while i < out.len() {
-        out[i] = BRIGHTNESS_CHOICES[i];
+        out[i] = BRIGHTNESS_CHOICES[i].0;
         i += 1;
     }
     out
@@ -78,40 +85,29 @@ pub struct Hostname {
 }
 
 impl Hostname {
-    /// Validate and store a name, lower-casing ASCII letters.
-    pub fn new(name: &str) -> Option<Hostname> {
+    /// Validate and store a name, lower-casing ASCII letters. `const` so
+    /// the build-time default is checked by the same rule.
+    pub const fn new(name: &str) -> Option<Hostname> {
         let src = name.as_bytes();
         if src.is_empty() || src.len() > HOSTNAME_MAX || src[0] == b'-' || src[src.len() - 1] == b'-' {
             return None;
         }
         let mut bytes = [0u8; HOSTNAME_MAX];
-        for (dst, &c) in bytes.iter_mut().zip(src) {
-            *dst = match c {
-                b'a'..=b'z' | b'0'..=b'9' | b'-' => c,
-                b'A'..=b'Z' => c.to_ascii_lowercase(),
+        let mut i = 0;
+        while i < src.len() {
+            bytes[i] = match src[i] {
+                c @ (b'a'..=b'z' | b'0'..=b'9' | b'-') => c,
+                c @ b'A'..=b'Z' => c.to_ascii_lowercase(),
                 _ => return None,
             };
+            i += 1;
         }
         Some(Hostname { len: src.len() as u8, bytes })
     }
 
-    /// The compile-time default; the constant is checked at build time.
-    pub const DEFAULT: Hostname = {
-        let src = DEFAULT_HOSTNAME.as_bytes();
-        assert!(!src.is_empty() && src.len() <= HOSTNAME_MAX, "DEFAULT_HOSTNAME length");
-        let mut bytes = [0u8; HOSTNAME_MAX];
-        let mut i = 0;
-        while i < src.len() {
-            let c = src[i];
-            assert!(
-                (c >= b'a' && c <= b'z') || (c >= b'0' && c <= b'9') || (c == b'-' && i != 0 && i != src.len() - 1),
-                "DEFAULT_HOSTNAME must be a-z, 0-9 and inner dashes"
-            );
-            bytes[i] = c;
-            i += 1;
-        }
-        Hostname { len: src.len() as u8, bytes }
-    };
+    /// The compile-time default; a constant that breaks the rule is a
+    /// build error.
+    pub const DEFAULT: Hostname = Hostname::new(DEFAULT_HOSTNAME).expect("DEFAULT_HOSTNAME: 1 to 24 of a-z, 0-9 and inner dashes");
 
     pub fn as_str(&self) -> &str {
         // Only ASCII gets in, so this cannot fail.
@@ -376,12 +372,18 @@ impl Settings {
         }
     }
 
-    pub fn color(&self) -> Rgb {
+    pub fn color(&self) -> Levels {
         PALETTE[self.color % PALETTE.len()]
     }
 
     pub fn brightness_pct(&self) -> u8 {
         BRIGHTNESS_STEPS[self.brightness % BRIGHTNESS_STEPS.len()]
+    }
+
+    /// The current step the brightness means. Within the build's ceiling
+    /// by construction of `BRIGHTNESS_STEPS`.
+    pub fn current_step(&self) -> u8 {
+        BRIGHTNESS_CHOICES[self.brightness % BRIGHTNESS_STEPS.len()].1
     }
 
     /// Every field within its range.
@@ -516,10 +518,9 @@ pub fn get() -> Settings {
 
 /// Apply `f` to the settings and notify receivers if anything changed.
 /// Returns whether it did.
-pub fn update(f: impl FnOnce(&mut Settings)) -> bool {
+pub fn update(f: impl FnOnce(&mut Settings)) {
     // The watch wants a `Fn`; the closure runs exactly once under its lock.
     let f = RefCell::new(Some(f));
-    let changed = Cell::new(false);
     WATCH.sender().send_if_modified(|slot| {
         let before = slot.unwrap_or(Settings::DEFAULT);
         let mut after = before;
@@ -530,10 +531,8 @@ pub fn update(f: impl FnOnce(&mut Settings)) -> bool {
         if modified {
             *slot = Some(after);
         }
-        changed.set(modified);
         modified
     });
-    changed.get()
 }
 
 /// A receiver that wakes on every change. Panics past `RECEIVERS`.

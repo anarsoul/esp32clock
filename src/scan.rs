@@ -89,17 +89,14 @@ pub const UNIT_BYTES: usize = UNIT_US * (SPI_HZ as usize / 1_000_000) / 2;
 /// Units per slot: 1 + 2 + 4 for three planes.
 pub const SLOT_UNITS: usize = (1 << PLANES) - 1;
 
-/// Microseconds each COM pair is lit.
-pub const SLOT_US: usize = UNIT_US * SLOT_UNITS;
-
 /// Bytes per COM slot.
 pub const SLOT_BYTES: usize = UNIT_BYTES * SLOT_UNITS;
 
 /// Bytes per cycle: four slots.
 pub const CYCLE_BYTES: usize = SLOTS * SLOT_BYTES;
 
-/// Microseconds per cycle.
-pub const CYCLE_US: usize = SLOTS * SLOT_US;
+/// Microseconds per cycle: four slots of `SLOT_UNITS` units each.
+pub const CYCLE_US: usize = SLOTS * UNIT_US * SLOT_UNITS;
 
 /// Bytes per DMA transfer: the cycles plus the trailing blanking frame.
 pub const TRANSFER_BYTES: usize = CYCLES_PER_TRANSFER * CYCLE_BYTES + FRAME_BYTES;

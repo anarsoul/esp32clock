@@ -91,10 +91,9 @@ impl Slot {
     }
 }
 
-/// The slot the running image was loaded from, and the one `otadata`
-/// selects; they differ only after the bootloader fell back.
+/// The slot the running image was loaded from. It differs from the one
+/// `otadata` selects only after the bootloader fell back.
 static BOOTED: AtomicU8 = AtomicU8::new(Slot::Unknown as u8);
-static SELECTED: AtomicU8 = AtomicU8::new(Slot::Unknown as u8);
 
 /// The slot the running image came from.
 pub fn booted() -> Slot {
@@ -143,7 +142,6 @@ pub fn init() {
         Ok(mut updater) => (updater.selected_partition().map(Slot::from_subtype).unwrap_or(Slot::Unknown), true),
         Err(_) => (Slot::Unknown, false),
     });
-    SELECTED.store(selected as u8, Ordering::Relaxed);
     info!(
         "ota: firmware {VERSION}, booted from {}, otadata selects {}, updates {}",
         booted.name(),

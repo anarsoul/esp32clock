@@ -194,7 +194,7 @@ answered or an HTTP request served bumps it, and the third such boot
 | file | role |
 | --- | --- |
 | `src/aip33628.rs` | frame format, bit-reversed current table, quad-nibble waveform encoder; pure `core` |
-| `src/panel.rs` | COM/SEG map, font, per-position colour, gamma and brightness tables, `Panel::render` → `ScanImage` |
+| `src/panel.rs` | COM/SEG map, font, per-position colour as duty `Levels` (no RGB; the palette is written in levels), `Panel::render` → `ScanImage` |
 | `src/scan.rs` | cycle/transfer builder, double-buffered DMA scan task that builds the SPI2 quad + DMA bus itself (an async esp-hal driver is `!Send`), restart-gap statistics, `stop` on a blank frame before a deliberate reset or a flash write, `resume` after a failed one |
 | `src/display.rs` | UI loop: tick, button or settings change → `ui` → draw → publish; rings the alarm; shows the IP, or `AP` in place of the sweep on the access point; acts on the hold before the UI sees it; seeds and carries the skip flag and the time the alarm last rang |
 | `src/ui.rs` | mode state machine, pure logic, one timer for the current mode; edits the settings it is handed; alarm due check and missed-alarm grace, both gated by the carried time the alarm last rang; consumes `skip_next` |

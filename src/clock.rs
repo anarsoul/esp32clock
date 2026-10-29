@@ -92,11 +92,6 @@ pub fn unix_micros() -> Option<i64> {
     Some(uptime_us() + offset)
 }
 
-/// Whether a sync has happened.
-pub fn is_synced() -> bool {
-    critical_section::with(|cs| OFFSET_US.borrow(cs).get()).is_some()
-}
-
 /// Unix time in whole seconds, if synced.
 pub fn unix_secs() -> Option<i64> {
     Some(unix_micros()?.div_euclid(1_000_000))

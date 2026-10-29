@@ -10,22 +10,13 @@ use log::info;
 use crate::buttons::{self, Kind};
 use crate::buzzer;
 use crate::net::{self, Mode};
-use crate::config::MAX_CURRENT_STEP;
-use crate::panel::{Panel, Rgb, ScanImage, current_step_for};
+use crate::panel::{Panel, ScanImage};
 use crate::settings::{self, Settings};
 use crate::ui::{Field, IP_STEP, Ui, View};
 use crate::{auth, carry, clock, heal, scan, settings as settings_mod};
 
 /// Step time of the waiting animation and of the blink.
 const BLINK_STEP: Duration = Duration::from_millis(250);
-
-/// Component scale for the trailing dash, out of 256.
-const TRAIL_SCALE: u16 = 64;
-
-fn dimmed(c: Rgb) -> Rgb {
-    let f = |v: u8| ((v as u16 * TRAIL_SCALE) >> 8) as u8;
-    Rgb::new(f(c.r), f(c.g), f(c.b))
-}
 
 /// Hours as shown: 24 hour, or 12 hour with the AM mark.
 fn draw_hhmm(panel: &mut Panel, twelve_hour: bool, hour: u8, minute: u8, show_hour: bool, show_minute: bool) {
@@ -47,15 +38,11 @@ fn draw_hhmm(panel: &mut Panel, twelve_hour: bool, hour: u8, minute: u8, show_ho
     }
 }
 
-/// One dash sweeps across the four digits with a dimmer dash one step
-/// behind it, so a glance says "working on it".
-fn draw_sweep(panel: &mut Panel, color: Rgb, phase_ms: u64) {
+/// One dash sweeps across the four digits, so a glance says "working
+/// on it".
+fn draw_sweep(panel: &mut Panel, phase_ms: u64) {
     let step = (phase_ms / BLINK_STEP.as_millis()) as usize;
-    let head = step % 4;
-    let tail = (step + 3) % 4;
-    panel.set_digit_color(tail, dimmed(color));
-    panel.set_char(head, '-');
-    panel.set_char(tail, '-');
+    panel.set_char(step % 4, '-');
 }
 
 /// One octet of the IP: its number (1 to 4) in the first digit, its
@@ -86,7 +73,7 @@ fn draw_pin(panel: &mut Panel, pin: u16) {
 fn draw(panel: &mut Panel, view: View, settings: &Settings, ip: Option<[u8; 4]>, phase_ms: u64) {
     panel.clear();
     panel.set_color(settings.color());
-    panel.set_current(current_step_for(settings.brightness_pct()).min(MAX_CURRENT_STEP));
+    panel.set_current(settings.current_step());
     panel.set_degree(settings.alarm_armed);
     let twelve = settings.twelve_hour;
     match view {
@@ -96,7 +83,7 @@ fn draw(panel: &mut Panel, view: View, settings: &Settings, ip: Option<[u8; 4]>,
             panel.set_char(0, 'A');
             panel.set_char(1, 'P');
         }
-        View::Sweep => draw_sweep(panel, settings.color(), phase_ms),
+        View::Sweep => draw_sweep(panel, phase_ms),
         View::Time { time, colon } => {
             draw_hhmm(panel, twelve, time.hour, time.minute, true, true);
             panel.set_colon(colon);
@@ -149,7 +136,6 @@ pub async fn display_task(stack: Stack<'static>) -> ! {
     let mut carried_skip = carried.skip_next;
     if carried.skip_next {
         settings::update(|s| s.skip_next = true);
-        let _ = changes.try_changed();
         info!("display: skip-next alarm carried over the reset");
     }
     let mut carried_alarm = carried.last_alarm_unix;
@@ -165,9 +151,7 @@ pub async fn display_task(stack: Stack<'static>) -> ! {
         // write it on the way down; this loop runs at least every second.
         clock::carry_time();
         // The tick only writes the settings to use up a skipped alarm.
-        if settings::update(|s| ui.tick(s, time, now)) {
-            let _ = changes.try_changed();
-        }
+        settings::update(|s| ui.tick(s, time, now));
         let current = settings::get();
         if current.skip_next != carried_skip {
             carried_skip = current.skip_next;
@@ -237,8 +221,6 @@ pub async fn display_task(stack: Stack<'static>) -> ! {
                 }
                 let now = Instant::now();
                 settings::update(|s| ui.handle(s, ev, now));
-                // Our own change; the redraw happens on this loop anyway.
-                let _ = changes.try_changed();
             }
             Either4::Third(_) => {}
             Either4::Fourth(pin) => ui.show_pin(pin, Instant::now()),

@@ -86,6 +86,7 @@ impl PinState {
     }
 
     /// Check the presented digits against the pending PIN, using it up.
+    /// One attempt at four digits, then a lockout: nothing to time.
     pub fn check(&mut self, now_ms: u64, presented: &str) -> Result<(), PinError> {
         let Some((pin, issued)) = self.pending.take() else {
             return Err(PinError::None);
@@ -93,13 +94,7 @@ impl PinState {
         if now_ms.saturating_sub(issued) > PIN_TTL_MS {
             return Err(PinError::Expired);
         }
-        let digits = [
-            b'0' + (pin / 1000) as u8,
-            b'0' + (pin / 100 % 10) as u8,
-            b'0' + (pin / 10 % 10) as u8,
-            b'0' + (pin % 10) as u8,
-        ];
-        if bytes_eq(&digits, presented.as_bytes()) {
+        if presented.len() == 4 && presented.parse::<u16>() == Ok(pin) {
             Ok(())
         } else {
             self.locked_until = Some(now_ms + PIN_LOCKOUT_MS);
