@@ -513,6 +513,39 @@ pub fn write_page(
     )
 }
 
+/// Bytes the setup page's list of networks may take, strongest first.
+/// A plain 32-byte SSID is about 104 bytes of `<option>`; one of 32 `"`
+/// is about 424, since `HtmlStr` writes it twice. Twelve plain ones fit;
+/// the test `provision_page_budget_is_covered` locks this against the
+/// rest of the page and `PAGE_MAX`.
+pub const NETWORK_LIST_BUDGET: usize = 1900;
+
+/// A `Write` that only measures. What an `<option>` will cost before it
+/// is written, exact by construction, so no arithmetic repeats the
+/// format string.
+#[derive(Default)]
+struct Counter(usize);
+
+impl core::fmt::Write for Counter {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        self.0 += s.len();
+        Ok(())
+    }
+}
+
+/// One network of the setup page's list.
+fn write_network_option(out: &mut impl core::fmt::Write, n: &Network, stored: &str) -> core::fmt::Result {
+    write!(
+        out,
+        "<option value=\"{}\"{}>{} ({} dBm{})</option>",
+        HtmlStr(n.ssid.as_str()),
+        if n.ssid.as_str() == stored { " selected" } else { "" },
+        HtmlStr(n.ssid.as_str()),
+        n.rssi,
+        if n.open { ", open" } else { "" },
+    )
+}
+
 /// The provisioning page, what `GET /` serves while the clock is an
 /// access point: the networks the scan saw as a list, a field for one
 /// it did not (hidden, or out of range at the time), the password, and
@@ -520,7 +553,10 @@ pub fn write_page(
 /// panel cannot show without a time. The password field is empty
 /// whatever is stored (write-only); empty on submit means an open
 /// network. The Rescan button posts the form to `/scan`, which scans
-/// and comes back here.
+/// and comes back here. The list stops at `NETWORK_LIST_BUDGET` bytes,
+/// so a few hostile SSIDs of 32 `"` cannot push the page past the
+/// response buffer; what was left out is counted under the list and
+/// can be typed.
 pub fn write_provision_page(
     out: &mut impl core::fmt::Write,
     s: &Settings,
@@ -537,18 +573,20 @@ pub fn write_provision_page(
         Some(FormError::Forbidden) => out.write_str("<p class=err>Nothing was saved.</p>")?,
     }
     let stored = s.wifi.ssid.as_str();
-    let listed = networks.iter().any(|n| n.ssid.as_str() == stored);
     out.write_str("<form method=post action=/><label>Network <select name=ssid_pick id=n>")?;
+    let mut room = NETWORK_LIST_BUDGET;
+    let mut shown = 0;
+    let mut listed = false;
     for n in networks {
-        write!(
-            out,
-            "<option value=\"{}\"{}>{} ({} dBm{})</option>",
-            HtmlStr(n.ssid.as_str()),
-            if n.ssid.as_str() == stored { " selected" } else { "" },
-            HtmlStr(n.ssid.as_str()),
-            n.rssi,
-            if n.open { ", open" } else { "" },
-        )?;
+        let mut cost = Counter::default();
+        write_network_option(&mut cost, n, stored)?;
+        if cost.0 > room {
+            break;
+        }
+        room -= cost.0;
+        write_network_option(out, n, stored)?;
+        shown += 1;
+        listed |= n.ssid.as_str() == stored;
     }
     write!(
         out,
@@ -570,6 +608,8 @@ pub fn write_provision_page(
     )?;
     if networks.is_empty() {
         out.write_str("<p><small>No networks seen yet; rescan, or type the name.</small></p>")?;
+    } else if shown < networks.len() {
+        write!(out, "<p><small>{} more not shown; type the name.</small></p>", networks.len() - shown)?;
     }
     // The typed-name field only when the list's choice is "Other".
     out.write_str(
@@ -813,9 +853,61 @@ mod tests {
         assert!(out.ends_with("</html>"));
     }
 
+    /// The setup page without a list and everything else at its worst:
+    /// what the list's budget is measured against.
+    fn provision_page_fixed_worst() -> usize {
+        let mut s = Settings::DEFAULT;
+        s.hostname = Hostname::new(&"h".repeat(HOSTNAME_MAX)).unwrap();
+        s.wifi.ssid = Text::new(&"\"".repeat(SSID_MAX)).unwrap(); // not listed: escaped into the field
+        s.tz_offset_minutes = -TZ_LIMIT_MINUTES;
+        // More networks than the budget holds, none of them the stored one,
+        // so the "more not shown" line is there and the field is full.
+        let n = Network { ssid: Text::new(&format!("x{}", "\"".repeat(SSID_MAX - 1))).unwrap(), rssi: -100, open: true };
+        let huge = [n; 100];
+        let mut out = String::new();
+        write_provision_page(&mut out, &s, &status(false), &huge, Some(FormError::BadValue)).unwrap();
+        assert!(out.contains("<option value=\"\" selected>Other"), "the stored network is not listed, so Other is selected");
+        let shown = out.matches("<option value=\"x").count();
+        assert!(shown > 0 && shown < 100);
+        assert!(out.contains(&format!("{} more not shown", 100 - shown)));
+        let mut one = Counter::default();
+        write_network_option(&mut one, &n, s.wifi.ssid.as_str()).unwrap();
+        assert!(shown * one.0 <= NETWORK_LIST_BUDGET && (shown + 1) * one.0 > NETWORK_LIST_BUDGET, "the list stops at the budget");
+        let fixed = out.len() - shown * one.0;
+        println!("setup page without a list: {fixed} bytes; a hostile option is {} bytes", one.0);
+        fixed
+    }
+
+    #[test]
+    fn provision_page_budget_is_covered() {
+        assert!(provision_page_fixed_worst() + NETWORK_LIST_BUDGET <= PAGE_MAX);
+    }
+
+    /// Hostile SSIDs cost five or six bytes a character, twice: the list
+    /// stops within its budget and the page within the buffer.
+    #[test]
+    fn provision_page_survives_hostile_ssids() {
+        let mut s = Settings::DEFAULT;
+        s.wifi.ssid = Text::new(&"&".repeat(SSID_MAX)).unwrap();
+        let hostile: Vec<Network> = (0..12)
+            .map(|i| Network { ssid: Text::new(&format!("{i:02}{}", "\"".repeat(SSID_MAX - 2))).unwrap(), rssi: -(40 + i), open: false })
+            .chain(core::iter::once(Network { ssid: s.wifi.ssid, rssi: -99, open: false }))
+            .collect();
+        let mut out = String::new();
+        write_provision_page(&mut out, &s, &status(false), &hostile, None).unwrap();
+        println!("setup page, hostile: {} bytes of {PAGE_MAX}", out.len());
+        assert!(out.len() <= PAGE_MAX, "{} bytes", out.len());
+        let shown = out.matches("<option value=\"0").count();
+        assert!((1..12).contains(&shown), "{shown} shown");
+        assert!(out.contains(&format!("{} more not shown", 13 - shown)));
+        assert!(out.contains("<option value=\"00&quot;"), "the strongest is listed first");
+        // The stored network was past the budget: it is typed in, and Other is selected.
+        assert!(out.contains("<option value=\"\" selected>Other"));
+        assert!(out.contains(&format!("name=ssid maxlength={SSID_MAX} value=\"{}\"", "&amp;".repeat(SSID_MAX))));
+    }
+
     /// The setup page with the twelve networks the scan keeps, every
-    /// SSID at its longest. (An SSID of 32 `"` would double its share
-    /// through `HtmlStr`; see PLAN.md.)
+    /// SSID at its longest; all of them within the budget.
     #[test]
     fn provision_page_fits_the_response_buffer() {
         let mut s = Settings::DEFAULT;
@@ -828,7 +920,19 @@ mod tests {
         write_provision_page(&mut out, &s, &status(false), &networks, Some(FormError::BadValue)).unwrap();
         println!("setup page: {} bytes of {PAGE_MAX}", out.len());
         assert!(out.len() <= PAGE_MAX, "{} bytes", out.len());
+        assert_eq!(out.matches("<option value=\"").count(), 13, "twelve networks and Other");
+        assert!(!out.contains("more not shown"));
         assert!(out.contains("Other, typed below</option>"));
+        // The stored network, when listed, is selected and the field is empty.
+        s.wifi.ssid = networks[3].ssid;
+        let mut again = String::new();
+        write_provision_page(&mut again, &s, &status(false), &networks, None).unwrap();
+        assert!(again.contains(&format!("<option value=\"{}\" selected>", networks[3].ssid.as_str())));
+        assert!(again.contains("<option value=\"\">Other"));
+        assert!(again.contains(&format!("name=ssid maxlength={SSID_MAX} value=\"\"")));
+        let mut empty = String::new();
+        write_provision_page(&mut empty, &Settings::DEFAULT, &status(false), &[], None).unwrap();
+        assert!(empty.contains("No networks seen yet"));
         assert!(out.contains(&format!("value=\"{}\"", "o".repeat(SSID_MAX))), "the unlisted stored network is typed in");
         let mut saved = String::new();
         s.wifi.ssid = Text::new("a<b").unwrap();

@@ -3204,8 +3204,9 @@ the panel shows, and only in the sweep's tail.
   would mean a wider error type on every `?` in `install` and `fill`,
   or a counting reader inside `ota.rs`, which is `Counting` moved, not
   removed. Backlog item struck as "kept".
-- **The setup page can outgrow the buffer on hostile SSIDs** (found by
-  the host tests, 2026-10-29). `write_provision_page` escapes each
+- ~~**The setup page can outgrow the buffer on hostile SSIDs**~~ (found by
+  the host tests, 2026-10-29). Done the same day, "Setup page within the
+  buffer on hostile SSIDs". `write_provision_page` escapes each
   listed SSID twice; twelve SSIDs of 32 `"` or `&` are about 4.4 KB
   of entities and the page is a `500` while they are in range. Cap the
   escaped length or list the label only.
@@ -3358,6 +3359,59 @@ escaped length, or listing the label only, would close it.
 `http://<ip>/` loads and a setting saved from the page sticks. The
 move touched no logic beyond the `local_time` wrapper.
 
+
+### Setup page within the buffer on hostile SSIDs (after the host tests) — DONE on the host 2026-10-29
+
+**Problem.** Found by the host tests. `write_provision_page` lists
+each scanned network as `<option value="…">… (-67 dBm)</option>`,
+the SSID escaped twice through `HtmlStr`. A 32-byte SSID of plain
+characters costs about 104 bytes a network and twelve fit in 1248;
+one of 32 `"` costs 6 bytes a character twice over, about 424 a
+network, so five such networks in range push the page past
+`RESPONSE_BUF` and the setup page is a `500` for as long as they are
+heard. The stored SSID goes through `HtmlStr` once more in the
+"Other" field. Nothing a passer-by cannot do with a phone hotspot.
+
+**Design.** A byte budget for the list, spent strongest first, exact
+by construction.
+
+- `form::NETWORK_LIST_BUDGET`, the bytes the `<option>` lines may
+  take. `write_provision_page` formats each option into a counting
+  `Write` first (a `Counter` that adds up `write_str` lengths; no
+  buffer, no duplicated arithmetic), and writes it for real only if
+  it fits what is left of the budget; the first one that does not
+  ends the list, since the list is sorted strongest first and the
+  weaker ones are the ones to lose. `listed` (whether the stored
+  network appears, which decides the "Other" option's `selected` and
+  the typed field's value) is taken over the networks written, so a
+  stored network dropped from the list lands in the field. When
+  anything was dropped the page says so under the list: "N more not
+  shown; type the name."
+- The budget is locked by a test, not hand-tuned: the page with no
+  networks and every other string at its worst (24-byte hostname, a
+  stored SSID of 32 `"` in the field, the notice, the "more not
+  shown" line) plus `NETWORK_LIST_BUDGET` must be at most `PAGE_MAX`;
+  twelve plain 32-byte SSIDs must all be listed; twelve of 32 `"`
+  must give a page within `PAGE_MAX` with some listed and the rest
+  counted in the note; a stored network that is dropped must appear
+  in the field.
+- Nothing changes on the wire for ordinary networks: twelve plain
+  32-byte SSIDs are well within the budget, and the `/api` JSON does
+  not list networks. `net.rs`'s scan filter and the `ssid_pick`
+  handling are untouched; a dropped network is still joinable by
+  typing its name.
+
+**Done, 2026-10-29.** `NETWORK_LIST_BUDGET` is 1900. Measured by the
+tests: a hostile option (`x` and 31 `"`) is 417 bytes, so four are
+listed and the fifth starts the "more not shown" line; the page with
+no list and everything else at its worst (24-byte hostname, a stored
+SSID of 32 `"` in the field, the notice, the line) is 1915, and
+1915 + 1900 = 3815 of `PAGE_MAX` 3968. Twelve plain 32-byte SSIDs
+are 2945 as before, all listed, no line; twelve hostile ones plus a
+stored one past the budget give 3484, the stored one typed into the
+field with Other selected. 63 host tests, clippy clean on both
+crates. Nothing to see on the panel; a bench hotspot named 32 `"`
+would show four listed at most and the line.
 
 ### M11 — NTC thermometer and light sensor — planned
 

@@ -321,10 +321,13 @@ module ends with its `#[cfg(test)] mod tests`.
   `form` tests build each page at its worst case and assert it
   (2026-10-29: settings 2769, update 2989, setup with twelve
   32-character networks 2945). `cargo host-test` after adding a field
-  or label; the test prints the sizes with `-- --nocapture`. A listed
-  SSID of 32 `"` or `&` would grow the setup page past the buffer
-  through `HtmlStr` (each is five or six bytes, twice per network);
-  not handled, see the PLAN.md backlog.
+  or label; the test prints the sizes with `-- --nocapture`. The setup
+  page's network list stops at `form::NETWORK_LIST_BUDGET` (1900)
+  bytes, strongest first, with a "N more not shown" line, because a
+  listed SSID of 32 `"` is 417 bytes of `<option>` through `HtmlStr`
+  (twice per network) and five of them would pass the buffer; the rest
+  of the page at its worst is 1915, and `provision_page_budget_is_covered`
+  locks the sum under `PAGE_MAX`.
 - `http::RX_BUF` (4096) is the TCP receive window; 1 KB made an upload
   one segment per round trip. `REQUEST_BUF` (1536) still bounds the
   head; an upload's body stays on the socket.
