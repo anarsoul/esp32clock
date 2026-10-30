@@ -5,7 +5,7 @@ use core::fmt::Write as _;
 
 use crate::melody;
 use crate::settings::{
-    BRIGHTNESS_STEPS, DAY_NAMES, DAYS_ALL, DAYS_WEEKDAYS, DAYS_WEEKEND, HOSTNAME_MAX, Hostname, PALETTE_NAMES,
+    BRIGHTNESS_STEPS, Credentials, DAY_NAMES, DAYS_ALL, DAYS_WEEKDAYS, DAYS_WEEKEND, HOSTNAME_MAX, Hostname, PALETTE_NAMES,
     PASSWORD_MAX, PASSWORD_MIN, SSID_MAX, Secret, Settings, TOKEN_MAX, TZ_LIMIT_MINUTES, Text, valid_password,
     valid_token,
 };
@@ -258,13 +258,17 @@ pub fn apply_one(s: &mut Settings, key: &str, value: &str, credentials: bool) ->
 /// With `checkboxes_absent_off`, as for the page's form, the boolean
 /// fields are turned off unless the body turns them on. `credentials`
 /// is passed to `apply_one`. The first bad pair stops and is reported;
-/// earlier pairs stay applied, so the caller works on a copy.
+/// earlier pairs stay applied, so the caller works on a copy. A
+/// non-empty `ssid_pick` (the setup form's list) wins over `ssid` (its
+/// typed field) whatever their order, since a browser may send a stale
+/// typed name along with the pick.
 pub fn apply(s: &mut Settings, body: &[u8], checkboxes_absent_off: bool, credentials: bool) -> Result<(), FormError> {
     if checkboxes_absent_off {
         s.alarm_armed = false;
         s.twelve_hour = false;
         s.skip_next = false;
     }
+    let mut pick = None;
     for (key, value) in Pairs(body) {
         let mut kbuf = [0u8; 16];
         let mut vbuf = [0u8; VALUE_MAX];
@@ -273,6 +277,37 @@ pub fn apply(s: &mut Settings, body: &[u8], checkboxes_absent_off: bool, credent
         let key = core::str::from_utf8(&kbuf[..kn]).map_err(|_| FormError::UnknownKey)?;
         let value = core::str::from_utf8(&vbuf[..vn]).map_err(|_| FormError::BadValue)?;
         apply_one(s, key, value, credentials)?;
+        if key == "ssid_pick" && !value.is_empty() {
+            pick = Some(s.wifi.ssid);
+        }
+    }
+    if let Some(ssid) = pick {
+        s.wifi.ssid = ssid;
+    }
+    Ok(())
+}
+
+/// The setup form's password rule, run on the applied form against the
+/// stored network and the scan list. The form's password field is
+/// write-only and so always posted, empty unless typed:
+///
+/// - the stored network again with no password keeps the stored
+///   password, unless the scan lists that network as open;
+/// - another network the scan lists as secured, with no password, is a
+///   bad value: the join would fail for certain;
+/// - anything else is as posted, so a network the scan did not see is
+///   taken on trust, open or not.
+pub fn settle_password(trial: &mut Settings, stored: &Credentials, networks: &[Network]) -> Result<(), FormError> {
+    if !trial.wifi.password.0.is_empty() {
+        return Ok(());
+    }
+    let listed_open = networks.iter().find(|n| n.ssid == trial.wifi.ssid).map(|n| n.open);
+    if trial.wifi.ssid == stored.ssid {
+        if listed_open != Some(true) {
+            trial.wifi.password = stored.password;
+        }
+    } else if listed_open == Some(false) {
+        return Err(FormError::BadValue);
     }
     Ok(())
 }
@@ -568,7 +603,7 @@ pub fn write_provision_page(
     out.write_str("<title>Clock setup</title></head><body><h1>Clock setup</h1>")?;
     match error {
         None => out.write_str("<p>The clock has no network to join, or was asked to wait for one. Give it yours and it restarts into it.</p>")?,
-        Some(FormError::BadValue) => out.write_str("<p class=err>Nothing was saved: a field had a bad value, or no network was named.</p>")?,
+        Some(FormError::BadValue) => out.write_str("<p class=err>Nothing was saved: a field had a bad value, no network was named, or a secured network was given no password.</p>")?,
         Some(FormError::UnknownKey) => out.write_str("<p class=err>Nothing was saved: an unknown field was sent.</p>")?,
         Some(FormError::Forbidden) => out.write_str("<p class=err>Nothing was saved.</p>")?,
     }
@@ -591,13 +626,14 @@ pub fn write_provision_page(
     write!(
         out,
         "<option value=\"\"{}>Other, typed below</option></select></label>\
-<label id=o>Other network name <input type=text name=ssid maxlength={smax} value=\"{}\"></label>\
-<label>Password, empty for an open network <input type=password name=password minlength={pmin} maxlength={pmax} autocomplete=off></label>\
+<label id=o>Other network name <input type=text name=ssid id=i maxlength={smax} value=\"{}\"></label>\
+<label>Password, {} <input type=password name=password minlength={pmin} maxlength={pmax} autocomplete=off></label>\
 <label>Timezone, minutes east of UTC <input type=number name=tz min=-{lim} max={lim} step=15 value={}></label>\
 <label>Hostname, for the DHCP server <input type=text name=hostname maxlength={hmax} pattern=\"[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?\" value=\"{}\"></label>\
 <button>Save and join</button> <button formaction=/scan formnovalidate>Rescan</button></form>",
         if listed { "" } else { " selected" },
         HtmlStr(if listed { "" } else { stored }),
+        if stored.is_empty() { "empty for an open network" } else { "empty to keep the stored one" },
         s.tz_offset_minutes,
         s.hostname.as_str(),
         smax = SSID_MAX,
@@ -611,10 +647,11 @@ pub fn write_provision_page(
     } else if shown < networks.len() {
         write!(out, "<p><small>{} more not shown; type the name.</small></p>", networks.len() - shown)?;
     }
-    // The typed-name field only when the list's choice is "Other".
+    // The typed-name field only when the list's choice is "Other":
+    // disabled as well as hidden, since a hidden input is still posted.
     out.write_str(
-        "<script>var n=document.getElementById('n'),o=document.getElementById('o');\
-function f(){o.hidden=n.value!=''}n.onchange=f;f()</script>",
+        "<script>var n=document.getElementById('n'),o=document.getElementById('o'),i=document.getElementById('i');\
+function f(){o.hidden=i.disabled=n.value!=''}n.onchange=f;f()</script>",
     )?;
     write_firmware_line(out, st)?;
     out.write_str(
@@ -790,6 +827,71 @@ mod tests {
         assert_eq!(apply(&mut u, long.as_bytes(), false, true), Err(FormError::BadValue));
     }
 
+    /// The list's pick wins over the typed name in either order; the
+    /// typed name alone, or the pick alone, sets the network.
+    #[test]
+    fn the_pick_wins_over_the_typed_name() {
+        for body in [b"ssid_pick=new&ssid=old&password=12345678".as_slice(), b"ssid=old&ssid_pick=new&password=12345678"] {
+            let mut s = Settings::DEFAULT;
+            apply(&mut s, body, false, true).unwrap();
+            assert_eq!(s.wifi.ssid.as_str(), "new", "{:?}", core::str::from_utf8(body));
+            assert_eq!(s.wifi.password.0.as_str(), "12345678");
+        }
+        let mut s = Settings::DEFAULT;
+        apply(&mut s, b"ssid_pick=&ssid=typed", false, true).unwrap();
+        assert_eq!(s.wifi.ssid.as_str(), "typed");
+        apply(&mut s, b"ssid_pick=picked&ssid=", false, true).unwrap();
+        assert_eq!(s.wifi.ssid.as_str(), "picked");
+        // A bad pick is still refused, and the key still needs the flag.
+        assert_eq!(apply(&mut s, b"ssid_pick=x&ssid=%zz", false, true), Err(FormError::BadValue));
+        assert_eq!(apply(&mut s, b"ssid_pick=x", false, false), Err(FormError::Forbidden));
+    }
+
+    #[test]
+    fn settle_password_keeps_or_refuses() {
+        let stored = Credentials { ssid: Text::new("home").unwrap(), password: Secret(Text::new("homepass").unwrap()) };
+        let networks = [
+            Network { ssid: Text::new("home").unwrap(), rssi: -50, open: false },
+            Network { ssid: Text::new("cafe").unwrap(), rssi: -60, open: true },
+            Network { ssid: Text::new("office").unwrap(), rssi: -70, open: false },
+        ];
+        let posted = |ssid: &str, password: &str| Settings {
+            wifi: Credentials { ssid: Text::new(ssid).unwrap(), password: Secret(Text::new(password).unwrap()) },
+            ..Settings::DEFAULT
+        };
+        // The stored network with no password keeps the stored one, listed or not.
+        for networks in [networks.as_slice(), &[]] {
+            let mut t = posted("home", "");
+            assert_eq!(settle_password(&mut t, &stored, networks), Ok(()));
+            assert_eq!(t.wifi, stored);
+        }
+        // Unless the scan says it is open now.
+        let open_home = [Network { ssid: Text::new("home").unwrap(), rssi: -50, open: true }];
+        let mut t = posted("home", "");
+        assert_eq!(settle_password(&mut t, &stored, &open_home), Ok(()));
+        assert!(t.wifi.password.0.is_empty());
+        // A typed password is always taken.
+        let mut t = posted("home", "newpass12");
+        assert_eq!(settle_password(&mut t, &stored, &networks), Ok(()));
+        assert_eq!(t.wifi.password.0.as_str(), "newpass12");
+        // Another listed network: open takes an empty password, secured refuses it.
+        let mut t = posted("cafe", "");
+        assert_eq!(settle_password(&mut t, &stored, &networks), Ok(()));
+        assert!(t.wifi.password.0.is_empty());
+        let mut t = posted("office", "");
+        assert_eq!(settle_password(&mut t, &stored, &networks), Err(FormError::BadValue));
+        let mut t = posted("office", "officepw");
+        assert_eq!(settle_password(&mut t, &stored, &networks), Ok(()));
+        // An unlisted network is taken on trust.
+        let mut t = posted("hidden", "");
+        assert_eq!(settle_password(&mut t, &stored, &networks), Ok(()));
+        assert!(t.wifi.password.0.is_empty());
+        // With nothing stored, the stored-network branch is moot.
+        let mut t = posted("hidden", "");
+        assert_eq!(settle_password(&mut t, &Credentials::NONE, &networks), Ok(()));
+        assert!(t.wifi.password.0.is_empty());
+    }
+
     #[test]
     fn token_body() {
         assert_eq!(parse_token(b"token=abcdefgh").map(|t| t.0.as_str().to_string()), Ok("abcdefgh".to_string()));
@@ -903,7 +1005,7 @@ mod tests {
         assert!(out.contains("<option value=\"00&quot;"), "the strongest is listed first");
         // The stored network was past the budget: it is typed in, and Other is selected.
         assert!(out.contains("<option value=\"\" selected>Other"));
-        assert!(out.contains(&format!("name=ssid maxlength={SSID_MAX} value=\"{}\"", "&amp;".repeat(SSID_MAX))));
+        assert!(out.contains(&format!("name=ssid id=i maxlength={SSID_MAX} value=\"{}\"", "&amp;".repeat(SSID_MAX))));
     }
 
     /// The setup page with the twelve networks the scan keeps, every
@@ -929,10 +1031,13 @@ mod tests {
         write_provision_page(&mut again, &s, &status(false), &networks, None).unwrap();
         assert!(again.contains(&format!("<option value=\"{}\" selected>", networks[3].ssid.as_str())));
         assert!(again.contains("<option value=\"\">Other"));
-        assert!(again.contains(&format!("name=ssid maxlength={SSID_MAX} value=\"\"")));
+        assert!(again.contains(&format!("name=ssid id=i maxlength={SSID_MAX} value=\"\"")));
+        assert!(again.contains("Password, empty to keep the stored one"), "a network is stored");
+        assert!(again.contains("o.hidden=i.disabled=n.value!=''"), "the typed field is disabled, not only hidden");
         let mut empty = String::new();
         write_provision_page(&mut empty, &Settings::DEFAULT, &status(false), &[], None).unwrap();
         assert!(empty.contains("No networks seen yet"));
+        assert!(empty.contains("Password, empty for an open network"), "nothing stored");
         assert!(out.contains(&format!("value=\"{}\"", "o".repeat(SSID_MAX))), "the unlisted stored network is typed in");
         let mut saved = String::new();
         s.wifi.ssid = Text::new("a<b").unwrap();

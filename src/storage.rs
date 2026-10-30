@@ -27,6 +27,7 @@ use log::{error, info, warn};
 use sequential_storage::cache::{Cache, Uncached};
 use sequential_storage::map::{MapConfig, MapStorage};
 
+use crate::net::{self, Mode};
 use crate::settings::{self, RECORD_LEN, Settings};
 use crate::heal;
 
@@ -99,8 +100,8 @@ type Map = MapStorage<u8, AsyncFlash, NoCache>;
 
 type MapError = sequential_storage::Error<FlashStorageError>;
 
-/// Scratch for the map: key, record, item header, rounded up (a 167-byte
-/// record is a 176-byte item); a stale record of another length fits
+/// Scratch for the map: key, record, item header, rounded up (a 168-byte
+/// record is a 177-byte item); a stale record of another length fits
 /// too. Word aligned so `esp-storage` reads into it directly instead of
 /// through a sector buffer on the stack.
 #[repr(C, align(4))]
@@ -189,14 +190,17 @@ impl Store {
 /// Write the settings to flash whenever they change, once they have been
 /// stable for [`SETTLE`]. `stored` is what the flash holds at start.
 ///
-/// A save that changed the Wi-Fi credentials is followed by a reset
-/// into station mode (`heal::switch_mode`): that is how a provisioning
-/// save leaves the access point, and how a credential change over the
-/// API moves a running clock to another network. The settle time is
-/// what lets the HTTP response out first, and the write is done before
-/// the reset by construction. The comparison is with the credentials
-/// this boot started with, not with `stored`, which is `None` on a
-/// first boot that runs on the build-time seed.
+/// A save is followed by a reset into station mode (`heal::switch_mode`)
+/// when, on the station, it changed the Wi-Fi credentials, which is how
+/// a credential change over the API moves a running clock to another
+/// network; or, on the access point, whenever a network is stored,
+/// since being configured is the only reason to be on the access point,
+/// and the timezone or hostname posted with an unchanged network must
+/// reach flash before the clock leaves. The settle time is what lets
+/// the HTTP response out first, and the write is done before the reset
+/// by construction. The credentials are compared with what this boot
+/// started with, not with `stored`, which is `None` on a first boot
+/// that runs on the build-time seed.
 #[embassy_executor::task]
 pub async fn persist_task(mut store: Store, mut stored: Option<Settings>) -> ! {
     let mut rx = settings::receiver();
@@ -221,7 +225,11 @@ pub async fn persist_task(mut store: Store, mut stored: Option<Settings>) -> ! {
             Ok(()) => {
                 info!("settings: saved");
                 stored = Some(s);
-                if s.wifi != boot_wifi {
+                let leave = match net::mode() {
+                    Mode::Station => s.wifi != boot_wifi,
+                    Mode::AccessPoint => !s.wifi.is_none(),
+                };
+                if leave {
                     heal::switch_mode(false).await
                 }
             }

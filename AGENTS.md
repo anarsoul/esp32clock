@@ -52,11 +52,14 @@ writes the other slot, selects it and reboots. The token is
 `API_TOKEN` at build time and a setting after that (`src/auth.rs`): a
 build without one has no script path (a `Bearer` request is `403`)
 until one is set from `/update` with the PIN or by `POST /token`, and
-the boot line says `api token: stored`, `built in` or `none`. The
-Wi-Fi credentials are seeds the same way, and `WIFI_SSID` may be
-empty: whatever the record lacks is filled from the build at boot, the
-next save carries it, and from then on the record wins over a later
-build's constants (`settings::Settings::seed`). For a network debugging run set
+the boot line says `api token: stored`, `built in`, `cleared` or
+`none`. The Wi-Fi credentials are seeds the same way, and `WIFI_SSID`
+may be empty: whatever the record lacks is filled from the build at
+boot, the next save carries it, and from then on the record wins over
+a later build's constants (`settings::Settings::seed`). A token
+cleared with `POST /token` stays cleared: the record's flags byte
+(`token_cleared`, version 7) tells a cleared token from one never set,
+and only the latter is filled from the build. For a network debugging run set
 `ESP_LOG='info,embassy_net=debug,esp_radio=debug'` on the command line
 (it overrides the config, and esp-println compiles the filter in); the
 extra lines are DHCP state and driver events, not packets. Every log
@@ -77,7 +80,10 @@ network keys `ssid` and `password` are taken on `/api` only with the
 value would change, which would make a password oracle), and never on
 the settings form; a saved change resets the clock into the new network
 (`heal::switch_mode`, with the carry record started over), so a wrong
-one costs the LAN until the password is right again. The password and
+one costs the LAN until the password is right again. On the access
+point every save resets into the station once a network is stored,
+whatever changed, so the timezone or hostname posted with the setup
+form reaches flash before the clock leaves. The password and
 the token are never read back: the JSON has `ssid`, `password_set` and
 `token_set`. The page ends with a read-only status
 line, and the JSON with the read-only keys `version`, `slot` (the app
@@ -134,7 +140,17 @@ the list), and the setup form lists what it saw, strongest first, with
 an "Other" entry and a text field for a hidden network. The AP stays
 up through a scan. A `POST` of `ssid=` (empty) leaves the network
 unchanged, since the form always sends both the list's pick and the
-typed name.
+typed name; a non-empty `ssid_pick` wins over `ssid` whatever the
+order (`form::apply`), and the page also disables the typed field
+while a listed network is picked, since a hidden input is still
+posted. The form's password field is write-only and always posted:
+on the setup form an empty password with the stored network keeps the
+stored password unless the scan lists that network as open, and an
+empty password for another network the scan lists as secured is
+refused with the notice (`form::settle_password`); `/api` takes what
+it is given. A setup form that changes nothing resets at once
+(`Then::Join`); one that changes anything is committed and the
+persist task saves it, then resets.
 
 Any press ends ringing or the IP display. Set mode times out after 15 s,
 ringing after 5 minutes. Self-heal: once the gateway has answered a ping, ten
@@ -167,9 +183,11 @@ alarm. It is the way to exercise the carry record from a script:
 `POST /token` with `token=<new>` (8 to 32 printable characters without
 spaces, empty to clear) and either `Bearer <current token>` or `PIN
 <digits>` sets the API token; the update page has a form for it next
-to the upload. `POST /pin` issues a PIN without the page, on the panel
-and in the serial log and never in the response, for a bench script
-(`scripts/pin.sh`). One PIN is one action, upload or token.
+to the upload. The body is parsed before the PIN is spent, so a bad
+token costs a `400` and not the PIN. `POST /pin` issues a PIN without
+the page, on the panel and in the serial log and never in the
+response, for a bench script (`scripts/pin.sh`). One PIN is one
+action, upload or token.
 
 Firmware updates: `POST /ota` with the application image as the body
 and an `Authorization` header: `Bearer <API_TOKEN>` from `scripts/ota.sh`,
@@ -218,7 +236,7 @@ module ends with its `#[cfg(test)] mod tests`.
 | `src/display.rs` | UI loop: tick, button or settings change → `ui` → draw → publish; rings the alarm; shows the IP, or `AP` in place of the sweep on the access point; acts on the hold before the UI sees it; seeds and carries the skip flag and the time the alarm last rang |
 | `core/src/ui.rs` | mode state machine, pure logic, one timer for the current mode; edits the settings it is handed; alarm due check and missed-alarm grace, both gated by the carried time the alarm last rang; consumes `skip_next` |
 | `core/src/settings.rs` | `Settings`, palette and brightness tables, `Hostname`, `Text`/`Secret` strings, `Credentials` and the token with their rules, the build-time `seed`, shared `Watch` with change signal, versioned append-only flash record |
-| `src/storage.rs` | the one flash handle (`with_flash`), nvs partition lookup, `sequential-storage` map over it, debounced persist task that compares records, not structs, and resets into station mode after a save that changed the credentials |
+| `src/storage.rs` | the one flash handle (`with_flash`), nvs partition lookup, `sequential-storage` map over it, debounced persist task that compares records, not structs, and resets into station mode after a save that changed the credentials, or after any save on the access point with a network stored |
 | `src/heal.rs` | deliberate resets: `reboot` blanks the panel through `scan::stop`, carries the time and resets, for `/reload` and the OTA reboot; `reset`, the self-heal, waits out a ringing alarm and counts itself first; `switch_mode`, the reset between station and access point, which starts the carry record over and freezes it |
 | `core/src/auth.rs` | the API token (a setting; constant-time compare) and the panel PIN with its TTL and lockout; `token`, `token_or_pin`, `issue_pin`, `pin_to_show`; `Refusal` with its HTTP status; pure rules with the clock and the random number passed in |
 | `core/src/form.rs` | key=value parsing, all-or-nothing `apply` on a copy, JSON, the HTML page with its error notice and the read-only `Status` lines, the update page with its upload and token scripts, `JsonStr`/`HtmlStr` escaping for the SSID, `parse_token`; pure logic |
@@ -319,27 +337,27 @@ module ends with its `#[cfg(test)] mod tests`.
   overflow is a 500, not a truncation. The headers are 88 bytes;
   `core::http::PAGE_MAX` (3968) is what a page may take, and the
   `form` tests build each page at its worst case and assert it
-  (2026-10-29: settings 2769, update 2989, setup with twelve
-  32-character networks 2945). `cargo host-test` after adding a field
+  (2026-10-30: settings 2769, update 2989, setup with twelve
+  32-character networks 3036). `cargo host-test` after adding a field
   or label; the test prints the sizes with `-- --nocapture`. The setup
   page's network list stops at `form::NETWORK_LIST_BUDGET` (1900)
   bytes, strongest first, with a "N more not shown" line, because a
   listed SSID of 32 `"` is 417 bytes of `<option>` through `HtmlStr`
   (twice per network) and five of them would pass the buffer; the rest
-  of the page at its worst is 1915, and `provision_page_budget_is_covered`
-  locks the sum under `PAGE_MAX`.
+  of the page at its worst is 2006, and `provision_page_budget_is_covered`
+  locks the sum under `PAGE_MAX`, with 62 bytes to spare.
 - `http::RX_BUF` (4096) is the TCP receive window; 1 KB made an upload
   one segment per round trip. `REQUEST_BUF` (1536) still bounds the
   head; an upload's body stays on the socket.
 - An OTA image must fit a slot (`partitions.csv`, 0x1E0000 = 1920 KB);
   the release image is about 650 KB. Static RAM: `ota.rs` holds 11 KB
   of buffers, and what the statics leave of DRAM is the main stack,
-  about 96 KB now (`Settings` is 167 bytes of record and sits in several
+  about 96 KB now (`Settings` is 168 bytes of record and sits in several
   task futures); check `.stack` in `llvm-readelf -S` after adding one.
 - `form::apply` decodes each key into 16 bytes and each value into 64
   (`form::VALUE_MAX`, the password); longer input is reported as a bad
   key or value before parsing. The record is `settings::RECORD_LEN`
-  (167) bytes and the map scratch in `storage.rs` 256, which must hold
+  (168) bytes and the map scratch in `storage.rs` 256, which must hold
   the item (record plus 9 bytes, padded to a word).
 - `settings::RECEIVERS` is the number of `Watch` receivers (display,
   persist, hostname). Add one when a new task subscribes, or `receiver()`
@@ -355,8 +373,8 @@ module ends with its `#[cfg(test)] mod tests`.
 
 ## Verifying without a board
 
-`cargo host-test` runs the tests of `core/` on the host (61 on
-2026-10-29): the AiP33628 encoder against a behavioural model of the
+`cargo host-test` runs the tests of `core/` on the host (65 on
+2026-10-30): the AiP33628 encoder against a behavioural model of the
 chip (shift on CLK rise, latch on DIN rise while CLK high), the panel
 map, the palette and brightness tables, the hostname, password and
 token rules, the record round trip and every older version, the form

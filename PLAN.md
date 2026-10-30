@@ -1557,7 +1557,9 @@ the core split and the setup page budget. Those are where the findings
 are: the setup form has three ways to lose the network or a field, and
 the seed undoes a cleared token. Nothing in the scan path, the encoder,
 the carry codec, the record decode, the auth rules or the upload is
-listed. Clippy is clean and the 63 host tests pass. None is done yet.
+listed. Clippy is clean and the 63 host tests pass. The four
+setup-form and token bugs and the PIN gap were built the same day,
+see the milestone after the setup page budget; the rest is open.
 
 A second, independent review of the same tree by another model
 (`codex-review.patch`, 2026-10-30) was read against this one and
@@ -1596,8 +1598,8 @@ case here (the settle window and the failed save, on the setup form).
 
 Bugs, in rough order of value:
 
-- **Re-saving the setup form with the stored network wipes its
-  password.** The form lists the stored network pre-selected and its
+- ~~**Re-saving the setup form with the stored network wipes its
+  password.**~~ Done 2026-10-30, verified from a phone (`form::settle_password`). The form lists the stored network pre-selected and its
   password field empty (`form::write_provision_page`, the field is
   write-only), and `apply_one` takes `password=` as a valid open-network
   password and stores it. A clock held into the access point to change
@@ -1610,7 +1612,7 @@ Bugs, in rough order of value:
   password with the SSID unchanged keeps the stored one; a listed
   network the scan says is secured (`Network::open` is false) can refuse
   an empty password outright.
-- **The hidden "other network" field overrides the list's pick.** Also found by the other review, with a host reproducer. When
+- ~~**The hidden "other network" field overrides the list's pick.**~~ Done 2026-10-30, verified from a phone (the pick wins in `form::apply`, the field is disabled). Also found by the other review, with a host reproducer. When
   the stored network is not in the scan list, the page selects "Other"
   and puts the stored name in the typed field; the page script hides
   that field when a listed network is picked, but a hidden input is
@@ -1623,8 +1625,8 @@ Bugs, in rough order of value:
   is invisible on the next try too. Fix: disable the typed input when a
   listed network is picked (a disabled control is not submitted), and
   let a non-empty `ssid_pick` win over `ssid` server-side.
-- **Timezone and hostname changes on the setup form are lost when the
-  network is unchanged.** Also found by the other review. The `Then::Join` branch commits `trial` with
+- ~~**Timezone and hostname changes on the setup form are lost when the
+  network is unchanged.**~~ Done 2026-10-30, verified from a phone (every save on the access point leaves it). Also found by the other review. The `Then::Join` branch commits `trial` with
   `settings::update` and `http_task` calls `heal::switch_mode(false)`
   right after the flush, inside the persist task's 2 s settle, so
   anything else the form carried never reaches flash and the station
@@ -1636,8 +1638,8 @@ Bugs, in rough order of value:
   record differs from the boot value, not only `wifi`, or save
   synchronously through `with_flash` before any `switch_mode` and in
   `heal::reboot`.
-- **Clearing the API token does not survive a reboot on a build with
-  `API_TOKEN`.** Also found by the other review, with a host reproducer. `POST /token` with an empty value stores an empty
+- ~~**Clearing the API token does not survive a reboot on a build with
+  `API_TOKEN`.**~~ Done 2026-10-30, verified on the bench (record version 7, `token_cleared`). Also found by the other review, with a host reproducer. `POST /token` with an empty value stores an empty
   token, but `Settings::seed` refills any empty token from the build
   constant and `main.rs` runs it at every boot over whatever was
   loaded, with no notion of whether the record ever held the field. The
@@ -1717,13 +1719,16 @@ Gaps:
   double click on Rescan, or a phone's captive sheet and a browser tab,
   is enough. Fix: a scan generation counter with a `Watch`, which any
   number of waiters can wait on.
-- **A bad token body burns the PIN.** `POST /token` spends the PIN in
+- ~~**A bad token body burns the PIN.**~~ Done 2026-10-30, verified on the bench (the body is parsed first). `POST /token` spends the PIN in
   `token_or_pin` before `parse_token` looks at the body; a 7-character
   token answers 400 and the page's second try answers "no PIN issued:
   open the update page first". Fix: parse the body first (a parse
   changes nothing), then spend the PIN; the page script can also check
   the length.
-- **`/api` on the access point saves a password with no network.** The
+- **`/api` on the access point saves a password with no network.**
+  Since 2026-10-30 the persist task resets off the access point only
+  with a network stored, so this is a pointless save and no reset;
+  the guard on `/api` is still missing. The
   `trial.wifi.is_none()` guard is only on the form path; `POST /api
   password=…` on an unprovisioned access point saves, differs from
   `boot_wifi`, and the persist task resets into station mode with an
@@ -3725,6 +3730,172 @@ stored one past the budget give 3484, the stored one typed into the
 field with Other selected. 63 host tests, clippy clean on both
 crates. Nothing to see on the panel; a bench hotspot named 32 `"`
 would show four listed at most and the line.
+
+### Setup form and cleared token, from the fourth pass (after the setup page budget) — DONE, verified on the bench 2026-10-30 (the token half from the host, the setup form from a phone with the serial log read)
+
+Four bugs of the fourth-pass backlog, the three on the setup form and
+the cleared API token, plus one gap in the same route (the PIN spent
+on a bad token body). Each has a pure rule in `core/` under test and a
+thin change in the firmware. The fifth is included because it is three
+lines in the handler the fourth touches; strike it if not wanted.
+
+**1. An empty password keeps the stored one (the password wipe).**
+Rule, in `form.rs` as a pure function the handler calls after
+`apply`, `settle_password(trial: &mut Settings, stored: &Credentials,
+networks: &[Network]) -> Result<(), FormError>`:
+
+- the posted SSID is the stored one and the password is empty: keep
+  the stored password, unless the scan lists that network as open, in
+  which case empty is what the network wants;
+- the posted SSID is another network, the scan lists it as secured
+  and the password is empty: `BadValue`, since the join would fail
+  for certain and the page can say so now;
+- anything else is as posted (a new network not in the list with an
+  empty password is taken on trust, as today: it may be open).
+
+The password label says "empty to keep the stored one" when a network
+is stored, "empty for an open network" otherwise, and the `BadValue`
+notice gains "or a secured network was given no password". `/api` is
+not touched: with the token it sets what it is given, and a script
+that wants the same SSID open posts `password=` as before.
+Test: the three branches, and that a stored password is never
+replaced by an empty one when the SSID is unchanged and unlisted.
+Built as planned (`settle_password_keeps_or_refuses`); the handler
+runs `settle_password` on the applied copy before the no-network
+check. The setup page's fixed part grew from 1915 to 2006 bytes for
+the notice, the label and the script, 62 bytes under the budget's
+sum.
+
+**2. The list's pick wins over the typed name (the hidden field).**
+Both sides. The page's script disables the typed input, not only
+hides it, when a listed network is picked (`o.hidden=i.disabled=n.value!=''`,
+the input gets `id=i`); a disabled control is not submitted, so a
+browser never sends the stale name. The server stops trusting the
+order: `form::apply` remembers a non-empty `ssid_pick` and writes it
+over `ssid` after the loop, so `ssid_pick=B&ssid=A` and
+`ssid=A&ssid_pick=B` both pick `B`. `apply_one` keeps `ssid_pick` as
+an alias of `ssid` for a body with only one of them. Test:
+`apply_sets_every_key` for the alias, a new test for both orders, and
+the page tests re-assert the sizes (`provision_page_fits_the_response_buffer`
+prints them; the script grows by about 15 bytes).
+Built as planned (`the_pick_wins_over_the_typed_name`); `apply` keeps
+the SSID `apply_one` set for a non-empty `ssid_pick` and writes it
+back after the loop, so the pick is still validated like any SSID.
+
+**3. Every save on the access point leaves it (the lost fields).**
+The reset after a save moves from "the credentials changed" to a rule
+per mode in `persist_task`: on the station, a save that changed the
+credentials resets into the new network, as now; on the access point,
+any save resets into the station when a network is stored, since the
+only reason to be on the access point is to be configured. The
+handler's own reset (`Then::Join`) is kept only for a form whose
+settings are exactly the current ones (`trial == current`), where
+there is nothing to save; a form that changed anything, network or
+not, is committed with `settings::update` and the persist task saves
+it, then resets. The timezone and hostname posted with the stored
+network thus reach flash before the reset, and `/api tz=` on the
+access point joins the network too (documented). The gap "`/api` on
+the access point saves a password with no network" shrinks to a
+pointless save with no reset, since the rule checks for a stored
+network. The saved page's "restarts now" is two seconds late at most.
+`storage.rs` reads `net::mode()`; a failed save still leaves the
+clock on the access point (the open "failed save" item, unchanged).
+Not testable on the host; the bench check is below. Built as planned.
+
+**4. A cleared token stays cleared (the seed).** The record cannot
+tell a token never set from one cleared on purpose, and both must
+behave differently at boot: a build with `API_TOKEN` should fill the
+first (a bench board re-flashed with a token) and leave the second
+alone. So the record says which: version 7 appends one `flags` byte
+at offset 167 (`RECORD_LEN` 168), bit 0 `TOKEN_CLEARED`, the other
+bits reserved and ignored on read. `Settings` gains `token_cleared:
+bool`, `DEFAULT` false; `POST /token` with an empty value sets it and
+a non-empty value clears it; `seed` fills the token only when it is
+empty and not cleared. The field is not a form or API key (posting it
+is an unknown key), not in the JSON (`token_set` already says what
+matters), and `write_page` does not show it. The boot line gains a
+fourth state, `api token: cleared`. The map item grows to 177 bytes,
+well inside the 256-byte scratch. An older image rolled back reads
+the version-7 record by its prefix and re-seeds the token, which is
+the old behaviour, not a loss. Tests: the record round trip with the
+flag, the older-version loop to 7, the newer-prefix test at 8, and
+`seed` with a cleared token left empty.
+Built as planned; the newer-prefix test also sets every reserved flag
+bit and expects them ignored, and the older-version loop now checks
+the version-6 network and token come through.
+
+**5. Parse the token body before spending the PIN.** In the `/token`
+handler, `form::parse_token(body)` runs first; a bad body answers 400
+with the PIN still good, and only a parsed token goes through
+`auth::token_or_pin`. Nothing changes between the two, so the order is
+free. The `Bearer` path is unaffected. Built: a bad body answers
+before the header is looked at, so neither a PIN nor a lockout is
+touched.
+
+Order of work: 4 (record and seed, all in `core/` with its tests),
+then 1 and 2 (`form.rs` with its tests, then the handler), then 3
+(`storage.rs` and the handler), then 5. `cargo host-test`, both
+clippy runs, `cargo build --release`; then `AGENTS.md` for the three
+rule changes (the empty password, the pick precedence, the save on
+the access point, the token flag and the boot line).
+
+Bench check, in order, on the bench board with `scripts/pin.sh` not
+needed:
+
+1. `POST /token` with `token=` and the `Bearer` token, wait for
+   `settings: saved`, `scripts/reload.sh` without a token (it needs
+   one; use `curl -X POST -H "Authorization: Bearer $OLD" /reload`
+   expecting `403`), then power-cycle or hold: the boot line must say
+   `api token: cleared` and `/api` must show `token_set: false`. Then
+   `POST /token` with a new token and the PIN from `/update`: the
+   boot line after a reload says `stored`.
+2. Hold both buttons 10 s; on `http://192.168.4.1/` leave the network
+   as listed, type nothing in the password, change the hostname, save:
+   the clock must come back on the LAN under the new hostname with the
+   old password. The log line for the save is followed by the switch.
+3. On the access point again with a network not in range (type one
+   under Other, save, hold again): pick the real network from the
+   list, type its password, save: the clock joins it, and the log's
+   `network … saved` line names the picked one.
+4. On the access point, pick a listed secured network and leave the
+   password empty: the page must come back with the notice and
+   nothing saved.
+5. `curl -X POST -d token=short -H "Authorization: PIN 1234" /token`
+   with a fresh PIN: `400`, and the same PIN then sets a good token.
+
+Bench run 2026-10-30, image 044a226-dirty over the air onto `ota_1`
+with the monitor on `/dev/ttyACM0`: the version-6 record was read
+intact (`settings: loaded from flash`, every field as before,
+`token_cleared: false`). Check 1: `POST /token` with `token=` and the
+`Bearer` token answered 200, `settings: saved` followed two seconds
+later, `/api` said `token_set: false` and `/reload` with the old token
+was `403`; after a USB reset (the monitor reconnecting, since no token
+was left for a software reset) `/api` still said `token_set: false`
+on a build with `API_TOKEN`, which the old seed would have refilled.
+The boot line itself was not captured: the monitor loses the first two
+seconds after the reset it makes. Check 5: a PIN from `POST /pin`,
+`token=short` with it answered `400` and the same PIN then set the
+token (`200`, `settings: saved`); `scripts/reload.sh` with it came
+back in 3 s with `boot: network stored, api token stored` and the
+settings line from the version-7 record. A brightness change and back
+over `/api` on the station saved without a reset (uptime continuous,
+`heals` 0). Checks 2 to 4 were done from a phone
+the same day with the monitor on, every expected line in the log, in
+this order: the hold (`heal: resetting into access point mode`),
+`clock-f044` up and the phone's lease; check 4, a listed secured
+network with no password, `setup form rejected: BadValue` and the
+clock still an access point; check 2, `esptest` left as listed, no
+password, the hostname changed to `test-clock2`: `network esptest
+saved, leaving the access point once it is written`, `settings: saved`
+two seconds later, then the station boot with the new hostname in the
+settings line and `connected to` the network on the kept password;
+check 3, `nowhere` typed under Other and saved, four `no such network
+in range` attempts, the hold again, then the pick: `network esptest
+saved`, not `nowhere`, and the join. The page's own behaviour (the
+notice, "Other" selected with `nowhere` typed in) was seen on the
+phone. A settings-page save of the hostname back to `test-clock` from
+the LAN closed the run; `/api` then read hostname `test-clock`, ssid
+`esptest`, password set, token set, mode `sta`, heals 0.
 
 ### M11 — NTC thermometer and light sensor — planned
 

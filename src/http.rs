@@ -325,12 +325,17 @@ fn respond(out: &mut Response, req: &Request<'_>, body: &[u8]) -> Result<Then, c
         (Method::Post, "/") if net::mode() == Mode::AccessPoint => {
             // The provisioning form: the network keys are allowed, since
             // the access point's own password is the gate here. A change
-            // is saved and the persist task resets into the network; the
-            // same credentials again (an access point raised by the hold)
-            // are nothing to save, so the listener resets after answering.
+            // to anything is saved, and on the access point the persist
+            // task resets into the network after every save; the same
+            // settings again (an access point raised by the hold, nothing
+            // touched) are nothing to save, so the listener resets after
+            // answering. An empty password keeps the stored one
+            // (`form::settle_password`).
             let current = settings::get();
             let mut trial = current;
-            match form::apply(&mut trial, body, false, true) {
+            let result = form::apply(&mut trial, body, false, true)
+                .and_then(|()| form::settle_password(&mut trial, &current.wifi, &net::networks()));
+            match result {
                 Ok(()) if trial.wifi.is_none() => {
                     warn!("http: setup form named no network");
                     redirect_home(out, Some(FormError::BadValue))?;
@@ -338,9 +343,8 @@ fn respond(out: &mut Response, req: &Request<'_>, body: &[u8]) -> Result<Then, c
                 Ok(()) => {
                     status_line(out, "200 OK", "text/html; charset=utf-8")?;
                     form::write_saved_page(out, &trial)?;
-                    if trial.wifi == current.wifi {
+                    if trial == current {
                         warn!("http: network {} posted unchanged, leaving the access point", trial.wifi.ssid.as_str());
-                        settings::update(|s| *s = trial);
                         return Ok(Then::Join);
                     }
                     warn!("http: network {} saved, leaving the access point once it is written", trial.wifi.ssid.as_str());
@@ -399,27 +403,34 @@ fn respond(out: &mut Response, req: &Request<'_>, body: &[u8]) -> Result<Then, c
         }
         (Method::Post, "/token") => {
             // A new API token, with the PIN from the update page or the
-            // current token. The value is never logged or echoed.
+            // current token. The value is never logged or echoed. The
+            // body is parsed before the PIN is spent, so a bad one costs
+            // a 400 and not the PIN.
+            let token = match form::parse_token(body) {
+                Ok(token) => token,
+                Err(e) => {
+                    warn!("http: token change rejected: {e:?}");
+                    status_line(out, "400 Bad Request", "text/plain")?;
+                    out.write_str("bad token: 8 to 32 printable characters without spaces, or empty to clear\n")?;
+                    return Ok(Then::Close);
+                }
+            };
             if let Err(e) = auth::token_or_pin(req.authorization) {
                 warn!("http: token change refused: {}", e.text);
                 status_line(out, e.status, "text/plain")?;
                 writeln!(out, "{}", e.text)?;
                 return Ok(Then::Close);
             }
-            match form::parse_token(body) {
-                Ok(token) => {
-                    let set = !token.0.is_empty();
-                    settings::update(|s| s.token = token);
-                    warn!("http: API token {}", if set { "set" } else { "cleared" });
-                    status_line(out, "200 OK", "text/plain")?;
-                    out.write_str(if set { "token set\n" } else { "token cleared; the script paths are closed\n" })?;
-                }
-                Err(e) => {
-                    warn!("http: token change rejected: {e:?}");
-                    status_line(out, "400 Bad Request", "text/plain")?;
-                    out.write_str("bad token: 8 to 32 printable characters without spaces, or empty to clear\n")?;
-                }
-            }
+            let set = !token.0.is_empty();
+            // Cleared on purpose: the build's token must not come back at
+            // the next boot.
+            settings::update(|s| {
+                s.token = token;
+                s.token_cleared = !set;
+            });
+            warn!("http: API token {}", if set { "set" } else { "cleared" });
+            status_line(out, "200 OK", "text/plain")?;
+            out.write_str(if set { "token set\n" } else { "token cleared; the script paths are closed\n" })?;
         }
         (Method::Get, "/api") => {
             status_line(out, "200 OK", "application/json")?;

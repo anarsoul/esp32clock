@@ -289,16 +289,21 @@ pub struct Settings {
     pub wifi: Credentials,
     /// The API token; empty for none. Never shown.
     pub token: Secret<TOKEN_MAX>,
+    /// The token was cleared on purpose (`POST /token` with an empty
+    /// value), so the build's `API_TOKEN` must not fill it back in at
+    /// boot; a token that was never set is filled. Not a form or API
+    /// key, not in the JSON; stored as a flag bit.
+    pub token_cleared: bool,
 }
 
 /// Bytes in a stored record.
-pub const RECORD_LEN: usize = 167;
+pub const RECORD_LEN: usize = 168;
 
 /// Stored record layout version. Bump when the layout changes, append
 /// the new fields and teach `from_record` the old one, or the user's
 /// settings are lost; never reorder, since an older image reads a newer
 /// record by its prefix.
-const RECORD_VERSION: u8 = 6;
+const RECORD_VERSION: u8 = 7;
 
 /// Where the hostname sits in a version 3 record.
 const RECORD_HOSTNAME_LEN: usize = 9;
@@ -322,7 +327,12 @@ const RECORD_PASSWORD_LEN: usize = RECORD_SSID + SSID_MAX;
 const RECORD_PASSWORD: usize = RECORD_PASSWORD_LEN + 1;
 const RECORD_TOKEN_LEN: usize = RECORD_PASSWORD + PASSWORD_MAX;
 const RECORD_TOKEN: usize = RECORD_TOKEN_LEN + 1;
-const _: () = assert!(RECORD_TOKEN + TOKEN_MAX == RECORD_LEN, "RECORD_LEN does not match the layout");
+
+/// Where the flags byte sits in a version 7 record. Bits this image
+/// does not know are ignored, so a later image may add some.
+const RECORD_FLAGS: usize = RECORD_TOKEN + TOKEN_MAX;
+const FLAG_TOKEN_CLEARED: u8 = 1 << 0;
+const _: () = assert!(RECORD_FLAGS + 1 == RECORD_LEN, "RECORD_LEN does not match the layout");
 
 /// Day names, Monday first, for the page and the API.
 pub const DAY_NAMES: [&str; 7] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
@@ -357,17 +367,19 @@ impl Settings {
         skip_next: false,
         wifi: Credentials::NONE,
         token: Secret(Text::EMPTY),
+        token_cleared: false,
     };
 
     /// Fill in what the build has and the record lacks: the network and
     /// the token. Run once on the loaded value before `init`; the next
     /// save then carries them in the record, after which the record wins
-    /// over a later build's constants.
+    /// over a later build's constants. A token cleared on purpose
+    /// (`token_cleared`) stays empty.
     pub fn seed(&mut self) {
         if self.wifi.is_none() && !Credentials::BUILT_IN.is_none() {
             self.wifi = Credentials::BUILT_IN;
         }
-        if self.token.0.is_empty() && !API_TOKEN.is_empty() {
+        if self.token.0.is_empty() && !self.token_cleared && !API_TOKEN.is_empty() {
             self.token = Secret(Text::literal(API_TOKEN));
         }
     }
@@ -409,7 +421,7 @@ impl Settings {
     /// minute, armed, twelve-hour, timezone offset as little-endian i16,
     /// hostname length, hostname padded to 24 bytes, alarm days, melody
     /// (`0xff` for random), then the SSID, the password and the token,
-    /// each a length byte and a padded field.
+    /// each a length byte and a padded field, then the flags byte.
     pub fn to_record(&self) -> [u8; RECORD_LEN] {
         let tz = self.tz_offset_minutes.to_le_bytes();
         let mut r = [0u8; RECORD_LEN];
@@ -434,6 +446,7 @@ impl Settings {
         r[RECORD_PASSWORD..RECORD_PASSWORD + PASSWORD_MAX].copy_from_slice(&self.wifi.password.0.bytes);
         r[RECORD_TOKEN_LEN] = self.token.0.len;
         r[RECORD_TOKEN..RECORD_TOKEN + TOKEN_MAX].copy_from_slice(&self.token.0.bytes);
+        r[RECORD_FLAGS] = if self.token_cleared { FLAG_TOKEN_CLEARED } else { 0 };
         r
     }
 
@@ -441,7 +454,8 @@ impl Settings {
     /// take the defaults: version 1 (M5) stops after `armed`, version 2
     /// (M6) after the timezone, version 3 (M6) after the hostname, version
     /// 4 (M7) after the alarm days, version 5 (M8) after the melody, so
-    /// those read as no network and no token. Versions are append-only, so a record
+    /// those read as no network and no token, and version 6 (M10) after
+    /// the token, so no flags. Versions are append-only, so a record
     /// from a newer image is read by the prefix this one knows, and a
     /// colour, brightness or melody index past this image's table (an
     /// entry a newer image added, or a higher current ceiling) lands on
@@ -486,6 +500,9 @@ impl Settings {
                 )?),
             };
             s.token = Secret(Text::from_record(*r.get(RECORD_TOKEN_LEN)?, r.get(RECORD_TOKEN..RECORD_TOKEN + TOKEN_MAX)?)?);
+        }
+        if version >= 7 {
+            s.token_cleared = *r.get(RECORD_FLAGS)? & FLAG_TOKEN_CLEARED != 0;
         }
         s.color = s.color.min(PALETTE.len() - 1);
         // A record saved by a build with a higher ceiling may name a step
@@ -564,6 +581,7 @@ mod tests {
                 password: Secret(Text::new(&"p".repeat(PASSWORD_MAX)).unwrap()),
             },
             token: Secret(Text::new(&"t".repeat(TOKEN_MAX)).unwrap()),
+            token_cleared: false,
         }
     }
 
@@ -636,6 +654,7 @@ mod tests {
             3 => RECORD_HOSTNAME + HOSTNAME_MAX,
             4 => RECORD_ALARM_DAYS + 1,
             5 => RECORD_MELODY + 1,
+            6 => RECORD_FLAGS,
             _ => RECORD_LEN,
         }
     }
@@ -655,8 +674,9 @@ mod tests {
             assert_eq!(got.hostname, if version >= 3 { s.hostname } else { d.hostname });
             assert_eq!(got.alarm_days, if version >= 4 { s.alarm_days } else { d.alarm_days });
             assert_eq!(got.melody, if version >= 5 { s.melody } else { d.melody });
-            assert_eq!(got.wifi, Credentials::NONE, "v{version} has no network");
-            assert!(got.token.0.is_empty(), "v{version} has no token");
+            assert_eq!(got.wifi, if version >= 6 { s.wifi } else { Credentials::NONE }, "v{version} network");
+            assert_eq!(got.token, if version >= 6 { s.token } else { Secret(Text::EMPTY) }, "v{version} token");
+            assert!(!got.token_cleared, "v{version} has no flags");
         }
     }
 
@@ -667,6 +687,10 @@ mod tests {
         r[0] = RECORD_VERSION + 1;
         r.extend_from_slice(&[0xAA; 40]);
         assert_eq!(Settings::from_record(&r), Some(s));
+        // Flag bits a later image may add are ignored.
+        let mut flagged = s.to_record();
+        flagged[RECORD_FLAGS] |= 0xFE;
+        assert_eq!(Settings::from_record(&flagged), Some(s));
     }
 
     #[test]
@@ -716,6 +740,15 @@ mod tests {
         d.seed();
         assert_eq!(d.wifi.is_none(), WIFI_SSID.is_empty());
         assert_eq!(d.token.0.is_empty(), API_TOKEN.is_empty());
+        // A token cleared on purpose is not filled back in, and the
+        // flag survives the record.
+        let mut cleared = Settings { token: Secret(Text::EMPTY), token_cleared: true, ..full() };
+        cleared.seed();
+        assert!(cleared.token.0.is_empty());
+        assert!(cleared.token_cleared);
+        assert_eq!(Settings::from_record(&cleared.to_record()), Some(cleared));
+        assert_eq!(cleared.to_record()[RECORD_FLAGS], FLAG_TOKEN_CLEARED);
+        assert_eq!(full().to_record()[RECORD_FLAGS], 0);
     }
 
     #[test]

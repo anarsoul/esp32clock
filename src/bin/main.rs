@@ -151,10 +151,11 @@ async fn main(spawner: Spawner) -> ! {
             (false, false) => "built in",
             (false, true) => "none",
         },
-        match (stored_token, boot_settings.token.0.is_empty()) {
-            (true, _) => "stored",
-            (false, false) => "built in",
-            (false, true) => "none",
+        match (stored_token, boot_settings.token.0.is_empty(), boot_settings.token_cleared) {
+            (true, _, _) => "stored",
+            (false, false, _) => "built in",
+            (false, true, true) => "cleared",
+            (false, true, false) => "none",
         }
     );
     let (reason, kept) = carry::init();
