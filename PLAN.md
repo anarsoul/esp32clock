@@ -1261,7 +1261,9 @@ Found in the same review, not yet done, in rough order of value:
   value buffer in `form::apply` is one byte short of
   `mon, tue, wed, thu, fri, sat, sun`, so the API answers "bad value"
   before the trim runs. Raise the buffer to 40 or so.
-- **First wake of a fresh watch receiver.** embassy-sync starts a
+- ~~**First wake of a fresh watch receiver.**~~ Moot since the third pass took
+  the `try_changed` calls out of the display task (2026-10-29); `hostname_task`'s
+  first wake sees the boot hostname and does nothing. Checked 2026-10-30. embassy-sync starts a
   receiver at id 0 and `settings::init` bumps the watch to 1, so the
   first `changed()` returns at once. `persist_task` swallows that with
   `try_changed`; the display and hostname tasks do not, costing one
@@ -1371,7 +1373,9 @@ Gaps:
   the newer fields for good. Fix: versions are append-only, so accept a
   newer version's known prefix and clamp `color` and `melody` the way
   `brightness` is.
-- **The carry record has a mark but no layout.** `decode` trusts word
+- ~~**The carry record has a mark but no layout.**~~ Fixed with M10: `MARK`
+  carries `LAYOUT` in its low byte and a mismatch is no mark (checked
+  2026-10-30). `decode` trusts word
   positions behind `MARK` alone, and `ota::reboot` writes the record in
   firmware A for firmware B to read after `CoreSw`. The record has grown
   twice and M10 adds `boot_ap`; a reorder or insertion makes B misread
@@ -1534,6 +1538,315 @@ In rough order of value:
   an `expect` does the same. `http::Counting` exists so a refusal knows
   what to drain; `ota::install` could return the bytes it consumed in
   the `Refusal` instead.
+
+### Review backlog, fourth pass (2026-10-30): the code since the second pass
+
+A bug review of the whole tree at commit aa6d0de, read in the same
+four slices as the second pass (net/dhcpd/dnsd/main/heal;
+http/ota/auth/form/scripts; settings/storage/config/carry/clock;
+ui/display/buttons/buzzer/melody/scan/panel/aip33628) by four
+independent readers, each item then confirmed in the code path by a
+fifth, against the locked sources where a claim depended on them
+(esp-hal 1.2.2, esp-radio 1.0.0-beta.1, embassy-net 0.9.1, smoltcp
+0.13.1, embassy-sync 0.7.2, sequential-storage 8.0.2,
+esp-bootloader-esp-idf 0.6.0). Everything since 0e85ee9 had only had
+the over-engineering pass: `/reload`, the tunes, the credentials and
+the token as settings, the newer-record prefix read, the access point
+with its DHCP and DNS servers, the captive redirect, colour in levels,
+the core split and the setup page budget. Those are where the findings
+are: the setup form has three ways to lose the network or a field, and
+the seed undoes a cleared token. Nothing in the scan path, the encoder,
+the carry codec, the record decode, the auth rules or the upload is
+listed. Clippy is clean and the 63 host tests pass. None is done yet.
+
+A second, independent review of the same tree by another model
+(`codex-review.patch`, 2026-10-30) was read against this one and
+agrees with it on every point it makes; nothing in it contradicts a
+finding here or adds one. Its nine items are six earlier backlog items
+re-confirmed still open (the self-heal lost once the lease expires,
+the alarm lost in another mode together with the grace used up in any
+mode, the heal reset landing mid-transfer during a failing upload, the
+preview silencing a ring, the display freeze during an upload, and the
+`POST` without `Content-Length`) and three of the bugs below (the
+hidden "other network" field, the join path losing the other fields,
+and the cleared token). It ranks the lease-expiry self-heal, the alarm
+lost in another mode and the upload-reset race as the three highest
+priorities, above the setup-form bugs, which is a fair order for a
+clock that is already provisioned. Its evidence is worth keeping:
+host reproducers outside the repository confirmed four of the items by
+assertion, the hidden-SSID overwrite (`ssid_pick=new&ssid=old&
+password=…` saves `old` with the new password), the token restored
+after a clear (through `parse_token`, the record round trip and the
+boot seed with a test `API_TOKEN`), the grace consumed by a first time
+at 07:05 during a PIN display for an armed 07:00 alarm, and a bodiless
+`POST /` clearing armed, twelve-hour and skip; those four are the
+regression tests to write with the fixes. One toolchain note from it:
+on Rust 1.99.1 `cargo clippy --release` flagged `chunks_exact_mut` at
+`scan.rs:144`; the toolchain here was bumped to 1.99.1 the same day
+and the loop now uses `as_chunks_mut::<CYCLE_BYTES>()`, which is the
+same copy (the remainder is empty by the transfer arithmetic). Clippy
+is clean again.
+
+Of the earlier passes, two items turned out done and are struck in
+place: the carry mark now carries a layout version (second pass), and
+the first wake of a fresh watch receiver is moot since the third pass
+took the `try_changed` out of the display task (first pass). Every
+other open item was re-checked and is still open; two of them gained a
+case here (the settle window and the failed save, on the setup form).
+
+Bugs, in rough order of value:
+
+- **Re-saving the setup form with the stored network wipes its
+  password.** The form lists the stored network pre-selected and its
+  password field empty (`form::write_provision_page`, the field is
+  write-only), and `apply_one` takes `password=` as a valid open-network
+  password and stores it. A clock held into the access point to change
+  the timezone or the hostname, saved with the network left as listed,
+  posts an empty password: `trial.wifi != current.wifi` in `http.rs`'s
+  `POST /`, the record is saved, the persist task resets into the
+  station, and the WPA2 network refuses it. Blank panel, `wrong
+  password?` every attempt, another 10 s hold and a retyped password to
+  recover. Found by two readers. Fix: on the setup form an empty
+  password with the SSID unchanged keeps the stored one; a listed
+  network the scan says is secured (`Network::open` is false) can refuse
+  an empty password outright.
+- **The hidden "other network" field overrides the list's pick.** Also found by the other review, with a host reproducer. When
+  the stored network is not in the scan list, the page selects "Other"
+  and puts the stored name in the typed field; the page script hides
+  that field when a listed network is picked, but a hidden input is
+  still submitted, and `apply_one` applies `ssid_pick` and `ssid` in
+  body order with "non-empty sets the SSID", so the typed name wins. A
+  clock provisioned at home and held into the access point elsewhere:
+  the user picks the new network from the list, types its password,
+  saves; the clock stores the old name with the new password, says it
+  joins the new one, resets and never joins, and the field that did it
+  is invisible on the next try too. Fix: disable the typed input when a
+  listed network is picked (a disabled control is not submitted), and
+  let a non-empty `ssid_pick` win over `ssid` server-side.
+- **Timezone and hostname changes on the setup form are lost when the
+  network is unchanged.** Also found by the other review. The `Then::Join` branch commits `trial` with
+  `settings::update` and `http_task` calls `heal::switch_mode(false)`
+  right after the flush, inside the persist task's 2 s settle, so
+  anything else the form carried never reaches flash and the station
+  boots with the old values after a page that said they were kept. The
+  changed-network branch is fine, since the save itself triggers the
+  reset. The second pass's "reset inside the settle window" on the
+  ordinary provisioning path; `POST /ap` and the hold are two more
+  unflushed resets. Fix: have the persist task do the reset whenever the
+  record differs from the boot value, not only `wifi`, or save
+  synchronously through `with_flash` before any `switch_mode` and in
+  `heal::reboot`.
+- **Clearing the API token does not survive a reboot on a build with
+  `API_TOKEN`.** Also found by the other review, with a host reproducer. `POST /token` with an empty value stores an empty
+  token, but `Settings::seed` refills any empty token from the build
+  constant and `main.rs` runs it at every boot over whatever was
+  loaded, with no notion of whether the record ever held the field. The
+  user closes the script paths, the clock reboots (self-heal, `/reload`,
+  power cut), the boot line says `api token: built in`, and the next
+  colour change writes the built-in token back into the record for
+  good. Fix: seed only when the loaded record predates version 6 or
+  nothing was loaded (`from_record` can report the version); a stored
+  empty token then means none.
+- **A two-button slap to silence the alarm changes a setting.** The
+  button task emits one `Short` per button on release and there is no
+  `Both`/`Short` event, so two buttons released a few ms apart are two
+  events: `Ui::handle` ends `Ringing` on the first and the second lands
+  in `Clock`, where a top short steps the colour and a bottom short the
+  brightness, and the persist task writes it. The same for a hurried
+  double press of one button and for a press that ends the IP or PIN
+  display. Fix: a `quiet_until` in `Ui`, about 500 ms after a press
+  ends `Ringing`, `ShowIp` or `ShowPin`, dropping events before it; or
+  fold two shorts within 100 ms into `Both`/`Short`, which the `Clock`
+  arm already ignores.
+- **`POST /scan` can only answer within the socket's 5 s idle
+  timeout.** `rescan` waits up to `SCAN_WAIT` (10 s) for the AP task's
+  scan, during which the browser sends nothing, and smoltcp's socket
+  timeout is an idle timeout: `remote_last_ts` moves on every received
+  segment and `dispatch` closes the socket at `remote_last_ts +
+  timeout` with no regard to pending transmit data. A scan slower than
+  5 s (13 channels at up to 200 ms is about 2.6 s today) answers into a
+  closed socket and the phone shows a reset instead of the page. Fix:
+  raise the timeout for that request, or cut `SCAN_WAIT` under
+  `TIMEOUT` and say so in the comment.
+
+Gaps:
+
+- **A record the map scratch cannot hold wipes every setting on
+  rollback.** `Store::load` erases the whole map on any `Err` from
+  `fetch_item`, but sequential-storage returns `BufferTooSmall` before
+  anything is corrupt when an item does not fit (`Corrupted` is already
+  repaired inside `fetch_item`). The scratch is 256 bytes and a
+  version-6 item is 176 (8-byte header, 1-byte key, 167 of record; the
+  9-byte claim holds); the record grew 99 bytes in the last version, so
+  one more set of fields of that order (a second network) takes a
+  version-7 item past 256. An image with that record saves it, the
+  `OTA_BOOT_LIMIT` rollback boots this one, `load` logs "cannot read the
+  map, erasing it", and the clock comes up with hostname `clock`,
+  timezone 0 and no network, the exact case the newer-prefix read was
+  built to prevent. Fix: erase only on `Corrupted`, treat
+  `BufferTooSmall` as "not understood, using defaults" without erasing,
+  and size the scratch to a page.
+- **A string-rule change in a newer image throws the record away on
+  rollback.** `from_record` clamps `color`, `melody` and `brightness`
+  for exactly this case, but the version-6 strings go through
+  `is_valid`, so a password of 1 to 7 bytes or a token outside
+  `valid_token`, both legal in a later image that relaxed the rule,
+  make this image discard the whole record. Fix: a bad string field
+  falls back to its default (`Credentials::NONE`, empty token) and the
+  rest is kept.
+- **The raw record, password and token included, goes into the serial
+  log.** `Store::load` logs `stored record {record:?}` when a record is
+  not understood; the bytes hold the Wi-Fi password and the API token
+  in the clear, unlike `Settings`'s `Debug`, which prints `<set>`. Fix:
+  log the version byte and the length.
+- **Disarming from the page or `/api` does not stop a ring.** In
+  `Mode::Ringing` `tick` looks only at `RING_TIMEOUT`; `alarm_armed`,
+  which a form post or `/api alarm=off` clears, is read only in the
+  `Clock` arm's due check. The display task wakes on the change, ticks,
+  and keeps ringing for up to five minutes until a press. Fix: in the
+  `Ringing` arm, `enter(Clock)` when `!settings.alarm_armed`;
+  `last_alarm` is already set, so the grace does not ring it again.
+- **Two `/scan` posts at once thrash the executor and leave one waiter
+  for the full timeout.** `net::SCAN_DONE` is an embassy-sync `Signal`
+  and `rescan` is reachable from every listener. `Signal::poll_wait`
+  with a second, different waker replaces the first and wakes it, so
+  two listeners waiting on `scan_done()` wake each other in a loop
+  until the scan signals (about 3 s of thread-mode spinning; the panel
+  is on the interrupt executor and is fine); the value is then taken by
+  one waiter and the other sits until `SCAN_WAIT` and redirects. A
+  double click on Rescan, or a phone's captive sheet and a browser tab,
+  is enough. Fix: a scan generation counter with a `Watch`, which any
+  number of waiters can wait on.
+- **A bad token body burns the PIN.** `POST /token` spends the PIN in
+  `token_or_pin` before `parse_token` looks at the body; a 7-character
+  token answers 400 and the page's second try answers "no PIN issued:
+  open the update page first". Fix: parse the body first (a parse
+  changes nothing), then spend the PIN; the page script can also check
+  the length.
+- **`/api` on the access point saves a password with no network.** The
+  `trial.wifi.is_none()` guard is only on the form path; `POST /api
+  password=…` on an unprovisioned access point saves, differs from
+  `boot_wifi`, and the persist task resets into station mode with an
+  empty SSID, which the boot turns back into an access point. A
+  harmless loop, but the script sees "saved" and a reset for nothing.
+  Fix: the same guard on `/api` in access-point mode.
+- **The OTA rollback carries a stale time.** `ota::init` runs before
+  `clock::restore_carried` in `main.rs`, so its `carry_time()` is a
+  no-op (`unix_micros` is `None`) and the record keeps the time written
+  at the end of the previous boot; the restore then adds `RESET_PAUSE`
+  to a value older by that boot's span up to `ota::init` plus its own
+  pause, about a second, shown until NTP. Fix: `restore_carried` before
+  `ota::init`.
+- **Without a usable `nvs` partition a provisioning save never leaves
+  the access point.** The reset into station mode lives in
+  `persist_task`, spawned only when `Store::open` succeeded; with no
+  store the setup page still says the clock will reset and nothing
+  does, while the unchanged-credentials path does reset. A bad
+  partition table only; answer differently or reset from the listener
+  when there is no store. The same shape as the open "failed save is
+  never retried": on the access point a failed save shows the saved
+  page and stays an access point until the next change.
+- **The access point's transmit ceiling is set before the driver is
+  restarted.** `ap_task` calls `set_max_tx_power` and then
+  `set_config(AccessPointStation)`; `WifiController::new` has already
+  started the driver as a station, so that `set_config` is a mode
+  change, which stops and restarts the driver (`esp_wifi_stop`,
+  `esp_wifi_set_mode`, `esp_wifi_start` in esp-radio). ESP-IDF
+  documents the power call as "after WiFi start"; whether the value
+  survives the restart is inside the blob and was not verified. The
+  station path has no restart. Fix: move the call after `set_config`,
+  so the boot line says what is in force.
+
+Nits:
+
+- **The display loop wakes every 64 ms for nothing on the access point
+  and while a PIN shows.** The redraw wait is `BLINK_STEP / 4` for every
+  view but `Time` and `Ip`, right for the blink and the sweep, but
+  `View::Sweep` on the access point is a static `AP` for the whole boot
+  and `View::Pin` is static for its minute. Each wake runs
+  `carry_time`, a `settings::update` under the watch's critical section
+  (which holds off the interrupt executor for its duration), a render
+  and the image compare. Fix: wait `PIN_SHOW` for the PIN and a second
+  for the sweep when `net::mode()` is the access point.
+- **`Store::open` logs inside the flash critical section.** The
+  `error!` lines for a missing partition table or `nvs` entry run
+  inside `with_flash`'s `critical_section::with`, so the serial write
+  stalls everything. Boot-only, before the scan starts; move the match
+  outside the closure.
+- **A discover from a client that already holds a lease cuts the lease
+  to the offer hold.** `Leases::handle` writes `now + OFFER_HOLD_SECS`
+  (60 s) over an existing slot when `find` hits. A phone that
+  re-discovers and then does not request keeps using the address while
+  the slot is free again after a minute and can be offered to the next
+  client. Fix: on a discover, keep the later of the two expiries.
+- **`dnsd::answer` indexes `out` by the query's length.** `out[HEADER..n]`
+  with `n` up to `query.len()` is only checked against `PACKET`; a
+  caller passing a query longer than `out` panics. The task's buffers
+  are both 512 so it cannot happen on the air; a host test feeding a
+  long query would hit it. Fix: `get_mut(HEADER..n)?` like the record
+  copy below it.
+- **`REQUEST_BUF` is tight for the setup form from a phone.** The head
+  and the inline body share 1536 bytes; the setup form at its worst is
+  about 457 bytes encoded (two 32-byte SSIDs and a 64-byte password,
+  percent-escaped), leaving about 1080 for the head, and a mobile
+  browser's POST head to a captive page is about 750 bytes before any
+  cookie another gadget at 192.168.4.1 may have set. Over the limit is
+  the silent close of the open "oversized requests" item, on the one
+  page whose user cannot see the log.
+- **No error from `ap_task` is ever healed.** A failed `set_config`
+  logs once and sleeps for ever; the panel shows `AP` with no network
+  and only a power cycle or a hold helps. Unlikely with the
+  compile-time-checked SSID and password; a log line is probably all
+  that is worth doing.
+- **Stale comments.** `net::Mode`'s doc says the driver does not do
+  AP+STA, which `ap_task` does for the scan; `http.rs` still says an
+  upload is 800 KB where the image is about 650 KB (the second pass's
+  `check_rollback` half is fixed).
+
+What checked out and is not listed: the frame and transfer arithmetic
+(`UNIT_BYTES` 50 over `FRAME_BYTES` 47, 22 cycles plus the blank frame
+in 30847 of 32000 bytes, every region's latch at the same offset); the
+encoder against the model test and the reserved bits; the two-buffer
+hand-off; nothing slow between transfers but the kept `GapStats`
+section; the buzzer's open-drain line on every exit (esp-hal 1.2.2 has
+no `Drop` on `Output` or `Flex`) and the `Signal` command slot; the
+melodies (no zero length, `pick` never yields 0 or `avoid`, no
+overflow); `Instant - Instant` always non-negative in `tick` and the
+trackers; the tracker after a hold reset and the `Both`/`Long`
+suppression; 00:xx and 12:xx in 12-hour mode; `came_round`, the
+midnight and weekday carry, `alarm_on` against `weekday_of_days`, the
+grace and skip logic, the heal hold's bound; `dhcpd::parse` and
+`dnsd::answer` on hostile input (every read through `get`, pointers
+refused), the DHCP state machine against RFC 2131 and the broadcast
+reply's route; `StackResources<10>` against at most eight sockets;
+`RECEIVERS` against three receivers; the atomics as load/store with one
+writer; the flash handle never across an await; `set_config` on a
+reconnect not restarting the driver; `freeze` against `update` in the
+switch pause; the reset-reason gate and the mark; `partitions.csv` and
+the runner's `otadata` erase; `read_request`'s two-pass parse and the
+inline body bound; `parse_head` on partial reads and bad lengths; the
+per-listener `Response` buffer (no cross-listener race) and the clean
+500 on overflow; `drain` and the 503 exception; `install`'s `total <
+SECTOR` guard, slot bound, `hash_chunk` at every boundary, padding,
+one `with_flash` per sector, `otadata` untouched and `resume` on every
+failure, `next_ota_part` skipping the booted slot by the MMU entry,
+`confirm` before `reboot`; `token_ok` visiting the whole secret with an
+empty token never matching, the PIN's one attempt, TTL and lockout; the
+network keys refused on the key alone and the JSON's `password_set`
+and `token_set`; `JsonStr`/`HtmlStr` on the SSID; the update page's
+upload, poll and token scripts; the page sizes under the tests;
+`version_from` and the 31-byte version; the scripts; `to_record` and
+`from_record` for every version and the newer prefix, an empty slice,
+non-UTF-8 strings (rejected), `RECORD_LEN` against `store_item`'s
+buffer; `Secret`'s `Debug` everywhere a `Settings` is formatted; the
+const asserts on the build-time strings; `seed` with an empty
+`WIFI_SSID` (not seeded, the boot is an access point);
+`send_if_modified` on embassy-sync 0.7.2; the persist compare and its
+`boot_wifi` test in both modes; every `carry::update` on the thread
+executor with no await inside; the codec's zero-means-none and 2106;
+`local_time` and `weekday_of_days` on negative times and the `i16`
+timezone extremes; `OFFSET_US`'s two writers behind `critical_section`;
+`parse_i32`.
 
 ## 6. Risks and how they are handled
 

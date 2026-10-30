@@ -141,7 +141,7 @@ pub fn build_transfer(img: &ScanImage, out: &mut [u8]) {
     let (cycles, blank) = out.split_at_mut(CYCLES_PER_TRANSFER * CYCLE_BYTES);
     build_cycle(img, cycles);
     let (first, rest) = cycles.split_at_mut(CYCLE_BYTES);
-    for chunk in rest.chunks_exact_mut(CYCLE_BYTES) {
+    for chunk in rest.as_chunks_mut::<CYCLE_BYTES>().0 {
         chunk.copy_from_slice(first);
     }
     encode_pair(0, 0, COM_SEQ[SLOTS - 1], img.is_step, blank.try_into().unwrap());
