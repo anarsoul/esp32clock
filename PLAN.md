@@ -2527,9 +2527,9 @@ picks one at random for the alarm.
   - `westminster`, the Westminster Quarters: the four changes of the
     hour sequence, each four notes and a pause, at 72 bpm. The clock
     chime; the lowest note is D5.
-  - `reveille`, the US bugle call's first strain, twice as it is
-    played: a pickup and three bars of the dotted figure on the bugle
-    notes (D5, G5, B5), at 120 bpm.
+  - `reveille`, the US bugle call, from the user's score
+    (`reveille.png`, 2026-10-30): eight bars of cut time on the bugle
+    notes, at 160 bpm in quarters (the score's half note of 80).
   - `elise`, the opening of Beethoven's Für Elise (1810): the first
     eight bars of the melody line with the left hand's arpeggios where
     the right hand rests, at 100 bpm. It needs the pitches C5, E5, G#5
@@ -2706,6 +2706,19 @@ With the tape on, the one-third duty for the low pitches was compared
 with the square wave through a second temporary hook
 (`POST /play?low=NN`, Für Elise and Frère Jacques): little difference
 to the ear now, so 33 % stays and the hook was dropped uncommitted.
+
+**Reveille from the score (2026-10-30).** The user found the notes
+wrong and supplied a trombone score (`reveille.png`, bass clef, cut
+time, half note 80). It reads G | C E C G E | C E C G E | C E C G C |
+E (half, slurred) C G | C E C G E | C E C G E | C E C G G | C (whole):
+quarters with one pair of eighths in each bar, and no dotted figure
+anywhere; the first cut had the dotted-eighth and sixteenth of the
+other bugle calls, a wrong fourth bar and only three bars repeated.
+Rewritten from the score on the same three pitches (G5, C6, E6, the
+range is a sixth, so nothing new for the buzzer) at 160 bpm in
+quarters, the score's tempo; an eighth is 188 ms and a pass 12.4 s.
+The bar with the two G quarters in a row is where the articulation gap
+in `Note::sounding` is heard. Heard on the bench 2026-10-30: better.
 
 ### Fewer `unsafe` blocks (after the tunes) — DONE, verified on the panel 2026-10-29
 

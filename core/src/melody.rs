@@ -120,7 +120,6 @@ const fn n(hz: u32, len: u8) -> Note {
 // Lengths in sixteenths.
 const S: u8 = 1;
 const E: u8 = 2;
-const DE: u8 = 3;
 const Q: u8 = 4;
 const DQ: u8 = 6;
 const H: u8 = 8;
@@ -226,23 +225,27 @@ pub const WESTMINSTER: Melody = Melody {
     repeat_gap_ms: 2000,
 };
 
-/// Reveille, the first strain of the bugle call, played twice as it is
-/// in the call: a pickup and the dotted figure on the bugle's notes,
-/// which in C are G5, C6 and E6. Traditional, US Army.
+/// Reveille, the US bugle call, from a trombone score in cut time at
+/// a half note of 80 (`reveille.png`): a pickup, then do mi do sol mi
+/// three times (the third ending on do), a held mi falling to do and
+/// sol, the three bars again (the third ending sol sol) and a held do.
+/// The bugle's three notes, in C: G5, C6 and E6, which is where the
+/// buzzer is even; 160 bpm is the score's tempo in quarters, an eighth
+/// 188 ms, 12.4 s a pass. Traditional, US Army.
 pub const REVEILLE: Melody = Melody {
     name: "reveille",
     label: "Reveille",
-    bpm: 120,
+    bpm: 160,
     notes: &[
-        n(G5, E),
-        n(C6, DE), n(E6, S), n(C6, E), n(G5, E),
-        n(C6, DE), n(E6, S), n(C6, E), n(G5, E),
-        n(C6, DE), n(E6, S), n(C6, E), n(E6, E),
-        n(C6, Q), n(REST, E), n(G5, E),
-        n(C6, DE), n(E6, S), n(C6, E), n(G5, E),
-        n(C6, DE), n(E6, S), n(C6, E), n(G5, E),
-        n(C6, DE), n(E6, S), n(C6, E), n(E6, E),
-        n(C6, Q), n(REST, Q),
+        n(G5, Q),
+        n(C6, Q), n(E6, E), n(C6, E), n(G5, Q), n(E6, Q),
+        n(C6, Q), n(E6, E), n(C6, E), n(G5, Q), n(E6, Q),
+        n(C6, Q), n(E6, E), n(C6, E), n(G5, Q), n(C6, Q),
+        n(E6, H), n(C6, Q), n(G5, Q),
+        n(C6, Q), n(E6, E), n(C6, E), n(G5, Q), n(E6, Q),
+        n(C6, Q), n(E6, E), n(C6, E), n(G5, Q), n(E6, Q),
+        n(C6, Q), n(E6, E), n(C6, E), n(G5, Q), n(G5, Q),
+        n(C6, W),
     ],
     repeat_gap_ms: 2000,
 };
