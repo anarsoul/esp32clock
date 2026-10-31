@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Vasily Khoruzhick
+
 //! Build-time configuration.
 //!
 //! Credentials and the timezone come from environment variables when the

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Vasily Khoruzhick
+
 //! A captive DNS for the clock's own access point: every name is the
 //! clock. A phone that has joined checks for internet by looking up a
 //! known name and fetching a page from it; with the answer pointing

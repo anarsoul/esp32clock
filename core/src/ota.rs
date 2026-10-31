@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Vasily Khoruzhick
+
 //! What an OTA image looks like, and the pieces of the upload that need
 //! no flash: the header and descriptor offsets, the slot names, the
 //! appended-hash bookkeeping and the version string.

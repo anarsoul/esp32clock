@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Vasily Khoruzhick
+
 //! The record carried across a software reset: its layout and codec.
 //! The RTC-RAM static it lives in, and the reset-reason gate, are in the
 //! firmware's `carry`.

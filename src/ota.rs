@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Vasily Khoruzhick
+
 //! Firmware updates over the LAN: `POST /ota` with the application image
 //! as the body writes the slot that is not running, switches `otadata`
 //! to it and reboots. The upload must prove it may, with the token or

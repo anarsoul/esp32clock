@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Vasily Khoruzhick
 # Reset the clock the deliberate way and wait for it to come back.
 # POST /reload blanks the panel, carries the time and the alarm state
 # across the reset and does not count as a self-heal; see AGENTS.md.

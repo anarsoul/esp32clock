@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Vasily Khoruzhick
+
 //! A DHCP server for the clock's own access point, enough for a phone
 //! to get an address and open the page: discover and request answered
 //! with offer, ack or nak, eight leases, one option set. embassy-net

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Vasily Khoruzhick
+
 //! What the two front buttons report. The debouncing task that reads the
 //! pins is in the firmware; these are the events it sends.
 

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Vasily Khoruzhick
 # Host-side view of the clock's reachability: every PERIOD seconds, one
 # full-size ping (the same 1400-byte payload as the firmware's gateway
 # probe, so short frames cannot pass while page-sized ones fail) and one

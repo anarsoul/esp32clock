@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Vasily Khoruzhick
+
 //! Deliberate resets: the panel is blanked first and the time goes
 //! across in the record `carry` keeps across a software reset, so a
 //! reset does not cost the display. A self-heal, the last resort, is

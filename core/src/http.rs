@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Vasily Khoruzhick
+
 //! The part of the HTTP server that needs no socket: the request head
 //! parser and the response buffer's size, which the pages are checked
 //! against on the host.

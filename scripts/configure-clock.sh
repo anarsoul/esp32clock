@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Vasily Khoruzhick
 # Configure the clock over the LAN: orange at 10 %, the "beeps" melody,
 # alarm 07:40 armed on weekdays, no skip, 24-hour display. Timezone and
 # hostname are not sent, so they stay as they are. Needs curl.

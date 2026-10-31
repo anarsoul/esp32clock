@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Vasily Khoruzhick
+
 //! The settings page and API: a few TCP sockets, one request per
 //! connection, responses built whole and written once. Runs in thread
 //! mode and never touches the scan path, except that a firmware upload

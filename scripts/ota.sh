@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Vasily Khoruzhick
 # Build the firmware, turn it into an application image and post it to
 # the clock's /ota. Needs espflash and curl, and API_TOKEN in the
 # environment (the same value the firmware was built with).

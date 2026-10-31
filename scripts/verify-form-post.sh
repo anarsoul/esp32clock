@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Vasily Khoruzhick
 # Checks that a refused form post on `/` saves nothing and reports why,
 # and that a good one sticks. Needs curl. Usage: verify-form-post.sh <ip>
 #

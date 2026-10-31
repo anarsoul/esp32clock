@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Vasily Khoruzhick
+
 //! Turns the clock and the UI state into panel images, and rings the alarm.
 
 use core::sync::atomic::{AtomicBool, Ordering};

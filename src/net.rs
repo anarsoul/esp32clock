@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Vasily Khoruzhick
+
 //! Wi-Fi station, network stack and SNTP sync; or, for a clock with no
 //! network to join, the access point a phone provisions it through.
 

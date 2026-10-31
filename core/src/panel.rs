@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Vasily Khoruzhick
+
 //! HU-058 panel map: which driver, COM pair and SEG line each segment sits
 //! on, and a framebuffer with per-position colour that renders to per-slot,
 //! per-bit-plane SS words.

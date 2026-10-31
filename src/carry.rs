@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Vasily Khoruzhick
+
 //! State carried across a software reset in RTC fast RAM: the self-heal
 //! count and time, the wall clock as the Unix time last written, the
 //! volatile alarm state a reboot would otherwise lose (the skip-next

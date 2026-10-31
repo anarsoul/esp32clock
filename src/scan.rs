@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Vasily Khoruzhick
+
 //! Display scan engine: SPI2 in quad mode as a four-wire pattern generator.
 //!
 //! One DMA transfer carries several whole multiplex cycles back to back.

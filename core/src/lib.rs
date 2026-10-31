@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Vasily Khoruzhick
+
 //! The hardware-independent half of the clock firmware: the settings and
 //! their flash record, the form and pages, the UI state machine, the
 //! panel map and the AiP33628 encoder, the melodies, the HTTP head

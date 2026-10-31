@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Vasily Khoruzhick
+
 //! Calendar arithmetic for the wall clock: a Unix time and a timezone
 //! offset to the local time of day and the weekday. The clock itself,
 //! uptime plus the NTP offset, is in the firmware.

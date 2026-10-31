@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Vasily Khoruzhick
+
 //! AiP33628 frame format and the quad-SPI waveform encoder.
 //!
 //! The chip is a 30-bit shift register in front of an output latch, two wires

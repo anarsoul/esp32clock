@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Vasily Khoruzhick
 # Ask the clock for a PIN and read it back from the serial log, for a
 # bench run without eyes on the panel. POST /pin puts four digits on the
 # panel and in the log (never in the response); this prints them, so

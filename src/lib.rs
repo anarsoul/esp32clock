@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Vasily Khoruzhick
+
 #![no_std]
 
 // The hardware-independent modules live in `esp32clock-core`, tested on

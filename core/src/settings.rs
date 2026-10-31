@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Vasily Khoruzhick
+
 //! The user's settings: one shared value with a change signal, and the
 //! record they are stored as in flash.
 //!

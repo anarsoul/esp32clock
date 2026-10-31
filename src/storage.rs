@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Vasily Khoruzhick
+
 //! Settings in flash: the `nvs` partition, a `sequential-storage` map over
 //! `esp-storage`, and a task that writes a changed value once the user has
 //! stopped pressing buttons.

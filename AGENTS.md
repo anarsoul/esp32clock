@@ -25,6 +25,10 @@ of. `CLAUDE.md` is a symlink to this file; edit this one.
   for this trailer in this project).
 - `3rdparty/` is the reverse-engineering reference (public domain), ignored
   by git. Read it; do not modify it.
+- The project is licensed MIT OR Apache-2.0 (`LICENSE-MIT`,
+  `LICENSE-APACHE`, the `license` field of both manifests). Every `.rs`
+  and `.sh` file starts with an `SPDX-License-Identifier` line and the
+  copyright line; give a new file both. The reference in `3rdparty/` is CC0 and needs nothing.
 
 ## Build and flash
 

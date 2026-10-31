@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Vasily Khoruzhick
+
 //! The mode state machine behind the two buttons.
 //!
 //! Pure logic: events, the settings and the time go in, a `View` of what

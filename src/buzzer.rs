@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Vasily Khoruzhick
+
 //! Buzzer on GPIO5 through the LEDC PWM peripheral.
 //!
 //! The buzzer is a magnetic type driven by an S8550 PNP whose emitter sits

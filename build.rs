@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Vasily Khoruzhick
+
 fn main() {
     // The build-time credentials and defaults are read in `core/`, whose
     // own build.rs reruns it when they change.

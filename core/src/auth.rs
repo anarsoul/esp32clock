@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Vasily Khoruzhick
+
 //! Who may do what over HTTP: the API token and the panel PIN.
 //!
 //! The token is a setting (`settings::Settings::token`), seeded from
