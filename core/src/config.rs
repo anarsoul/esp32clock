@@ -153,12 +153,29 @@ pub const WIFI_RX_QUEUE_FRAMES: usize = 32;
 /// answers ping from rebooting the clock every five minutes.
 pub const PROBE_RESET_FAILURES: u32 = 10;
 
-/// Payload of each gateway probe. A page is two full-size TCP segments,
-/// and a marginal uplink passes short frames long after full ones start
-/// failing, so a small ping said "fine" while the page crawled. This
-/// makes the probe frame the size of a page segment: 1400 + 28 bytes of
-/// headers, under the driver's 1492-byte MTU with margin.
-pub const PROBE_PAYLOAD_BYTES: usize = 1400;
+/// The Wi-Fi driver's MTU, `ESP_RADIO_CONFIG_WIFI_MTU` in
+/// `.cargo/config.toml` (esp-radio's default is 1492), read here too so
+/// the probe follows it. The largest frame the clock sends: the access
+/// point hears the clock 20 dB below what the clock hears of it, and a
+/// marginal uplink passes short frames long after full ones fail, so the
+/// frames are kept short (2026-11-01: 540, a TCP payload of 486). Only
+/// what the clock sends is bounded; smoltcp applies the MTU when it
+/// emits and the driver hands received frames over whole, so a peer may
+/// still send larger UDP or ICMP, while a TCP peer is told the segment
+/// size in the handshake and keeps to it.
+pub const WIFI_MTU: usize = match option_env!("ESP_RADIO_CONFIG_WIFI_MTU") {
+    Some(s) => parse_i32(s) as usize,
+    None => 1492,
+};
+
+/// Payload of each gateway probe: the largest ping the stack can send
+/// at `WIFI_MTU`, after the Ethernet, IP and ICMP headers, so the probe
+/// frame is the largest frame the clock ever sends. A smaller ping said
+/// "fine" while page segments were failing. `scripts/watch-clock.sh`
+/// pings the clock with the same size from the host, and a larger ping
+/// from the LAN goes unanswered, since the reply would not fit.
+pub const PROBE_PAYLOAD_BYTES: usize = WIFI_MTU - 14 - 20 - 8;
+const _: () = assert!(PROBE_PAYLOAD_BYTES >= 64 && WIFI_MTU <= 1492, "ESP_RADIO_CONFIG_WIFI_MTU must be 106 to 1492");
 
 /// Consecutive failed connects after which the station is reset, and
 /// the span from the first failure of the run that does the same. The

@@ -4218,3 +4218,49 @@ record: `/api` came up with `temp_show` `c` and the offset still
 −0.7; `f` was taken and echoed, `k` was a 400, the page has the
 select, and `c` put it back. The settings page is 3121 bytes. The
 user watched the face on the panel: works as expected.
+
+#### Short frames on the uplink (after the temperature face) — DONE, verified on the bench 2026-11-01
+
+The adapter-built clocks hear the access point 10 to 25 dB weaker
+than the old bench board (M11a), the access point hears them 20 dB
+below that again, and a marginal uplink passes short frames long
+after full ones fail. Until the antenna rework lands, the clock
+sends only short frames: `ESP_RADIO_CONFIG_WIFI_MTU` 540 in
+`.cargo/config.toml`'s `[env]` (esp-radio's compile-time key; the
+default is 1492), which smoltcp turns into a 486-byte TCP payload
+and the largest ICMP payload of 498. The probe follows it:
+`config::WIFI_MTU` reads the same variable back and
+`PROBE_PAYLOAD_BYTES` is `WIFI_MTU - 42`, with a compile-time
+assert on the range, so the probe stays the largest frame the clock
+sends; `core/build.rs` reruns on the variable. `scripts/watch-clock.sh`
+pings with 498.
+
+It is a transmit-side limit only. smoltcp applies the MTU in
+`dispatch_ip` and the TCP segment size (smoltcp 0.14, checked), never
+on ingress, and esp-radio hands received frames to the stack whole
+from the driver's own buffers, so a DHCP offer, a DNS answer or a
+ping from the LAN of any size still arrives. What cannot be kept is
+the segment size the clock advertises in the TCP handshake, which a
+conforming peer obeys: an OTA upload arrives in 486-byte pieces,
+three times the segments through the 4 KB window. The one visible
+change on the LAN: a ping larger than 498 bytes gets no reply, since
+embassy-net is built without IPv4 fragmentation and the reply would
+not fit. The access point's DHCP server pads its replies to 300
+bytes with a few options on top, well under the limit.
+
+**Verify on the bench.** The probe line says a 498-byte ping; the
+page and `/api` still come back in under 100 ms; `ping -s 498` from
+the host is answered and `-s 1400` is not; an OTA upload still
+completes; the heartbeat's failed-probe count stays at 0 over the
+evening.
+
+**Bench, 2026-11-01.** blue-clock over USB, esp-radio rebuilt for the
+key: the probe line says `answers a 498-byte ping in 79 ms` (46 ms
+after the next boot); from the host `ping -s 498` is answered (two
+of three in the first burst after boot, then clean), `-s 1400` gets
+nothing, the plain ping all three; the page's 2876 bytes come back
+in 32 to 43 ms; `scripts/ota.sh` put the 714 KB image through the
+486-byte segments in 7.4 s, no slower than before (the flash write
+is the bound), and the clock rebooted into `ota_1` with the record
+and the carry intact. The evening's failed-probe count is still
+owed.

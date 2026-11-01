@@ -68,8 +68,8 @@ and only the latter is filled from the build. For a network debugging run set
 (it overrides the config, and esp-println compiles the filter in); the
 extra lines are DHCP state and driver events, not packets. Every log
 line carries the uptime in ms. `scripts/watch-clock.sh <ip>` sends a
-full-size ping and fetches `/api` from the host every 30 s for the other
-side of the story.
+498-byte ping (the largest the clock answers, see the MTU below) and
+fetches `/api` from the host every 30 s for the other side of the story.
 
 Credentials, the default timezone and the API token are read at build
 time by `core/src/config.rs`; `core/build.rs` reruns that crate when
@@ -172,8 +172,9 @@ Any press ends ringing or the IP display. Set mode times out after 15 s,
 ringing after 5 minutes. Self-heal: once the gateway has answered a ping, ten
 failed probes in a row (five minutes) with the link still up blank the
 panel and reset the chip (`config::PROBE_RESET_FAILURES`). The probe is
-a full-size ping (`config::PROBE_PAYLOAD_BYTES`, 1400 bytes) because a
-marginal uplink passes short frames while page-sized ones fail; so do ten
+a ping of the largest frame the clock sends (`config::PROBE_PAYLOAD_BYTES`,
+498 bytes at the 540-byte MTU) because a marginal uplink passes short
+frames while full ones fail; so do ten
 failed connects in a row or three minutes of them
 (`config::CONNECT_RESET_ATTEMPTS`, `CONNECT_RESET_SECS`), because the
 driver avoids the access point that last dropped it and only a reset
@@ -397,6 +398,19 @@ module ends with its `#[cfg(test)] mod tests`.
   probe and the HTTP listeners with headroom (on the access point: the
   DHCP and DNS servers and the listeners); adding sockets means raising it.
 - `HOSTNAME_MAX` (24) stays under embassy-net's 32-byte DHCP option.
+- `ESP_RADIO_CONFIG_WIFI_MTU` (540, in `.cargo/config.toml`'s `[env]`,
+  read back as `config::WIFI_MTU`) bounds every frame the clock sends:
+  TCP segments carry 486 bytes, the probe 498, and a page is seven
+  segments instead of two. It is a transmit-side limit only (smoltcp
+  applies it when emitting; the driver passes received frames whole),
+  chosen because the access point hears the clock 20 dB below what the
+  clock hears of it and short frames pass where full ones fail
+  (2026-11-01, the adapter-built clocks at −52 to −65 dBm). Two
+  consequences: a TCP peer is told the 486-byte segment size and sends
+  an upload in 486-byte pieces, and a ping larger than 498 bytes from
+  the LAN gets no reply, since the reply would not fit;
+  `scripts/watch-clock.sh` pings with 498. Raising it means the probe
+  grows with it; nothing else depends on the number.
 - `config::WIFI_RX_QUEUE_FRAMES` (32) is the driver's receive queue;
   esp-radio's default of 5 dropped bursts of LAN broadcasts, visible as
   `RX QUEUE FULL` with `esp_radio=debug`. The stack answers ping only

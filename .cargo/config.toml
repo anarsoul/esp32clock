@@ -6,6 +6,12 @@ runner = "espflash flash --monitor --chip esp32c3 --partition-table partitions.c
 
 [env]
 ESP_LOG="info"
+# The Wi-Fi driver's MTU, which smoltcp turns into the largest frame the
+# clock sends (TCP segments of MTU - 54 bytes of payload). Small so a
+# marginal uplink, which passes short frames long after full ones fail,
+# keeps passing them; received frames are not bounded by it. The probe's
+# size follows it in `core/src/config.rs`.
+ESP_RADIO_CONFIG_WIFI_MTU="540"
 
 [alias]
 # The host-testable half; `build.target` above would otherwise aim the tests at the chip.
