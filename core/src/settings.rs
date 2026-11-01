@@ -278,6 +278,9 @@ pub struct Settings {
     pub twelve_hour: bool,
     /// Minutes east of UTC.
     pub tz_offset_minutes: i16,
+    /// Tenths of a degree Celsius added to the thermometer's reading:
+    /// the sensor sits in the case's warm air, a little above the room.
+    pub temp_offset_dc: i16,
     /// Name sent to the DHCP server.
     pub hostname: Hostname,
     /// Days the alarm rings on: bit 0 Monday to bit 6 Sunday.
@@ -300,13 +303,16 @@ pub struct Settings {
 }
 
 /// Bytes in a stored record.
-pub const RECORD_LEN: usize = 168;
+pub const RECORD_LEN: usize = 170;
+
+/// The thermometer offset's bound, tenths of a degree either way.
+pub const TEMP_OFFSET_LIMIT_DC: i16 = 100;
 
 /// Stored record layout version. Bump when the layout changes, append
 /// the new fields and teach `from_record` the old one, or the user's
 /// settings are lost; never reorder, since an older image reads a newer
 /// record by its prefix.
-const RECORD_VERSION: u8 = 7;
+const RECORD_VERSION: u8 = 8;
 
 /// Where the hostname sits in a version 3 record.
 const RECORD_HOSTNAME_LEN: usize = 9;
@@ -335,7 +341,11 @@ const RECORD_TOKEN: usize = RECORD_TOKEN_LEN + 1;
 /// does not know are ignored, so a later image may add some.
 const RECORD_FLAGS: usize = RECORD_TOKEN + TOKEN_MAX;
 const FLAG_TOKEN_CLEARED: u8 = 1 << 0;
-const _: () = assert!(RECORD_FLAGS + 1 == RECORD_LEN, "RECORD_LEN does not match the layout");
+
+/// Where the thermometer offset sits in a version 8 record, two bytes
+/// little-endian.
+const RECORD_TEMP_OFFSET: usize = RECORD_FLAGS + 1;
+const _: () = assert!(RECORD_TEMP_OFFSET + 2 == RECORD_LEN, "RECORD_LEN does not match the layout");
 
 /// Day names, Monday first, for the page and the API.
 pub const DAY_NAMES: [&str; 7] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
@@ -364,6 +374,7 @@ impl Settings {
         alarm_armed: false,
         twelve_hour: DEFAULT_TWELVE_HOUR,
         tz_offset_minutes: DEFAULT_TZ_OFFSET_MINUTES,
+        temp_offset_dc: 0,
         hostname: Hostname::DEFAULT,
         alarm_days: DAYS_ALL,
         melody: 0,
@@ -408,6 +419,7 @@ impl Settings {
             && self.alarm_hour < 24
             && self.alarm_minute < 60
             && (-TZ_LIMIT_MINUTES..=TZ_LIMIT_MINUTES).contains(&self.tz_offset_minutes)
+            && (-TEMP_OFFSET_LIMIT_DC..=TEMP_OFFSET_LIMIT_DC).contains(&self.temp_offset_dc)
             && self.alarm_days != 0
             && self.alarm_days & !DAYS_ALL == 0
             && self.melody <= melody::RANDOM
@@ -424,7 +436,8 @@ impl Settings {
     /// minute, armed, twelve-hour, timezone offset as little-endian i16,
     /// hostname length, hostname padded to 24 bytes, alarm days, melody
     /// (`0xff` for random), then the SSID, the password and the token,
-    /// each a length byte and a padded field, then the flags byte.
+    /// each a length byte and a padded field, then the flags byte and
+    /// the thermometer offset.
     pub fn to_record(&self) -> [u8; RECORD_LEN] {
         let tz = self.tz_offset_minutes.to_le_bytes();
         let mut r = [0u8; RECORD_LEN];
@@ -450,6 +463,7 @@ impl Settings {
         r[RECORD_TOKEN_LEN] = self.token.0.len;
         r[RECORD_TOKEN..RECORD_TOKEN + TOKEN_MAX].copy_from_slice(&self.token.0.bytes);
         r[RECORD_FLAGS] = if self.token_cleared { FLAG_TOKEN_CLEARED } else { 0 };
+        r[RECORD_TEMP_OFFSET..RECORD_TEMP_OFFSET + 2].copy_from_slice(&self.temp_offset_dc.to_le_bytes());
         r
     }
 
@@ -457,8 +471,9 @@ impl Settings {
     /// take the defaults: version 1 (M5) stops after `armed`, version 2
     /// (M6) after the timezone, version 3 (M6) after the hostname, version
     /// 4 (M7) after the alarm days, version 5 (M8) after the melody, so
-    /// those read as no network and no token, and version 6 (M10) after
-    /// the token, so no flags. Versions are append-only, so a record
+    /// those read as no network and no token, version 6 (M10) after
+    /// the token, so no flags, and version 7 after the flags, so no
+    /// thermometer offset. Versions are append-only, so a record
     /// from a newer image is read by the prefix this one knows, and a
     /// colour, brightness or melody index past this image's table (an
     /// entry a newer image added, or a higher current ceiling) lands on
@@ -506,6 +521,9 @@ impl Settings {
         }
         if version >= 7 {
             s.token_cleared = *r.get(RECORD_FLAGS)? & FLAG_TOKEN_CLEARED != 0;
+        }
+        if version >= 8 {
+            s.temp_offset_dc = i16::from_le_bytes([*r.get(RECORD_TEMP_OFFSET)?, *r.get(RECORD_TEMP_OFFSET + 1)?]);
         }
         s.color = s.color.min(PALETTE.len() - 1);
         // A record saved by a build with a higher ceiling may name a step
@@ -575,6 +593,7 @@ mod tests {
             alarm_armed: true,
             twelve_hour: true,
             tz_offset_minutes: -420,
+            temp_offset_dc: -TEMP_OFFSET_LIMIT_DC,
             hostname: Hostname::new(&"h".repeat(HOSTNAME_MAX)).unwrap(),
             alarm_days: 0b0101010,
             melody: melody::RANDOM,
@@ -658,6 +677,7 @@ mod tests {
             4 => RECORD_ALARM_DAYS + 1,
             5 => RECORD_MELODY + 1,
             6 => RECORD_FLAGS,
+            7 => RECORD_TEMP_OFFSET,
             _ => RECORD_LEN,
         }
     }
@@ -680,6 +700,7 @@ mod tests {
             assert_eq!(got.wifi, if version >= 6 { s.wifi } else { Credentials::NONE }, "v{version} network");
             assert_eq!(got.token, if version >= 6 { s.token } else { Secret(Text::EMPTY) }, "v{version} token");
             assert!(!got.token_cleared, "v{version} has no flags");
+            assert_eq!(got.temp_offset_dc, 0, "v{version} has no thermometer offset");
         }
     }
 
@@ -796,6 +817,10 @@ mod tests {
         assert!(!Settings { brightness: BRIGHTNESS_STEPS.len(), ..ok }.is_valid());
         assert!(Settings { melody: melody::RANDOM, ..ok }.is_valid());
         assert!(!Settings { melody: melody::RANDOM + 1, ..ok }.is_valid());
+        assert!(Settings { temp_offset_dc: TEMP_OFFSET_LIMIT_DC, ..ok }.is_valid());
+        assert!(Settings { temp_offset_dc: -TEMP_OFFSET_LIMIT_DC, ..ok }.is_valid());
+        assert!(!Settings { temp_offset_dc: TEMP_OFFSET_LIMIT_DC + 1, ..ok }.is_valid());
+        assert!(!Settings { temp_offset_dc: -TEMP_OFFSET_LIMIT_DC - 1, ..ok }.is_valid());
         assert!(Settings { alarm_days: DAYS_WEEKEND, ..ok }.alarm_on(5));
         assert!(!Settings { alarm_days: DAYS_WEEKEND, ..ok }.alarm_on(4));
         assert_eq!(RECORD_LEN, ok.to_record().len());

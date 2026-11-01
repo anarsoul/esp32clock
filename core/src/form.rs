@@ -7,10 +7,11 @@
 use core::fmt::Write as _;
 
 use crate::melody;
+use crate::sensors::{Tenths, fahrenheit_tenths};
 use crate::settings::{
     BRIGHTNESS_STEPS, Credentials, DAY_NAMES, DAYS_ALL, DAYS_WEEKDAYS, DAYS_WEEKEND, HOSTNAME_MAX, Hostname, PALETTE_NAMES,
-    PASSWORD_MAX, PASSWORD_MIN, SSID_MAX, Secret, Settings, TOKEN_MAX, TZ_LIMIT_MINUTES, Text, valid_password,
-    valid_token,
+    PASSWORD_MAX, PASSWORD_MIN, SSID_MAX, Secret, Settings, TEMP_OFFSET_LIMIT_DC, TOKEN_MAX, TZ_LIMIT_MINUTES, Text,
+    valid_password, valid_token,
 };
 
 /// Longest form value, decoded: the password.
@@ -38,6 +39,11 @@ pub struct Status {
     pub heals: u32,
     /// When the last self-heal happened, if one did and the time was known.
     pub last_heal: Option<HealStamp>,
+    /// The room in tenths of a degree Celsius: `None` before the first
+    /// reading or with no thermometer fitted.
+    pub temp_dc: Option<i16>,
+    /// The light index, 0 (dark) to 100: `None` before the first reading.
+    pub light: Option<u8>,
 }
 
 /// The time of a self-heal, converted by the caller so this module stays
@@ -249,12 +255,40 @@ pub fn apply_one(s: &mut Settings, key: &str, value: &str, credentials: bool) ->
             }
             s.tz_offset_minutes = tz;
         }
+        "temp_offset" => {
+            let dc = parse_tenths(value).ok_or(FormError::BadValue)?;
+            if !(-TEMP_OFFSET_LIMIT_DC..=TEMP_OFFSET_LIMIT_DC).contains(&dc) {
+                return Err(FormError::BadValue);
+            }
+            s.temp_offset_dc = dc;
+        }
         "hostname" => s.hostname = Hostname::new(value).ok_or(FormError::BadValue)?,
         "days" => s.alarm_days = parse_days(value).ok_or(FormError::BadValue)?,
         "melody" => s.melody = melody::index_of(value).ok_or(FormError::BadValue)?,
         _ => return Err(FormError::UnknownKey),
     }
     Ok(())
+}
+
+/// A decimal with at most one place, as tenths: `-0.7` is −7, `1` is
+/// 10, `+2.5` is 25. Nothing else: no second decimal, no bare point.
+pub fn parse_tenths(value: &str) -> Option<i16> {
+    let (negative, rest) = match value.as_bytes().first()? {
+        b'-' => (true, &value[1..]),
+        b'+' => (false, &value[1..]),
+        _ => (false, value),
+    };
+    let (whole, tenth) = match rest.split_once('.') {
+        Some((w, t)) => (w, t),
+        None => (rest, "0"),
+    };
+    if whole.is_empty() || whole.len() > 4 || tenth.len() != 1 || !whole.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let whole: i16 = whole.parse().ok()?;
+    let tenth = (*tenth.as_bytes().first()? as char).to_digit(10)? as i16;
+    let dc = whole.checked_mul(10)?.checked_add(tenth)?;
+    Some(if negative { -dc } else { dc })
 }
 
 /// Apply every `key=value` pair of a form body or query string to `s`.
@@ -363,10 +397,24 @@ pub fn parse_token(body: &[u8]) -> Result<Secret<TOKEN_MAX>, FormError> {
     token.ok_or(FormError::BadValue)
 }
 
+/// An optional value as JSON: the value, or `null`.
+struct OrNull<T>(Option<T>);
+
+impl<T: core::fmt::Display> core::fmt::Display for OrNull<T> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match &self.0 {
+            Some(v) => write!(f, "{v}"),
+            None => f.write_str("null"),
+        }
+    }
+}
+
 /// The settings as JSON (the SSID, then whether a password and a token
 /// are set, never their values), followed by the read-only status keys
-/// `version`, `slot`, `mode`, `uptime` (seconds), `heals` and `last_heal`
-/// (Unix seconds or null).
+/// `version`, `slot`, `mode`, `uptime` (seconds), `heals`, `temp_c` and
+/// `temp_f` (tenths, or null with no thermometer), `light` (0 to 100,
+/// or null before the first reading) and `last_heal` (Unix seconds or
+/// null).
 pub fn write_json(out: &mut impl core::fmt::Write, s: &Settings, st: &Status) -> core::fmt::Result {
     write!(
         out,
@@ -380,11 +428,12 @@ pub fn write_json(out: &mut impl core::fmt::Write, s: &Settings, st: &Status) ->
     write_days(out, s.alarm_days)?;
     write!(
         out,
-        "\",\"skip\":{},\"melody\":\"{}\",\"twelve_hour\":{},\"tz\":{},\"hostname\":\"{}\",\"ssid\":\"{}\",\"password_set\":{},\"token_set\":{},\"version\":\"{}\",\"slot\":\"{}\",\"mode\":\"{}\",\"uptime\":{},\"heals\":{},\"last_heal\":",
+        "\",\"skip\":{},\"melody\":\"{}\",\"twelve_hour\":{},\"tz\":{},\"temp_offset\":{},\"hostname\":\"{}\",\"ssid\":\"{}\",\"password_set\":{},\"token_set\":{},\"version\":\"{}\",\"slot\":\"{}\",\"mode\":\"{}\",\"uptime\":{},\"heals\":{},\"temp_c\":{},\"temp_f\":{},\"light\":{},\"last_heal\":",
         s.skip_next,
         melody::name(s.melody),
         s.twelve_hour,
         s.tz_offset_minutes,
+        Tenths(s.temp_offset_dc),
         s.hostname.as_str(),
         JsonStr(s.wifi.ssid.as_str()),
         !s.wifi.password.0.is_empty(),
@@ -394,6 +443,9 @@ pub fn write_json(out: &mut impl core::fmt::Write, s: &Settings, st: &Status) ->
         st.mode,
         st.uptime_secs,
         st.heals,
+        OrNull(st.temp_dc.map(Tenths)),
+        OrNull(st.temp_dc.map(|dc| Tenths(fahrenheit_tenths(dc)))),
+        OrNull(st.light),
     )?;
     match st.last_heal {
         Some(h) => writeln!(out, "{}}}", h.unix_secs),
@@ -402,9 +454,10 @@ pub fn write_json(out: &mut impl core::fmt::Write, s: &Settings, st: &Status) ->
 }
 
 /// The status lines under the form: the firmware with a link to the
-/// update page, then uptime and self-heals.
+/// update page, then uptime and self-heals, then the room.
 fn write_status(out: &mut impl core::fmt::Write, st: &Status) -> core::fmt::Result {
     write_firmware_line(out, st)?;
+    write_room_line(out, st)?;
     write!(out, "<p><small>Up {}. Self-heal resets since power-up: {}", Span(st.uptime_secs as i64), st.heals)?;
     if let Some(h) = st.last_heal {
         write!(out, ", last {} {:02}:{:02}", WEEKDAY_LABELS[h.weekday as usize % 7], h.hour, h.minute)?;
@@ -413,6 +466,16 @@ fn write_status(out: &mut impl core::fmt::Write, st: &Status) -> core::fmt::Resu
         }
     }
     out.write_str(".</small></p>")
+}
+
+/// The sensors: the temperature in both units and the light index, or
+/// why not. Nothing is shown before the first reading.
+fn write_room_line(out: &mut impl core::fmt::Write, st: &Status) -> core::fmt::Result {
+    let Some(light) = st.light else { return Ok(()) };
+    match st.temp_dc {
+        Some(dc) => write!(out, "<p><small>Room {} °C ({} °F), light {light} %.</small></p>", Tenths(dc), Tenths(fahrenheit_tenths(dc))),
+        None => write!(out, "<p><small>Room: no thermometer, light {light} %.</small></p>"),
+    }
 }
 
 fn write_firmware_line(out: &mut impl core::fmt::Write, st: &Status) -> core::fmt::Result {
@@ -532,6 +595,7 @@ pub fn write_page(
 <label><input type=checkbox name=skip{}> Skip the next alarm</label>\
 <label><input type=checkbox name=twelve_hour{}> 12 hour clock</label>\
 <label>Timezone, minutes east of UTC <input type=number name=tz min=-{lim} max={lim} step=15 value={}></label>\
+<label>Thermometer offset, °C <input type=number name=temp_offset min=-{tlim} max={tlim} step=0.1 value={}></label>\
 <label>Hostname, for the DHCP server <input type=text name=hostname maxlength={hmax} pattern=\"[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?\" value=\"{}\"></label>\
 <button>Save</button> <button formaction=/play>Play</button></form>",
         s.alarm_hour,
@@ -541,8 +605,10 @@ pub fn write_page(
         if s.skip_next { " checked" } else { "" },
         if s.twelve_hour { " checked" } else { "" },
         s.tz_offset_minutes,
+        Tenths(s.temp_offset_dc),
         s.hostname.as_str(),
         lim = TZ_LIMIT_MINUTES,
+        tlim = Tenths(TEMP_OFFSET_LIMIT_DC),
         hmax = HOSTNAME_MAX,
     )?;
     write_status(out, st)?;
@@ -714,6 +780,8 @@ mod tests {
             uptime_secs: 46_296 * 86_400 + 3 * 3600 + 59 * 60,
             heals: 4_000_000_000,
             last_heal: heal.then_some(HealStamp { unix_secs: 1_800_000_000, weekday: 2, hour: 23, minute: 59, ago_secs: Some(400 * 86_400) }),
+            temp_dc: Some(-200),
+            light: Some(100),
         }
     }
 
@@ -734,6 +802,21 @@ mod tests {
     }
 
     #[test]
+    fn tenths_parse() {
+        assert_eq!(parse_tenths("-0.7"), Some(-7));
+        assert_eq!(parse_tenths("0.7"), Some(7));
+        assert_eq!(parse_tenths("+2.5"), Some(25));
+        assert_eq!(parse_tenths("1"), Some(10));
+        assert_eq!(parse_tenths("-10"), Some(-100));
+        assert_eq!(parse_tenths("0"), Some(0));
+        assert_eq!(parse_tenths("-0.0"), Some(0));
+        assert_eq!(parse_tenths("3276.7"), Some(32767));
+        for bad in ["", "-", "+", ".", ".5", "-.5", "1.", "0.75", "1.5.1", "abc", "1e1", " 1", "32768", "3276.8", "99999", "-1-", "1.x"] {
+            assert_eq!(parse_tenths(bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
     fn days_parse_and_print() {
         for (text, mask) in [("all", DAYS_ALL), ("weekdays", DAYS_WEEKDAYS), ("weekend", DAYS_WEEKEND), ("mon,wed", 0b0000101), ("sun", 0x40)] {
             assert_eq!(parse_days(text), Some(mask), "{text}");
@@ -750,7 +833,7 @@ mod tests {
     #[test]
     fn apply_sets_every_key() {
         let mut s = Settings::DEFAULT;
-        let body = b"color=cyan&brightness=25&alarm=06%3A30&armed=on&days=weekend&skip=1&twelve_hour=true&tz=-420&hostname=Bedroom-Clock&melody=random";
+        let body = b"color=cyan&brightness=25&alarm=06%3A30&armed=on&days=weekend&skip=1&twelve_hour=true&tz=-420&temp_offset=-0.7&hostname=Bedroom-Clock&melody=random";
         apply(&mut s, body, true, false).unwrap();
         assert_eq!(s.color, PALETTE_NAMES.iter().position(|n| *n == "cyan").unwrap());
         assert_eq!(s.brightness_pct(), 25);
@@ -758,6 +841,7 @@ mod tests {
         assert!(s.alarm_armed && s.skip_next && s.twelve_hour);
         assert_eq!(s.alarm_days, DAYS_WEEKEND);
         assert_eq!(s.tz_offset_minutes, -420);
+        assert_eq!(s.temp_offset_dc, -7);
         assert_eq!(s.hostname.as_str(), "bedroom-clock");
         assert_eq!(s.melody, melody::RANDOM);
         assert!(s.is_valid());
@@ -793,6 +877,12 @@ mod tests {
         assert_eq!(try_body(b"tz=-841"), Err(FormError::BadValue));
         assert_eq!(try_body(b"tz=840"), Ok(()));
         assert_eq!(try_body(b"tz=%zz"), Err(FormError::BadValue));
+        assert_eq!(try_body(b"temp_offset=10.1"), Err(FormError::BadValue));
+        assert_eq!(try_body(b"temp_offset=-10.1"), Err(FormError::BadValue));
+        assert_eq!(try_body(b"temp_offset=10.0"), Ok(()));
+        assert_eq!(try_body(b"temp_offset=-10"), Ok(()));
+        assert_eq!(try_body(b"temp_offset=0.75"), Err(FormError::BadValue));
+        assert_eq!(try_body(b"temp_offset=abc"), Err(FormError::BadValue));
         assert_eq!(try_body(b"%zz=1"), Err(FormError::UnknownKey));
         assert_eq!(try_body(b"hostname=-bad"), Err(FormError::BadValue));
         assert_eq!(try_body(b"days="), Err(FormError::BadValue));
@@ -916,10 +1006,15 @@ mod tests {
         assert!(out.contains(r#""ssid":"my \"net\"\\\u0001""#), "{out}");
         assert!(out.contains(r#""password_set":true,"token_set":true"#));
         assert!(!out.contains("secret"));
+        assert!(out.contains(r#""temp_c":-20.0,"temp_f":-4.0,"light":100,"last_heal""#), "{out}");
+        assert!(out.contains(r#""tz":-420,"temp_offset":0.0,"hostname""#) || out.contains(r#""temp_offset":0.0,"hostname""#), "{out}");
         assert!(out.contains(r#""last_heal":1800000000}"#));
         assert!(out.ends_with("}\n"));
         let mut none = String::new();
-        write_json(&mut none, &Settings::DEFAULT, &status(false)).unwrap();
+        let mut unread = status(false);
+        (unread.temp_dc, unread.light) = (None, None);
+        write_json(&mut none, &Settings::DEFAULT, &unread).unwrap();
+        assert!(none.contains(r#""temp_c":null,"temp_f":null,"light":null"#), "{none}");
         assert!(none.contains(r#""password_set":false,"token_set":false"#));
         assert!(none.ends_with(r#""last_heal":null}"#.to_string().as_str() ) || none.ends_with("null}\n"));
     }

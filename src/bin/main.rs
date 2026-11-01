@@ -32,7 +32,7 @@ use static_cell::StaticCell;
 use esp32clock::buzzer;
 use esp32clock::settings::Settings;
 use esp32clock::net::Mode;
-use esp32clock::{buttons, carry, clock, dhcpd, display, dnsd, heal, http, net, ota, scan, settings, storage};
+use esp32clock::{buttons, carry, clock, dhcpd, display, dnsd, heal, http, net, ota, scan, sensors, settings, storage};
 
 // The app descriptor the esp-idf bootloader requires, with the git
 // version in it so an image file says what it is before it is flashed.
@@ -225,6 +225,10 @@ async fn main(spawner: Spawner) -> ! {
     spawner.spawn(display::display_task(stack).expect("spawn display"));
     spawner.spawn(buttons::button_task(button_top, button_bottom).expect("spawn buttons"));
     spawner.spawn(buzzer::buzzer_task(Ledc::new(peripherals.LEDC), buzzer_pin).expect("spawn buzzer"));
+    // The room sensors on the adapter: the NTC divider on GPIO0, the LDR
+    // divider on GPIO1, both ADC1 (the converter that works with Wi-Fi on).
+    let sensor_hw = sensors::SensorHardware { adc: peripherals.ADC1, ntc: peripherals.GPIO0, ldr: peripherals.GPIO1 };
+    spawner.spawn(sensors::sensor_task(sensor_hw).expect("spawn sensors"));
     if let Some(store) = store.take() {
         spawner.spawn(storage::persist_task(store, stored).expect("spawn persist"));
     }
@@ -252,7 +256,7 @@ async fn main(spawner: Spawner) -> ! {
         let (sent, failed, streak) = net::probe_stats();
         info!(
             "alive {} s, heap free {} bytes; scan restart gap avg {} us, max {} us over {} transfers; \
-             gateway probes {} sent, {} failed, {} failing now; self-heal resets {}",
+             gateway probes {} sent, {} failed, {} failing now; self-heal resets {}; sensors {}",
             Instant::now().as_secs(),
             esp_alloc::HEAP.free(),
             g.sum_us / g.transfers.max(1) as u64,
@@ -261,7 +265,8 @@ async fn main(spawner: Spawner) -> ! {
             sent,
             failed,
             streak,
-            heal::count()
+            heal::count(),
+            sensors::Report
         );
         http::log_status();
     }

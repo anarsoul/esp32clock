@@ -76,7 +76,10 @@ time by `core/src/config.rs`; `core/build.rs` reruns that crate when
 they change, and the root `build.rs` exports `git describe --always
 --dirty` as `FIRMWARE_VERSION`, which
 goes into the app descriptor, the boot line, the page and `/api`. The timezone, 12/24 hour, colour, brightness, alarm, alarm days,
-alarm melody, DHCP hostname, Wi-Fi network and API token are settings:
+alarm melody, thermometer offset (`temp_offset`, tenths of a degree
+Celsius added to the NTC's reading, ±10.0, for the warm air at the
+sensor's spot in the case; blue-clock measured 0.7 high), DHCP
+hostname, Wi-Fi network and API token are settings:
 saved in the `nvs` partition, editable from the buttons and from
 `http://<ip>/` (form) or `/api` (form-encoded keys, JSON back). The
 network keys `ssid` and `password` are taken on `/api` only with the
@@ -92,8 +95,13 @@ the token are never read back: the JSON has `ssid`, `password_set` and
 `token_set`. The page ends with a read-only status
 line, and the JSON with the read-only keys `version`, `slot` (the app
 slot the firmware runs from), `mode` (`sta` or `ap`), `uptime` (seconds), `heals` (self-heal
-resets since power-up) and `last_heal` (Unix seconds or null); posting
-them is refused as an unknown key. `skip_next` (page checkbox, key `skip`) is
+resets since power-up), `temp_c` and `temp_f` (the room in tenths, `null`
+with no thermometer fitted or before the first reading), `light` (0 dark
+to 100, `null` before the first reading) and `last_heal` (Unix seconds
+or null); posting them is refused as an unknown key. The page shows the
+room on a line under the status (`Room 23.4 °C (74.1 °F), light 62 %`),
+and the minute heartbeat logs the filtered millivolts of both dividers
+for calibration. `skip_next` (page checkbox, key `skip`) is
 the one setting the record does not store: it skips one alarm and is cleared
 by it or by a power cut; a software reset (self-heal, panic) carries it over
 in RTC RAM, see `src/carry.rs`. `POST /play` previews the melody chosen in the form
@@ -252,6 +260,8 @@ module ends with its `#[cfg(test)] mod tests`.
 | `core/src/carry.rs` | `Carried`, `MARK` with its layout version, `encode`/`decode` |
 | `src/carry.rs` | RTC-RAM record used only after a software reset (`CoreSw`/`Cpu0Sw`; anything else zeroes it at boot): self-heal count and time, the skip flag, the time the alarm last rang, the Unix time last written, boots of an unconfirmed OTA image, the access-point flag for the next boot; the mark carries a layout version; `freeze` for a mode switch |
 | `src/buzzer.rs` | LEDC PWM on an open-drain pin; plays a melody on command, looped or once, stops within a note |
+| `core/src/sensors.rs` | the NTC table (10 kΩ, B 3950, under the adapter's 10 kΩ pull-up from 3V3) and `temperature_dc` by interpolation, `fahrenheit_tenths`, `ldr_ohms` and `light_pct` (the logarithm of the LDR's resistance, 1 kΩ is 100 and 50 kΩ is 0), `Tenths`; pure |
+| `src/sensors.rs` | `sensor_task`: the async `Adc<ADC1>` with `AdcCalCurve` (the scheme that reads straight on the C3) on GPIO0 (NTC) and GPIO1 (LDR), 8 samples a second each into a 10 s exponential average, published as millivolts in two atomics; `room()` for `http::status`, `Report` for the heartbeat |
 | `core/src/clock.rs` | `LocalTime`, `weekday_of_days`, `local_time(unix, tz_minutes)` |
 | `src/clock.rs` | Unix time = uptime + NTP offset; `local_time` with the settings' timezone; `carry_time`/`restore_carried` move the time across a software reset as plain Unix time, written every second by the display tick; `RESET_PAUSE` for every deliberate reset |
 | `core/src/ota.rs` | image header and descriptor offsets, `Slot` names, `hash_chunk` for the appended SHA-256, `version_from` |
@@ -274,6 +284,19 @@ module ends with its `#[cfg(test)] mod tests`.
   the scan task builds the bus from those. No PAC access.
 - **Buttons:** GPIO4 is the upper button, GPIO3 the lower. No board
   pull-ups; the internal ones are used.
+- **Sensors (GPIO0, GPIO1):** the adapter's 10 kΩ pull-ups from 3V3
+  with the clock board's NTC (R4) and LDR (R3) to ground; the board's
+  own R1 and R2 pull up to 5 V and must stay off. A pin reads high
+  when the part is cold, dark or missing, so only the NTC can report
+  "no sensor" (the pull-up alone is colder than −20 °C); a missing
+  LDR looks dark. The NTC reads a few degrees above the room on the
+  bench and creeps up with uptime (2026-11-01): the board warms it;
+  the user's thermometer is the reference, not the reading, and the
+  `temp_offset` setting carries the difference (−0.7 on blue-clock). The new
+  clock also hears the access point 10 to 25 dB weaker than the old
+  bench board did at the same spot. ADC1 is the converter that works with Wi-Fi on,
+  11 dB attenuation is only calibrated to about 2.5 V, and
+  `AdcCalCurve` is the scheme to use: the line fit is percent off.
 - **Current:** `IS` comes from brightness alone, capped at
   `MAX_CURRENT_STEP`, a build-time variable, default step 5 (the 50 %
   step, about 15 mA per sink); `settings::BRIGHTNESS_STEPS` is cut at
@@ -341,8 +364,8 @@ module ends with its `#[cfg(test)] mod tests`.
   overflow is a 500, not a truncation. The headers are 88 bytes;
   `core::http::PAGE_MAX` (3968) is what a page may take, and the
   `form` tests build each page at its worst case and assert it
-  (2026-10-30: settings 2769, update 2989, setup with twelve
-  32-character networks 3036). `cargo host-test` after adding a field
+  (2026-11-01: settings 2943, update 2989, setup with twelve
+  32-character networks 3039). `cargo host-test` after adding a field
   or label; the test prints the sizes with `-- --nocapture`. The setup
   page's network list stops at `form::NETWORK_LIST_BUDGET` (1900)
   bytes, strongest first, with a "N more not shown" line, because a
@@ -356,12 +379,12 @@ module ends with its `#[cfg(test)] mod tests`.
 - An OTA image must fit a slot (`partitions.csv`, 0x1E0000 = 1920 KB);
   the release image is about 650 KB. Static RAM: `ota.rs` holds 11 KB
   of buffers, and what the statics leave of DRAM is the main stack,
-  about 96 KB now (`Settings` is 168 bytes of record and sits in several
+  about 96 KB now (`Settings` is 170 bytes of record and sits in several
   task futures); check `.stack` in `llvm-readelf -S` after adding one.
 - `form::apply` decodes each key into 16 bytes and each value into 64
   (`form::VALUE_MAX`, the password); longer input is reported as a bad
   key or value before parsing. The record is `settings::RECORD_LEN`
-  (168) bytes and the map scratch in `storage.rs` 256, which must hold
+  (170) bytes and the map scratch in `storage.rs` 256, which must hold
   the item (record plus 9 bytes, padded to a word).
 - `settings::RECEIVERS` is the number of `Watch` receivers (display,
   persist, hostname). Add one when a new task subscribes, or `receiver()`
@@ -377,15 +400,15 @@ module ends with its `#[cfg(test)] mod tests`.
 
 ## Verifying without a board
 
-`cargo host-test` runs the tests of `core/` on the host (65 on
-2026-10-30): the AiP33628 encoder against a behavioural model of the
+`cargo host-test` runs the tests of `core/` on the host (73 on
+2026-11-01): the AiP33628 encoder against a behavioural model of the
 chip (shift on CLK rise, latch on DIN rise while CLK high), the panel
 map, the palette and brightness tables, the hostname, password and
 token rules, the record round trip and every older version, the form
 parser and the page sizes against `PAGE_MAX`, the head parser, the
 appended-hash split, the carry codec, the calendar arithmetic, the
-melodies, the UI's alarm, grace and skip logic, and the PIN and token
-header rules. `cargo clippy -p esp32clock-core --target host-tuple
+melodies, the UI's alarm, grace and skip logic, the PIN and token
+header rules, and the NTC and LDR tables against their equations. `cargo clippy -p esp32clock-core --target host-tuple
 --tests` lints the tests. `.cargo/config.toml` aims every cargo
 command at the chip, which is why the alias passes `--target
 host-tuple`; the `[unstable] build-std` line there is ignored by

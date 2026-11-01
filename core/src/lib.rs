@@ -25,5 +25,6 @@ pub mod http;
 pub mod melody;
 pub mod ota;
 pub mod panel;
+pub mod sensors;
 pub mod settings;
 pub mod ui;

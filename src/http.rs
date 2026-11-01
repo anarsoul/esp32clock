@@ -36,7 +36,7 @@ use crate::buzzer;
 use crate::config::HTTP_PORT;
 use crate::form::{self, FormError, HealStamp, Status};
 use crate::net::{self, Mode};
-use crate::{auth, clock, heal, ota, settings};
+use crate::{auth, clock, heal, ota, sensors, settings};
 
 /// Connections served at once, each with its own buffers and task.
 pub const LISTENERS: usize = 3;
@@ -288,6 +288,7 @@ fn status() -> Status {
             ago_secs: now.map(|n| n - t),
         }
     });
+    let (temp_dc, light) = sensors::room();
     Status {
         version: ota::VERSION,
         slot: ota::booted().name(),
@@ -295,6 +296,8 @@ fn status() -> Status {
         uptime_secs: embassy_time::Instant::now().as_secs(),
         heals: heal::count(),
         last_heal,
+        temp_dc,
+        light,
     }
 }
 

@@ -166,6 +166,8 @@ otherwise keep the template's pinned set. Updating `esp-generate` to 1.4.0
 | 5    | buzzer (PNP base via 10 k, emitter at +5 V) | **open-drain output, released (high-Z) at boot**. A push-pull 3.3 V high still turns the PNP on. Low = buzzer on. |
 | 4    | upper button (switch to GND, no board pull-up) | input, internal pull-up |
 | 3    | lower button (switch to GND, no board pull-up) | input, internal pull-up |
+| 0    | NTC divider R_T (adapter 10 k to 3V3, board NTC R4 to GND) | ADC1 channel 0, 11 dB, `AdcCalCurve` (M11a, 2026-11-01) |
+| 1    | LDR divider R_P (adapter 10 k to 3V3, board LDR R3 to GND) | ADC1 channel 1, same |
 
 Strapping notes for ESP32-C3: GPIO8 and GPIO9 are strapping pins (GPIO9 is the
 BOOT button, GPIO8 must be high for download mode). Both are driven by us only
@@ -3910,7 +3912,7 @@ phone. A settings-page save of the hostname back to `test-clock` from
 the LAN closed the run; `/api` then read hostname `test-clock`, ssid
 `esptest`, password set, token set, mode `sta`, heals 0.
 
-### M11 — NTC thermometer and light sensor — planned
+### M11 — NTC thermometer and light sensor — the readings built 2026-11-01 (M11a, below), the face and the dimming still planned
 
 **Hardware.** The adapter schematic already wires both sensors, and
 the pull-ups live on the adapter, not on the clock board:
@@ -4011,3 +4013,168 @@ a thermometer after the offset; with the setting on, a hand over the
 LDR drops the panel to the lowest step within about 10 s and
 uncovering restores the chosen step; lights off in the evening dims
 it once and it stays dim until morning, with no flicker at dusk.
+
+#### M11a — read both sensors and show them on the page and in `/api` — built 2026-11-01; the NTC verified on the bench the same day, the LDR read the rail (see the end)
+
+The parts arrived and the adapter is on the bench (2026-11-01). The
+user asked for the readings on the page and in the API first; the
+temperature face, the dim-in-the-dark setting and the record change
+above stay planned, so this step adds no setting and leaves
+`RECORD_VERSION` alone.
+
+**Correction to the design above.** An unfitted LDR does not read
+ground: the pull-up is on the adapter, so a missing LDR leaves the
+pin at 3V3, exactly what a pitch-dark LDR does. Only the NTC can
+say "no sensor" (the pin at the pull-up, above any room
+temperature); a missing LDR is reported as 0 % light. The ADC's
+calibrated range at 11 dB ends near 2.5 V and the raw code pins at
+about 3.1 V, so the NTC's cold end is imprecise below 0 °C and
+unreadable below −20 °C; a room is nowhere near either.
+
+**Pure half, `core/src/sensors.rs`.** A 21-entry table of the
+divider's millivolts at −20, −15, … 80 °C for a 10 kΩ, B = 3950
+NTC under a 10 kΩ pull-up from 3300 mV, computed once on the host
+(`ntc.py`, the B equation) and pasted; `temperature_dc(mv)` finds
+the segment and interpolates to tenths of a degree, which is within
+0.17 °C of the equation over the whole span, rounding included (checked by a test that
+evaluates the equation in `f64`). Above the −20 °C entry it answers
+`None` (no sensor, or colder than the ADC can tell); below the 80 °C
+entry, `Some(800)`. `fahrenheit_tenths` for the second unit, and
+`light_pct(mv)`: first the LDR's resistance from the divider
+(`ldr_ohms`), then the logarithm of it between `LIGHT_FULL_OHMS`
+(1 kΩ, 100 %) and `LIGHT_DARK_OHMS` (50 kΩ, 0 %) through a 21-entry
+table at 5 % steps, because that is how both the eye and a GL55-type
+LDR work: about a kilohm in daylight, tens of kilohms at dusk, more
+than the ADC can tell from the pull-up alone (about 70 kΩ, where the
+raw code pins near 2.9 V) in the dark. The first cut was linear in
+the voltage and squeezed the bench's lighting into 5–21 %, which
+read as broken. A `Tenths` formatter writes `23.4` and `-0.5` for
+the JSON and the page.
+
+**Hardware half, `src/sensors.rs`.** One `sensor_task` in thread
+mode owns `Adc<ADC1>` and both `AdcPin`s (GPIO0 the NTC, GPIO1 the
+LDR, 11 dB, `AdcCalCurve`, which on the C3 corrects with the eFuse
+two-point data and returns millivolts). Every second it takes 8
+blocking `read_oneshot` samples of each, 50 µs apart (a conversion
+is microseconds; the scan is on the interrupt executor and does
+not see it), averages them, and folds the result into an
+exponential average with a weight of 1/8 (about 10 s), which it
+publishes to two `AtomicU32` cells as the single writer; the first
+reading seeds the average so there is no ramp from zero. `readings()`
+hands `http::status` and the heartbeat the filtered millivolts,
+`None` until the first second has passed.
+
+**Exposed.** `form::Status` grows `temp_dc: Option<i16>` and
+`light: Option<u8>`, filled by `http::status`; `write_json` adds
+`temp_c`, `temp_f` (tenths, or `null`) and `light` (0–100, or
+`null`) before `last_heal`, and `write_status` a line
+`Room 23.4 °C (74.1 °F), light 62 %.` or `Room: no thermometer,
+light 62 %.`, with `not read yet` for the first second. The heartbeat
+logs the raw filtered millivolts of both for calibration. The page
+sizes are re-measured below.
+
+**Host checks.** The table against the equation; the rails and the
+range ends; the light index at its ends; the `Tenths` formatter on
+negatives; the JSON keys with and without a reading; the page size.
+
+**Verify on the bench.** The heartbeat's millivolts: about 1650 for
+the NTC at 25 °C in free air and the LDR well under 1000 in a lit
+room; `/api` shows `temp_c` within a degree of a thermometer and
+`light` dropping toward 0 with a hand over the LDR within about
+10 s; the page's new line says the same.
+
+**Bench, 2026-11-01.** Flashed over USB to the sensor-fitted board
+(it joined the home network as `clock`, 10.1.1.156). The first
+heartbeat said `sensors ntc 1657 mV, ldr 2894 mV, room 24.8 C
+(76.6 F), light 0 %`; `/api` carried `"temp_c":24.8,"temp_f":76.6,
+"light":0` and the page the line `Room 24.8 °C (76.6 °F), light
+0 %.` The NTC's 1657 mV is the 25 °C point of the table, so the
+divider, the calibration scheme and the table agree with the room.
+The LDR at 2894 mV is the pull-up alone as the curve reads it near
+its top (about 3.1 V raw pinned): either the bench is dark for the
+LDR, or it is not fitted or not making contact at R3 / J1 pin 4.
+The settings page is 2830 bytes (was 2769); the setup page
+3039 (the guide said 3036, which was stale).
+
+Second run, after a reflash (the first image carried a stale version
+string, `a01e48c`, from cargo reusing an old build-script output;
+`touch build.rs` and a rebuild gave `4bd6882-dirty`). The LDR does
+work: over three minutes it read 2894, 2260, 1959 and 2372 mV, that
+is from the rail to 14.6 kΩ and back to 25.6 kΩ as the bench's light
+changed, so the first run's rail was the bench being dark for it,
+not a missing part. Those are 0, 9, 21 and 5 % on the linear scale,
+0, 31, 17 % on the logarithmic one, which is why the index was
+changed. The NTC crept from 1657 to 1646 to 1629 mV (24.8, 25.1,
+25.6 °C) over the run and 25.9 °C at the end, while the user put
+the room at about 21 °C: the drift says the sensor is warmed by the
+board (the case open, the panel at 10 %), and a constant part of the
+gap could be the NTC's R25 or the 3V3 rail. Owed: a thermometer
+beside the clock now and after an hour, and a meter on R4 or on the
+3V3 pin, to split the two; then the planned `temp_offset`
+(constant) or a corrected R25 (part). Not changed yet.
+
+Settled the same afternoon. The clock had been lying on its face
+with the NTC's hole against the bench, so the case held its heat;
+stood upright it fell from 24.5 to 23.0 °C in twelve minutes and
+then tracked a digital thermometer beside it: 23.0 against 22.3 °C
+at 12:25, 23.4 against 22.6 °C at 13:08, a constant 0.7 to 0.8 °C
+with the room warming under both. The adapter's pull-ups measured
+9.96 and 9.99 kΩ (another adapter, same reel), which moves the
+reading 0.1 °C the other way, so the gap is the case: the hole is at
+the top, where the air inside is warmest. The conversion is sound.
+The fix, when wanted, is the planned `temp_offset` setting at about
+−0.8 °C; a second day's pair of readings before trusting the tenths.
+Minute-to-minute noise is about ±0.25 °C on the 10 s average, partly
+convection through the hole; a longer filter if a face ever shows
+tenths. A second re-worked clock (`martin-clock`, 10.1.1.58) flashed
+the same day read 24.7 °C at a minute's uptime and the same access
+point at −53 dBm, so the weaker reception is the adapter build, not
+one board.
+
+Wi-Fi at the same spot as the old bench board, same access point
+(80:69:1a:1f:25:cc, channel 9): the new clock's minute line read
+−64, −52 and −65 dBm and its scan −51; the old board's logs from
+that spot read −38 to −42 dBm on the minute line and −38/−39 at the
+scan, and the far access point on channel 3 went from −76 to −83.
+That is 10 to 25 dB less at the clock, more than the spread between
+two boards; the probe (50 ms for 1400 bytes) and the page (30 to
+80 ms) are still fine, so the link works, but the margin before the
+self-heal is smaller. The adapter puts the C3 Zero in a different
+place and orientation in the case, next to the ground plane of the
+clock board; the guide's rule applies, measure at the access point's
+figure for the clock, from inside the case, before changing the
+transmit power.
+
+#### Thermometer offset (after M11a) — DONE, verified on the bench 2026-11-01
+
+The afternoon's comparison above gave a constant 0.6 to 0.8 °C
+between the NTC and a thermometer beside the clock, the warm air
+at the top of the case. A setting `temp_offset`, tenths of a degree
+Celsius added to the reading, from −10.0 to 10.0, default 0,
+applied in the firmware's `sensors::room` before both units, so the
+page, `/api`, the heartbeat and later the panel face all say the
+corrected figure. Key `temp_offset` on the form and `/api` as a
+decimal with at most one place (`-0.7`, `1`, `-10.0`); the page has a
+number field with step 0.1 under the timezone. `RECORD_VERSION` 8
+appends the two bytes after the flags (`RECORD_LEN` 170); a version
+7 record reads as offset 0 and a rollback to the previous image
+reads version 8 by its prefix. `form::parse_tenths` is the parser,
+in `form.rs` with the other parsers and under test: a sign, digits
+and one optional decimal, nothing else. `Settings::is_valid`
+bounds it. Page size re-measured below.
+
+**Verify on the bench.** `POST /api` with `temp_offset=-0.7` on
+blue-clock: the JSON echoes `-0.7` and `temp_c` drops by 0.7
+against the heartbeat's raw millivolts; the page shows the field
+with the value; a reload keeps it; a `temp_offset=10.1` is a 400.
+
+**Bench, 2026-11-01.** blue-clock flashed over USB with its version 7
+record in place: `/api` came up with `temp_offset` 0.0 and 23.5 °C
+(the old record read with the default). `POST /api temp_offset=-0.7`
+echoed −0.7 and 22.8 °C in the same answer; `10.1` and `abc` were
+400s; the page showed the field at −0.7 with `min=-10.0 max=10.0
+step=0.1` and the room line at 22.8 °C; `scripts/reload.sh` brought
+it back in 3 s with −0.7 still set and 22.7 °C, so the version 8
+record was written and read. The settings page is 2943 bytes.
+martin-clock was unplugged before its flash and still runs the
+image without the setting.
