@@ -116,6 +116,27 @@ pub fn light_pct(mv: u16) -> u8 {
     (top - (5 * (ohms - lo) * 2 + (hi - lo)) / (2 * (hi - lo))) as u8
 }
 
+/// The panel's temperature face: the whole degrees, rounded to the
+/// nearest and clamped to −99 and 999, right aligned in the first three
+/// positions, and the unit letter in the fourth. The degree mark is
+/// the display's to light.
+pub fn face(tenths: i16, unit: char) -> [char; 4] {
+    let degrees = (tenths as i32 * 2 + 10).div_euclid(20).clamp(-99, 999);
+    let abs = degrees.unsigned_abs();
+    let digit = |d: u32| char::from_digit(d, 10).unwrap_or('0');
+    let mut out = [' ', ' ', ' ', unit];
+    out[2] = digit(abs % 10);
+    if abs >= 10 {
+        out[1] = digit(abs / 10 % 10);
+    }
+    if abs >= 100 {
+        out[0] = digit(abs / 100);
+    } else if degrees < 0 {
+        out[if abs >= 10 { 0 } else { 1 }] = '-';
+    }
+    out
+}
+
 /// Tenths as a decimal with one place: `23.4`, `-0.5`.
 pub struct Tenths(pub i16);
 
@@ -215,6 +236,21 @@ mod tests {
             let got = light_pct(mv_of(ohms)) as f64;
             assert!((got - exact).abs() <= 1.5, "{ohms} Ω: {got} vs {exact}");
         }
+    }
+
+    #[test]
+    fn face_layout() {
+        assert_eq!(face(234, 'C'), [' ', '2', '3', 'C']);
+        assert_eq!(face(235, 'C'), [' ', '2', '4', 'C'], "half rounds up");
+        assert_eq!(face(5, 'C'), [' ', ' ', '1', 'C']);
+        assert_eq!(face(4, 'C'), [' ', ' ', '0', 'C']);
+        assert_eq!(face(-45, 'C'), [' ', '-', '4', 'C'], "half rounds toward warmer");
+        assert_eq!(face(-46, 'C'), [' ', '-', '5', 'C']);
+        assert_eq!(face(-123, 'C'), ['-', '1', '2', 'C']);
+        assert_eq!(face(995, 'F'), ['1', '0', '0', 'F']);
+        assert_eq!(face(-1000, 'C'), ['-', '9', '9', 'C'], "clamped");
+        assert_eq!(face(10_000, 'F'), ['9', '9', '9', 'F'], "clamped");
+        assert_eq!(face(0, 'F'), [' ', ' ', '0', 'F']);
     }
 
     #[test]

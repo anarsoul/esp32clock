@@ -29,7 +29,7 @@ use log::info;
 
 use crate::settings;
 
-pub use esp32clock_core::sensors::{Tenths, fahrenheit_tenths, light_pct, temperature_dc};
+pub use esp32clock_core::sensors::{Tenths, face, fahrenheit_tenths, light_pct, temperature_dc};
 
 /// Conversions averaged into one reading.
 const SAMPLES: u32 = 8;

@@ -11,7 +11,8 @@ use embassy_time::{Duration, Instant};
 
 use crate::buttons::{Button, Event, Kind};
 use crate::clock::LocalTime;
-use crate::settings::{BRIGHTNESS_STEPS, PALETTE, Settings};
+use crate::sensors::fahrenheit_tenths;
+use crate::settings::{BRIGHTNESS_STEPS, PALETTE, Settings, TempShow};
 
 /// Leave alarm-set mode after this long without a press.
 const SET_TIMEOUT: Duration = Duration::from_secs(15);
@@ -84,7 +85,15 @@ pub enum View {
     Ip { index: usize },
     /// Four digits for the update page.
     Pin { pin: u16 },
+    /// The temperature, in tenths of the unit shown, for a few seconds
+    /// each minute.
+    Temp { tenths: i16, fahrenheit: bool },
 }
+
+/// The second of each minute the temperature face starts at, and how
+/// many seconds it stays.
+pub const TEMP_SHOW_AT: u8 = 30;
+pub const TEMP_SHOW_SECS: u8 = 5;
 
 pub struct Ui {
     pub mode: Mode,
@@ -216,8 +225,10 @@ impl Ui {
     }
 
     /// What to draw right now. `phase` is the uptime in milliseconds, used
-    /// for blinking.
-    pub fn view(&self, settings: &Settings, time: Option<LocalTime>, phase_ms: u64) -> View {
+    /// for blinking. `temp` is the room in tenths of a degree Celsius if
+    /// the thermometer has one: in clock mode, with `temp_show` on, it is
+    /// the face for `TEMP_SHOW_SECS` from second `TEMP_SHOW_AT`.
+    pub fn view(&self, settings: &Settings, time: Option<LocalTime>, phase_ms: u64, temp: Option<i16>) -> View {
         let blink = (phase_ms / 250) % 2 == 1;
         match self.mode {
             Mode::ShowIp => {
@@ -236,7 +247,14 @@ impl Ui {
                 None => View::Sweep,
             },
             Mode::Clock => match time {
-                Some(t) => View::Time { time: t, colon: t.second % 2 == 0 },
+                Some(t) => match (settings.temp_show, temp) {
+                    (TempShow::Off, _) | (_, None) => View::Time { time: t, colon: t.second % 2 == 0 },
+                    (unit, Some(dc)) if (TEMP_SHOW_AT..TEMP_SHOW_AT + TEMP_SHOW_SECS).contains(&t.second) => {
+                        let fahrenheit = unit == TempShow::Fahrenheit;
+                        View::Temp { tenths: if fahrenheit { fahrenheit_tenths(dc) } else { dc }, fahrenheit }
+                    }
+                    _ => View::Time { time: t, colon: t.second % 2 == 0 },
+                },
                 None => View::Sweep,
             },
         }
@@ -296,12 +314,12 @@ mod tests {
         assert_eq!(ui.mode, Mode::SetHour);
         ui.handle(&mut s, press(Button::Top, Kind::Short), ms(1000));
         assert_eq!(s.alarm_hour, 0, "hours wrap at 24");
-        assert!(matches!(ui.view(&s, None, 1000), View::AlarmSet { field: Field::Hour, .. }));
+        assert!(matches!(ui.view(&s, None, 1000, None), View::AlarmSet { field: Field::Hour, .. }));
         ui.handle(&mut s, press(Button::Bottom, Kind::Short), ms(2000));
         assert_eq!(ui.mode, Mode::SetMinute);
         ui.handle(&mut s, press(Button::Top, Kind::Short), ms(2000));
         assert_eq!(s.alarm_minute, 0, "minutes step by five and wrap");
-        assert!(matches!(ui.view(&s, None, 2000), View::AlarmSet { field: Field::Minute, .. }));
+        assert!(matches!(ui.view(&s, None, 2000, None), View::AlarmSet { field: Field::Minute, .. }));
         // A press restarts the timeout; without one it lapses.
         ui.tick(&mut s, None, ms(2000 + SET_TIMEOUT.as_millis() - 1));
         assert_eq!(ui.mode, Mode::SetMinute);
@@ -322,7 +340,7 @@ mod tests {
         assert_eq!(ui.mode, Mode::ShowIp);
         let step = IP_STEP.as_millis();
         for i in 0..8u64 {
-            assert_eq!(ui.view(&s, None, 10_000 + i * step + 1), View::Ip { index: (i % 4) as usize });
+            assert_eq!(ui.view(&s, None, 10_000 + i * step + 1, None), View::Ip { index: (i % 4) as usize });
         }
         ui.tick(&mut s, None, ms(10_000 + 8 * step - 1));
         assert_eq!(ui.mode, Mode::ShowIp);
@@ -340,9 +358,9 @@ mod tests {
         let mut ui = Ui::new();
         let mut s = Settings::DEFAULT;
         ui.show_pin(1234, ms(0));
-        assert_eq!(ui.view(&s, None, 0), View::Pin { pin: 1234 });
+        assert_eq!(ui.view(&s, None, 0, None), View::Pin { pin: 1234 });
         ui.show_pin(42, ms(1));
-        assert_eq!(ui.view(&s, None, 1), View::Pin { pin: 42 }, "a newer PIN replaces it");
+        assert_eq!(ui.view(&s, None, 1, None), View::Pin { pin: 42 }, "a newer PIN replaces it");
         ui.tick(&mut s, None, ms(1 + PIN_SHOW.as_millis()));
         assert_eq!(ui.mode, Mode::Clock);
         ui.handle(&mut s, press(Button::Top, Kind::Long), ms(2));
@@ -360,7 +378,7 @@ mod tests {
         assert_eq!(ui.mode, Mode::Ringing);
         assert!(ui.ringing());
         assert_eq!(ui.last_alarm, Some(at(0, 7, 0, 0).unix));
-        assert!(matches!(ui.view(&s, Some(at(0, 7, 0, 0)), 1000), View::Ringing { .. }));
+        assert!(matches!(ui.view(&s, Some(at(0, 7, 0, 0)), 1000, None), View::Ringing { .. }));
         ui.tick(&mut s, Some(at(0, 7, 0, 30)), ms(31_000));
         assert_eq!(ui.mode, Mode::Ringing);
         // A press ends it and the same minute does not ring again.
@@ -457,10 +475,29 @@ mod tests {
     fn views_without_a_time() {
         let ui = Ui::new();
         let s = Settings::DEFAULT;
-        assert_eq!(ui.view(&s, None, 0), View::Sweep);
+        assert_eq!(ui.view(&s, None, 0, None), View::Sweep);
         let t = at(0, 12, 34, 56);
-        assert_eq!(ui.view(&s, Some(t), 0), View::Time { time: t, colon: true });
+        assert_eq!(ui.view(&s, Some(t), 0, None), View::Time { time: t, colon: true });
         let odd = at(0, 12, 34, 57);
-        assert_eq!(ui.view(&s, Some(odd), 0), View::Time { time: odd, colon: false });
+        assert_eq!(ui.view(&s, Some(odd), 0, None), View::Time { time: odd, colon: false });
+    }
+
+    #[test]
+    fn temperature_face_mid_minute() {
+        let ui = Ui::new();
+        let mut s = Settings::DEFAULT;
+        s.temp_show = TempShow::Celsius;
+        let at_second = |sec| at(0, 12, 0, sec);
+        let time = |sec: i64| View::Time { time: at_second(sec), colon: sec % 2 == 0 };
+        assert_eq!(ui.view(&s, Some(at_second(29)), 0, Some(234)), time(29));
+        assert_eq!(ui.view(&s, Some(at_second(30)), 0, Some(234)), View::Temp { tenths: 234, fahrenheit: false });
+        assert_eq!(ui.view(&s, Some(at_second(34)), 0, Some(234)), View::Temp { tenths: 234, fahrenheit: false });
+        assert_eq!(ui.view(&s, Some(at_second(35)), 0, Some(234)), time(35));
+        assert_eq!(ui.view(&s, Some(at_second(32)), 0, None), time(32), "no reading, no face");
+        s.temp_show = TempShow::Fahrenheit;
+        assert_eq!(ui.view(&s, Some(at_second(32)), 0, Some(234)), View::Temp { tenths: 741, fahrenheit: true });
+        s.temp_show = TempShow::Off;
+        assert_eq!(ui.view(&s, Some(at_second(32)), 0, Some(234)), time(32));
+        assert_eq!(ui.view(&s, None, 0, Some(234)), View::Sweep);
     }
 }

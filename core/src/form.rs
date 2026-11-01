@@ -10,8 +10,8 @@ use crate::melody;
 use crate::sensors::{Tenths, fahrenheit_tenths};
 use crate::settings::{
     BRIGHTNESS_STEPS, Credentials, DAY_NAMES, DAYS_ALL, DAYS_WEEKDAYS, DAYS_WEEKEND, HOSTNAME_MAX, Hostname, PALETTE_NAMES,
-    PASSWORD_MAX, PASSWORD_MIN, SSID_MAX, Secret, Settings, TEMP_OFFSET_LIMIT_DC, TOKEN_MAX, TZ_LIMIT_MINUTES, Text,
-    valid_password, valid_token,
+    PASSWORD_MAX, PASSWORD_MIN, SSID_MAX, Secret, Settings, TEMP_OFFSET_LIMIT_DC, TOKEN_MAX, TZ_LIMIT_MINUTES, TempShow,
+    Text, valid_password, valid_token,
 };
 
 /// Longest form value, decoded: the password.
@@ -262,6 +262,7 @@ pub fn apply_one(s: &mut Settings, key: &str, value: &str, credentials: bool) ->
             }
             s.temp_offset_dc = dc;
         }
+        "temp_show" => s.temp_show = TempShow::from_name(value).ok_or(FormError::BadValue)?,
         "hostname" => s.hostname = Hostname::new(value).ok_or(FormError::BadValue)?,
         "days" => s.alarm_days = parse_days(value).ok_or(FormError::BadValue)?,
         "melody" => s.melody = melody::index_of(value).ok_or(FormError::BadValue)?,
@@ -428,12 +429,13 @@ pub fn write_json(out: &mut impl core::fmt::Write, s: &Settings, st: &Status) ->
     write_days(out, s.alarm_days)?;
     write!(
         out,
-        "\",\"skip\":{},\"melody\":\"{}\",\"twelve_hour\":{},\"tz\":{},\"temp_offset\":{},\"hostname\":\"{}\",\"ssid\":\"{}\",\"password_set\":{},\"token_set\":{},\"version\":\"{}\",\"slot\":\"{}\",\"mode\":\"{}\",\"uptime\":{},\"heals\":{},\"temp_c\":{},\"temp_f\":{},\"light\":{},\"last_heal\":",
+        "\",\"skip\":{},\"melody\":\"{}\",\"twelve_hour\":{},\"tz\":{},\"temp_offset\":{},\"temp_show\":\"{}\",\"hostname\":\"{}\",\"ssid\":\"{}\",\"password_set\":{},\"token_set\":{},\"version\":\"{}\",\"slot\":\"{}\",\"mode\":\"{}\",\"uptime\":{},\"heals\":{},\"temp_c\":{},\"temp_f\":{},\"light\":{},\"last_heal\":",
         s.skip_next,
         melody::name(s.melody),
         s.twelve_hour,
         s.tz_offset_minutes,
         Tenths(s.temp_offset_dc),
+        s.temp_show.name(),
         s.hostname.as_str(),
         JsonStr(s.wifi.ssid.as_str()),
         !s.wifi.password.0.is_empty(),
@@ -596,6 +598,7 @@ pub fn write_page(
 <label><input type=checkbox name=twelve_hour{}> 12 hour clock</label>\
 <label>Timezone, minutes east of UTC <input type=number name=tz min=-{lim} max={lim} step=15 value={}></label>\
 <label>Thermometer offset, °C <input type=number name=temp_offset min=-{tlim} max={tlim} step=0.1 value={}></label>\
+<label>Temperature on the panel <select name=temp_show>{}</select></label>\
 <label>Hostname, for the DHCP server <input type=text name=hostname maxlength={hmax} pattern=\"[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?\" value=\"{}\"></label>\
 <button>Save</button> <button formaction=/play>Play</button></form>",
         s.alarm_hour,
@@ -606,6 +609,7 @@ pub fn write_page(
         if s.twelve_hour { " checked" } else { "" },
         s.tz_offset_minutes,
         Tenths(s.temp_offset_dc),
+        TempShowOptions(s.temp_show),
         s.hostname.as_str(),
         lim = TZ_LIMIT_MINUTES,
         tlim = Tenths(TEMP_OFFSET_LIMIT_DC),
@@ -747,6 +751,18 @@ pub fn write_saved_page(out: &mut impl core::fmt::Write, s: &Settings) -> core::
 
 /// The options of the alarm-days select: the three presets, and the
 /// current list as a fourth when it is none of them.
+/// The `<option>`s of the temperature-on-the-panel select.
+struct TempShowOptions(TempShow);
+
+impl core::fmt::Display for TempShowOptions {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        for (name, label) in TempShow::NAMES.iter().zip(TempShow::LABELS) {
+            write!(f, "<option value={name}{}>{label}</option>", if *name == self.0.name() { " selected" } else { "" })?;
+        }
+        Ok(())
+    }
+}
+
 struct DayOptions(u8);
 
 impl core::fmt::Display for DayOptions {
@@ -833,7 +849,7 @@ mod tests {
     #[test]
     fn apply_sets_every_key() {
         let mut s = Settings::DEFAULT;
-        let body = b"color=cyan&brightness=25&alarm=06%3A30&armed=on&days=weekend&skip=1&twelve_hour=true&tz=-420&temp_offset=-0.7&hostname=Bedroom-Clock&melody=random";
+        let body = b"color=cyan&brightness=25&alarm=06%3A30&armed=on&days=weekend&skip=1&twelve_hour=true&tz=-420&temp_offset=-0.7&temp_show=f&hostname=Bedroom-Clock&melody=random";
         apply(&mut s, body, true, false).unwrap();
         assert_eq!(s.color, PALETTE_NAMES.iter().position(|n| *n == "cyan").unwrap());
         assert_eq!(s.brightness_pct(), 25);
@@ -842,6 +858,7 @@ mod tests {
         assert_eq!(s.alarm_days, DAYS_WEEKEND);
         assert_eq!(s.tz_offset_minutes, -420);
         assert_eq!(s.temp_offset_dc, -7);
+        assert_eq!(s.temp_show, TempShow::Fahrenheit);
         assert_eq!(s.hostname.as_str(), "bedroom-clock");
         assert_eq!(s.melody, melody::RANDOM);
         assert!(s.is_valid());
@@ -883,6 +900,8 @@ mod tests {
         assert_eq!(try_body(b"temp_offset=-10"), Ok(()));
         assert_eq!(try_body(b"temp_offset=0.75"), Err(FormError::BadValue));
         assert_eq!(try_body(b"temp_offset=abc"), Err(FormError::BadValue));
+        assert_eq!(try_body(b"temp_show=k"), Err(FormError::BadValue));
+        assert_eq!(try_body(b"temp_show=off"), Ok(()));
         assert_eq!(try_body(b"%zz=1"), Err(FormError::UnknownKey));
         assert_eq!(try_body(b"hostname=-bad"), Err(FormError::BadValue));
         assert_eq!(try_body(b"days="), Err(FormError::BadValue));
@@ -1007,7 +1026,7 @@ mod tests {
         assert!(out.contains(r#""password_set":true,"token_set":true"#));
         assert!(!out.contains("secret"));
         assert!(out.contains(r#""temp_c":-20.0,"temp_f":-4.0,"light":100,"last_heal""#), "{out}");
-        assert!(out.contains(r#""tz":-420,"temp_offset":0.0,"hostname""#) || out.contains(r#""temp_offset":0.0,"hostname""#), "{out}");
+        assert!(out.contains(r#""temp_offset":0.0,"temp_show":"c","hostname""#), "{out}");
         assert!(out.contains(r#""last_heal":1800000000}"#));
         assert!(out.ends_with("}\n"));
         let mut none = String::new();

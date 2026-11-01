@@ -78,7 +78,11 @@ they change, and the root `build.rs` exports `git describe --always
 goes into the app descriptor, the boot line, the page and `/api`. The timezone, 12/24 hour, colour, brightness, alarm, alarm days,
 alarm melody, thermometer offset (`temp_offset`, tenths of a degree
 Celsius added to the NTC's reading, ±10.0, for the warm air at the
-sensor's spot in the case; blue-clock measured 0.7 high), DHCP
+sensor's spot in the case; blue-clock measured 0.7 high), the
+temperature on the panel (`temp_show`: `off`, `c` or `f`, default
+`c`; with a reading in hand the UI shows ` 23C` with the degree mark
+for seconds 30 to 34 of every minute in clock mode, `ui::TEMP_SHOW_AT`
+and `TEMP_SHOW_SECS`), DHCP
 hostname, Wi-Fi network and API token are settings:
 saved in the `nvs` partition, editable from the buttons and from
 `http://<ip>/` (form) or `/api` (form-encoded keys, JSON back). The
@@ -246,7 +250,7 @@ module ends with its `#[cfg(test)] mod tests`.
 | `core/src/panel.rs` | COM/SEG map, font, per-position colour as duty `Levels` (no RGB; the palette is written in levels), `Panel::render` → `ScanImage` |
 | `src/scan.rs` | cycle/transfer builder, double-buffered DMA scan task that builds the SPI2 quad + DMA bus itself (an async esp-hal driver is `!Send`), restart-gap statistics, `stop` on a blank frame before a deliberate reset or a flash write, `resume` after a failed one |
 | `src/display.rs` | UI loop: tick, button or settings change → `ui` → draw → publish; rings the alarm; shows the IP, or `AP` in place of the sweep on the access point; acts on the hold before the UI sees it; seeds and carries the skip flag and the time the alarm last rang |
-| `core/src/ui.rs` | mode state machine, pure logic, one timer for the current mode; edits the settings it is handed; alarm due check and missed-alarm grace, both gated by the carried time the alarm last rang; consumes `skip_next` |
+| `core/src/ui.rs` | mode state machine, pure logic, one timer for the current mode; edits the settings it is handed; alarm due check and missed-alarm grace, both gated by the carried time the alarm last rang; consumes `skip_next`; `view` takes the room reading and answers the `Temp` face mid-minute in clock mode |
 | `core/src/settings.rs` | `Settings`, palette and brightness tables, `Hostname`, `Text`/`Secret` strings, `Credentials` and the token with their rules, the build-time `seed`, shared `Watch` with change signal, versioned append-only flash record |
 | `src/storage.rs` | the one flash handle (`with_flash`), nvs partition lookup, `sequential-storage` map over it, debounced persist task that compares records, not structs, and resets into station mode after a save that changed the credentials, or after any save on the access point with a network stored |
 | `src/heal.rs` | deliberate resets: `reboot` blanks the panel through `scan::stop`, carries the time and resets, for `/reload` and the OTA reboot; `reset`, the self-heal, waits out a ringing alarm and counts itself first; `switch_mode`, the reset between station and access point, which starts the carry record over and freezes it |
@@ -260,7 +264,7 @@ module ends with its `#[cfg(test)] mod tests`.
 | `core/src/carry.rs` | `Carried`, `MARK` with its layout version, `encode`/`decode` |
 | `src/carry.rs` | RTC-RAM record used only after a software reset (`CoreSw`/`Cpu0Sw`; anything else zeroes it at boot): self-heal count and time, the skip flag, the time the alarm last rang, the Unix time last written, boots of an unconfirmed OTA image, the access-point flag for the next boot; the mark carries a layout version; `freeze` for a mode switch |
 | `src/buzzer.rs` | LEDC PWM on an open-drain pin; plays a melody on command, looped or once, stops within a note |
-| `core/src/sensors.rs` | the NTC table (10 kΩ, B 3950, under the adapter's 10 kΩ pull-up from 3V3) and `temperature_dc` by interpolation, `fahrenheit_tenths`, `ldr_ohms` and `light_pct` (the logarithm of the LDR's resistance, 1 kΩ is 100 and 50 kΩ is 0), `Tenths`; pure |
+| `core/src/sensors.rs` | the NTC table (10 kΩ, B 3950, under the adapter's 10 kΩ pull-up from 3V3) and `temperature_dc` by interpolation, `fahrenheit_tenths`, `ldr_ohms` and `light_pct` (the logarithm of the LDR's resistance, 1 kΩ is 100 and 50 kΩ is 0), `face` (the panel's four characters for a temperature), `Tenths`; pure |
 | `src/sensors.rs` | `sensor_task`: the async `Adc<ADC1>` with `AdcCalCurve` (the scheme that reads straight on the C3) on GPIO0 (NTC) and GPIO1 (LDR), 8 samples a second each into a 10 s exponential average, published as millivolts in two atomics; `room()` for `http::status`, `Report` for the heartbeat |
 | `core/src/clock.rs` | `LocalTime`, `weekday_of_days`, `local_time(unix, tz_minutes)` |
 | `src/clock.rs` | Unix time = uptime + NTP offset; `local_time` with the settings' timezone; `carry_time`/`restore_carried` move the time across a software reset as plain Unix time, written every second by the display tick; `RESET_PAUSE` for every deliberate reset |
@@ -364,7 +368,7 @@ module ends with its `#[cfg(test)] mod tests`.
   overflow is a 500, not a truncation. The headers are 88 bytes;
   `core::http::PAGE_MAX` (3968) is what a page may take, and the
   `form` tests build each page at its worst case and assert it
-  (2026-11-01: settings 2943, update 2989, setup with twelve
+  (2026-11-01: settings 3121, update 2989, setup with twelve
   32-character networks 3039). `cargo host-test` after adding a field
   or label; the test prints the sizes with `-- --nocapture`. The setup
   page's network list stops at `form::NETWORK_LIST_BUDGET` (1900)
@@ -379,12 +383,12 @@ module ends with its `#[cfg(test)] mod tests`.
 - An OTA image must fit a slot (`partitions.csv`, 0x1E0000 = 1920 KB);
   the release image is about 650 KB. Static RAM: `ota.rs` holds 11 KB
   of buffers, and what the statics leave of DRAM is the main stack,
-  about 96 KB now (`Settings` is 170 bytes of record and sits in several
+  about 96 KB now (`Settings` is 171 bytes of record and sits in several
   task futures); check `.stack` in `llvm-readelf -S` after adding one.
 - `form::apply` decodes each key into 16 bytes and each value into 64
   (`form::VALUE_MAX`, the password); longer input is reported as a bad
   key or value before parsing. The record is `settings::RECORD_LEN`
-  (170) bytes and the map scratch in `storage.rs` 256, which must hold
+  (171) bytes and the map scratch in `storage.rs` 256, which must hold
   the item (record plus 9 bytes, padded to a word).
 - `settings::RECEIVERS` is the number of `Watch` receivers (display,
   persist, hostname). Add one when a new task subscribes, or `receiver()`
@@ -400,7 +404,7 @@ module ends with its `#[cfg(test)] mod tests`.
 
 ## Verifying without a board
 
-`cargo host-test` runs the tests of `core/` on the host (73 on
+`cargo host-test` runs the tests of `core/` on the host (75 on
 2026-11-01): the AiP33628 encoder against a behavioural model of the
 chip (shift on CLK rise, latch on DIN rise while CLK high), the panel
 map, the palette and brightness tables, the hostname, password and

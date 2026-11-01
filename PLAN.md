@@ -4178,3 +4178,43 @@ it back in 3 s with −0.7 still set and 22.7 °C, so the version 8
 record was written and read. The settings page is 2943 bytes.
 martin-clock was unplugged before its flash and still runs the
 image without the setting.
+
+#### M11b, first half — the temperature on the panel each minute — DONE, verified on the panel 2026-11-01
+
+The user asked for the temperature for 5 s in the middle of each
+minute, with a setting to turn it off. One setting does that and
+picks the unit: `temp_show`, `off`, `c` or `f` (page select
+"Temperature on the panel": Off, Celsius, Fahrenheit; default
+Celsius), `RECORD_VERSION` 9 with one byte appended (`RECORD_LEN`
+171; a version 8 record reads as the default, a byte past 2 is a
+bad record).
+
+The face is the UI's, not a mode: in `Mode::Clock`, with the
+setting on and a reading in hand, `Ui::view` answers `View::Temp`
+for seconds 30 to 34 (`TEMP_SHOW_AT`, `TEMP_SHOW_SECS`) and the time
+otherwise, so a press keeps its clock-mode meaning and ringing,
+alarm-set, the IP and the PIN take precedence as before. `view`
+gains the reading as an argument (`Option<i16>` tenths, with the
+offset already in), which the display task takes from
+`sensors::room`; no reading, no face. `sensors::face(tenths, unit)`
+in the core crate lays it out: the whole degrees, rounded, right
+aligned in the first three positions, the unit letter in the
+fourth, so `23°C`, `-5°C` and `100°F` all read, clamped to −99 and
+999; the display lights the degree mark for it whatever the alarm.
+The display's wake for the face is the next second, like the time.
+
+**Host checks.** The record round trip and the older versions; the
+form key and the JSON; the page size; `face` at 23.4, −4.5, 99.5,
+−100 and 1000; `view` on, off, without a reading, at seconds 29,
+30, 34 and 35, and in Fahrenheit.
+
+**Verify on the panel.** At :30 the panel shows ` 23C` with the
+degree mark for five seconds and the time is back at :35 with the
+colon blinking; Fahrenheit shows ` 73F`; Off shows the time all
+minute; the alarm-set and the IP display win over it.
+
+**Bench, 2026-11-01.** blue-clock flashed over USB on its version 8
+record: `/api` came up with `temp_show` `c` and the offset still
+−0.7; `f` was taken and echoed, `k` was a 400, the page has the
+select, and `c` put it back. The settings page is 3121 bytes. The
+user watched the face on the panel: works as expected.

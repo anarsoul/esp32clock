@@ -267,6 +267,36 @@ const _: () = assert!(
 );
 const _: () = assert!(valid_token(API_TOKEN), "API_TOKEN must be empty or 8 to 32 printable characters without spaces");
 
+/// Whether the panel shows the temperature for a few seconds each
+/// minute, and in which unit.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(u8)]
+pub enum TempShow {
+    Off = 0,
+    Celsius = 1,
+    Fahrenheit = 2,
+}
+
+impl TempShow {
+    /// The form and API names, in record-byte order.
+    pub const NAMES: [&str; 3] = ["off", "c", "f"];
+    /// The page's labels, in the same order.
+    pub const LABELS: [&str; 3] = ["Off", "Celsius", "Fahrenheit"];
+    const ALL: [TempShow; 3] = [TempShow::Off, TempShow::Celsius, TempShow::Fahrenheit];
+
+    pub fn from_byte(b: u8) -> Option<Self> {
+        Self::ALL.get(b as usize).copied()
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::NAMES.iter().position(|n| *n == name).and_then(|i| Self::from_byte(i as u8))
+    }
+
+    pub fn name(self) -> &'static str {
+        Self::NAMES[self as usize]
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Settings {
     pub color: usize,
@@ -281,6 +311,8 @@ pub struct Settings {
     /// Tenths of a degree Celsius added to the thermometer's reading:
     /// the sensor sits in the case's warm air, a little above the room.
     pub temp_offset_dc: i16,
+    /// The temperature on the panel each minute, and its unit.
+    pub temp_show: TempShow,
     /// Name sent to the DHCP server.
     pub hostname: Hostname,
     /// Days the alarm rings on: bit 0 Monday to bit 6 Sunday.
@@ -303,7 +335,7 @@ pub struct Settings {
 }
 
 /// Bytes in a stored record.
-pub const RECORD_LEN: usize = 170;
+pub const RECORD_LEN: usize = 171;
 
 /// The thermometer offset's bound, tenths of a degree either way.
 pub const TEMP_OFFSET_LIMIT_DC: i16 = 100;
@@ -312,7 +344,7 @@ pub const TEMP_OFFSET_LIMIT_DC: i16 = 100;
 /// the new fields and teach `from_record` the old one, or the user's
 /// settings are lost; never reorder, since an older image reads a newer
 /// record by its prefix.
-const RECORD_VERSION: u8 = 8;
+const RECORD_VERSION: u8 = 9;
 
 /// Where the hostname sits in a version 3 record.
 const RECORD_HOSTNAME_LEN: usize = 9;
@@ -345,7 +377,10 @@ const FLAG_TOKEN_CLEARED: u8 = 1 << 0;
 /// Where the thermometer offset sits in a version 8 record, two bytes
 /// little-endian.
 const RECORD_TEMP_OFFSET: usize = RECORD_FLAGS + 1;
-const _: () = assert!(RECORD_TEMP_OFFSET + 2 == RECORD_LEN, "RECORD_LEN does not match the layout");
+
+/// Where the temperature-on-the-panel byte sits in a version 9 record.
+const RECORD_TEMP_SHOW: usize = RECORD_TEMP_OFFSET + 2;
+const _: () = assert!(RECORD_TEMP_SHOW + 1 == RECORD_LEN, "RECORD_LEN does not match the layout");
 
 /// Day names, Monday first, for the page and the API.
 pub const DAY_NAMES: [&str; 7] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
@@ -375,6 +410,7 @@ impl Settings {
         twelve_hour: DEFAULT_TWELVE_HOUR,
         tz_offset_minutes: DEFAULT_TZ_OFFSET_MINUTES,
         temp_offset_dc: 0,
+        temp_show: TempShow::Celsius,
         hostname: Hostname::DEFAULT,
         alarm_days: DAYS_ALL,
         melody: 0,
@@ -436,8 +472,8 @@ impl Settings {
     /// minute, armed, twelve-hour, timezone offset as little-endian i16,
     /// hostname length, hostname padded to 24 bytes, alarm days, melody
     /// (`0xff` for random), then the SSID, the password and the token,
-    /// each a length byte and a padded field, then the flags byte and
-    /// the thermometer offset.
+    /// each a length byte and a padded field, then the flags byte, the
+    /// thermometer offset and the temperature-on-the-panel byte.
     pub fn to_record(&self) -> [u8; RECORD_LEN] {
         let tz = self.tz_offset_minutes.to_le_bytes();
         let mut r = [0u8; RECORD_LEN];
@@ -464,6 +500,7 @@ impl Settings {
         r[RECORD_TOKEN..RECORD_TOKEN + TOKEN_MAX].copy_from_slice(&self.token.0.bytes);
         r[RECORD_FLAGS] = if self.token_cleared { FLAG_TOKEN_CLEARED } else { 0 };
         r[RECORD_TEMP_OFFSET..RECORD_TEMP_OFFSET + 2].copy_from_slice(&self.temp_offset_dc.to_le_bytes());
+        r[RECORD_TEMP_SHOW] = self.temp_show as u8;
         r
     }
 
@@ -472,8 +509,9 @@ impl Settings {
     /// (M6) after the timezone, version 3 (M6) after the hostname, version
     /// 4 (M7) after the alarm days, version 5 (M8) after the melody, so
     /// those read as no network and no token, version 6 (M10) after
-    /// the token, so no flags, and version 7 after the flags, so no
-    /// thermometer offset. Versions are append-only, so a record
+    /// the token, so no flags, version 7 after the flags, so no
+    /// thermometer offset, and version 8 after the offset, so the
+    /// temperature on the panel at its default. Versions are append-only, so a record
     /// from a newer image is read by the prefix this one knows, and a
     /// colour, brightness or melody index past this image's table (an
     /// entry a newer image added, or a higher current ceiling) lands on
@@ -524,6 +562,9 @@ impl Settings {
         }
         if version >= 8 {
             s.temp_offset_dc = i16::from_le_bytes([*r.get(RECORD_TEMP_OFFSET)?, *r.get(RECORD_TEMP_OFFSET + 1)?]);
+        }
+        if version >= 9 {
+            s.temp_show = TempShow::from_byte(*r.get(RECORD_TEMP_SHOW)?)?;
         }
         s.color = s.color.min(PALETTE.len() - 1);
         // A record saved by a build with a higher ceiling may name a step
@@ -594,6 +635,7 @@ mod tests {
             twelve_hour: true,
             tz_offset_minutes: -420,
             temp_offset_dc: -TEMP_OFFSET_LIMIT_DC,
+            temp_show: TempShow::Fahrenheit,
             hostname: Hostname::new(&"h".repeat(HOSTNAME_MAX)).unwrap(),
             alarm_days: 0b0101010,
             melody: melody::RANDOM,
@@ -678,6 +720,7 @@ mod tests {
             5 => RECORD_MELODY + 1,
             6 => RECORD_FLAGS,
             7 => RECORD_TEMP_OFFSET,
+            8 => RECORD_TEMP_SHOW,
             _ => RECORD_LEN,
         }
     }
@@ -700,7 +743,8 @@ mod tests {
             assert_eq!(got.wifi, if version >= 6 { s.wifi } else { Credentials::NONE }, "v{version} network");
             assert_eq!(got.token, if version >= 6 { s.token } else { Secret(Text::EMPTY) }, "v{version} token");
             assert!(!got.token_cleared, "v{version} has no flags");
-            assert_eq!(got.temp_offset_dc, 0, "v{version} has no thermometer offset");
+            assert_eq!(got.temp_offset_dc, if version >= 8 { s.temp_offset_dc } else { 0 }, "v{version} thermometer offset");
+            assert_eq!(got.temp_show, d.temp_show, "v{version} has no temperature on the panel");
         }
     }
 
@@ -821,6 +865,16 @@ mod tests {
         assert!(Settings { temp_offset_dc: -TEMP_OFFSET_LIMIT_DC, ..ok }.is_valid());
         assert!(!Settings { temp_offset_dc: TEMP_OFFSET_LIMIT_DC + 1, ..ok }.is_valid());
         assert!(!Settings { temp_offset_dc: -TEMP_OFFSET_LIMIT_DC - 1, ..ok }.is_valid());
+        assert_eq!(TempShow::from_name("f"), Some(TempShow::Fahrenheit));
+        assert_eq!(TempShow::from_name("F"), None);
+        assert_eq!(TempShow::from_byte(3), None);
+        for t in TempShow::ALL {
+            assert_eq!(TempShow::from_name(t.name()), Some(t));
+            assert_eq!(TempShow::from_byte(t as u8), Some(t));
+        }
+        let mut bad = ok.to_record();
+        bad[RECORD_TEMP_SHOW] = 3;
+        assert_eq!(Settings::from_record(&bad), None, "a bad temperature byte is a bad record");
         assert!(Settings { alarm_days: DAYS_WEEKEND, ..ok }.alarm_on(5));
         assert!(!Settings { alarm_days: DAYS_WEEKEND, ..ok }.alarm_on(4));
         assert_eq!(RECORD_LEN, ok.to_record().len());

@@ -16,7 +16,7 @@ use crate::net::{self, Mode};
 use crate::panel::{Panel, ScanImage};
 use crate::settings::{self, Settings};
 use crate::ui::{Field, IP_STEP, Ui, View};
-use crate::{auth, carry, clock, heal, scan, settings as settings_mod};
+use crate::{auth, carry, clock, heal, scan, sensors, settings as settings_mod};
 
 /// Step time of the waiting animation and of the blink.
 const BLINK_STEP: Duration = Duration::from_millis(250);
@@ -110,6 +110,12 @@ fn draw(panel: &mut Panel, view: View, settings: &Settings, ip: Option<[u8; 4]>,
         }
         View::Ip { index } => draw_ip(panel, ip, index),
         View::Pin { pin } => draw_pin(panel, pin),
+        View::Temp { tenths, fahrenheit } => {
+            for (i, c) in sensors::face(tenths, if fahrenheit { 'F' } else { 'C' }).into_iter().enumerate() {
+                panel.set_char(i, c);
+            }
+            panel.set_degree(true);
+        }
     }
 }
 
@@ -185,7 +191,7 @@ pub async fn display_task(stack: Stack<'static>) -> ! {
             }
         }
 
-        let view = ui.view(&current, time, now.as_millis());
+        let view = ui.view(&current, time, now.as_millis(), sensors::room().0);
         let ip = stack.config_v4().map(|c| c.address.address().octets());
         draw(&mut panel, view, &current, ip, now.as_millis());
         let img = panel.render();
@@ -197,7 +203,7 @@ pub async fn display_task(stack: Stack<'static>) -> ! {
         // Next redraw: the next second in clock mode, the blink step while
         // anything blinks or sweeps, plus a little so the boundary has passed.
         let wait = match view {
-            View::Time { .. } => clock::until_next_second(),
+            View::Time { .. } | View::Temp { .. } => clock::until_next_second(),
             View::Ip { .. } => IP_STEP / 4,
             _ => BLINK_STEP / 4,
         };
