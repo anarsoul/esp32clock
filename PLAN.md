@@ -4379,7 +4379,7 @@ brightness-dependent `Settings::color` are gone again, and the
 palette test locks in the 2. One press of the top button from yellow
 is still lime for the comparison.
 
-#### Wi-Fi status line on the page (after yellow) — built 2026-11-01, not yet verified on the bench
+#### Wi-Fi status line on the page (after yellow) — DONE, verified on the bench 2026-11-01
 
 The user asked for the network and the signal on the settings page.
 The signal is only in the serial log today: `net::log_status` reads
@@ -4412,3 +4412,8 @@ the growth. The minus on the page is ASCII, same as the log.
 stored network and a figure near the minute log's `rssi`; `/api` has
 `"rssi":-NN`; after `scripts/reload.sh` the first page is "not
 connected" only if fetched before the connect, then the figure.
+
+**Bench, 2026-11-01.** The user flashed and checked it; from the
+session, test-clock (10.1.1.30, on `esptest`) answers `/api` with
+`"rssi":-41` after `"light"` and the page with `Wi-Fi <b>esptest</b>,
+-41 dBm.` under the firmware line, 172 s after the flash.
