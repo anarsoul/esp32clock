@@ -4145,6 +4145,41 @@ clock board; the guide's rule applies, measure at the access point's
 figure for the clock, from inside the case, before changing the
 transmit power.
 
+Antenna rework, the evening of 2026-11-01: the user fitted a Hirose
+U.FL receptacle at the C3 Zero's chip-antenna feed on blue-clock and
+a patch antenna on it. Same spot, same access point, lid open as
+before: the scan reads the near access point at −29 dBm (was −51 to
+−53 with the chip antenna, −38/−39 on the old bench board) and the
+far one on channel 3 at −58 to −61 (was −82/−83, −76 on the old
+board); the minute line on channel 9 reads −29 (was −52 to −65).
+That is 25 to 30 dB back at the clock, 10 dB past the old board.
+Ten 498-byte pings from the host answered in 3 to 11 ms, no loss;
+the page in 38 to 39 ms; the boot probe in 13 ms. One oddity in two
+boots: the first connect after the rework went to the far access
+point at −58 although the candidate scan listed the near one at −29
+and the config sorts by signal; the reload after it joined the near
+one. Watch for it; a repeat would be worth a `with_bssid` pin or a
+look at the driver's own scan. The reworked board then went into
+the case and the real clock's spot as `martin-clock` (10.1.1.156, on
+`5d0e373`): both access points read it at about −70 dBm, equal, so
+that spot is as far from one as from the other. The old board, a
+C3 Zero as well but placed differently in the case, read −74/−76 at
+the near access point at 16 dBm from that spot and was out of the
+far one's reach; the adapter build with the chip antenna would have
+been 10 to 25 dB below that at the access point and was never
+installed. From the host, 20 pings of 498 bytes
+answered in 4 to 57 ms with none lost and the page in 35 to 46 ms,
+0 heals at 24 min. With both access points equal the driver's pick
+is a coin toss, so the first-boot oddity above may show up as a
+spread in the minute line's BSSID rather than a fault. The light
+reads 0 there, which is right: the room was dark. The −0.7 offset is
+the open-lid figure; the closed-case offset (about −2.0 on the chip
+antenna board the same day) is still to be measured there. Still
+owed: the same rework on the second adapter board, and the user
+plans a second adapter for the ESP32-C3 SuperMini Plus footprint
+(two rows of eight), so a module with its own IPEX antenna jack can
+go in without the receptacle rework.
+
 #### Thermometer offset (after M11a) — DONE, verified on the bench 2026-11-01
 
 The afternoon's comparison above gave a constant 0.6 to 0.8 °C
@@ -4224,8 +4259,10 @@ user watched the face on the panel: works as expected.
 The adapter-built clocks hear the access point 10 to 25 dB weaker
 than the old bench board (M11a), the access point hears them 20 dB
 below that again, and a marginal uplink passes short frames long
-after full ones fail. Until the antenna rework lands, the clock
-sends only short frames: `ESP_RADIO_CONFIG_WIFI_MTU` 540 in
+after full ones fail. The clock sends only short frames (the antenna
+rework landed the same evening and put 25 to 30 dB back, see M11a;
+the MTU stays, since nothing but the probe depends on it and a
+clock built without the rework needs it): `ESP_RADIO_CONFIG_WIFI_MTU` 540 in
 `.cargo/config.toml`'s `[env]` (esp-radio's compile-time key; the
 default is 1492), which smoltcp turns into a 486-byte TCP payload
 and the largest ICMP payload of 498. The probe follows it:

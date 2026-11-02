@@ -297,9 +297,13 @@ module ends with its `#[cfg(test)] mod tests`.
   LDR looks dark. The NTC reads a few degrees above the room on the
   bench and creeps up with uptime (2026-11-01): the board warms it;
   the user's thermometer is the reference, not the reading, and the
-  `temp_offset` setting carries the difference (−0.7 on blue-clock). The new
-  clock also hears the access point 10 to 25 dB weaker than the old
-  bench board did at the same spot. ADC1 is the converter that works with Wi-Fi on,
+  `temp_offset` setting carries the difference (−0.7 on blue-clock). A clock
+  built on the adapter with the C3 Zero's chip antenna hears the
+  access point 10 to 25 dB weaker than the old bench board did at the
+  same spot (the antenna sits inside the adapter's ground fill); a
+  U.FL receptacle at the feed and a patch antenna put 25 to 30 dB
+  back (2026-11-01: −29 dBm on the near access point at the bench;
+  installed in the case, both access points read it at −70). ADC1 is the converter that works with Wi-Fi on,
   11 dB attenuation is only calibrated to about 2.5 V, and
   `AdcCalCurve` is the scheme to use: the line fit is percent off.
 - **Current:** `IS` comes from brightness alone, capped at
