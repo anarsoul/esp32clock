@@ -4497,3 +4497,39 @@ the same clicks, hold nothing that sets a melody, the replay does not
 reproduce it, and the firmware writes the melody only from `POST /`
 and `POST /api`; most likely a save from another browser at the
 bench. It was put back with `POST /api melody=beeps`.
+
+#### Favicon and the hostname in the title (after the unsaved-changes mark) — DONE, verified in a browser 2026-11-02
+
+Every page load cost a `GET /favicon.ico` answered 404 and the tab
+showed the browser's blank glyph. `src/favicon.ico` (337 bytes) is
+the panel as pixel art, a dark rounded face with the time in orange
+seven-segment digits: a 32 px `12:34` and a 16 px `1:23`, two PNG
+entries in one ICO so the tab is crisp at either density. `src/http.rs`
+embeds it with `include_bytes!` and serves `GET /favicon.ico` with
+`image/x-icon` and `Cache-Control: max-age=86400`, on the access
+point too, ahead of the captive-portal redirect. The pages carry no
+`<link>` tag, since `/favicon.ico` is the path browsers ask for by
+themselves, so they do not grow. Drawn once with a throwaway script;
+the file is the source.
+
+**Verify in a browser.** Open `http://<ip>/`: the tab shows the dark
+face with orange digits, and `http://<ip>/favicon.ico` the icon
+itself. One `GET /favicon.ico` in the log for the first page, none
+for a reload.
+
+**Bench, 2026-11-02.** test-clock (10.1.1.30) flashed over USB. `curl
+http://10.1.1.30/favicon.ico` answers `200`, `image/x-icon`,
+`Cache-Control: max-age=86400`, and the body is byte-identical to
+`src/favicon.ico`; the page still serves (3770 bytes). The tab itself
+not yet looked at in a browser.
+
+**Title, 2026-11-02.** The user asked for the tab to say which clock
+it is: the settings and update pages are titled `Clock: <hostname>`
+(`form::write_page` and `write_update_page`, the latter now given the
+hostname), the setup pages keep `Clock setup` since there the
+hostname is usually still the default. The hostname is letters,
+digits and dashes, so nothing to escape. Worst-case sizes: settings
+4233, update 3008 of `PAGE_MAX` 6016. Then the user found the heading
+still said `Clock`: the `<h1>` of both pages is `Clock: <hostname>`
+as well (settings 4259, update 3027). On test-clock over USB; both
+read back `Clock: test-clock`.

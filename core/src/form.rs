@@ -519,12 +519,13 @@ button{font-size:1em;padding:.5em 1.5em;margin-top:1em}p.err{color:#b00}progress
 /// attempt just before.
 pub fn write_update_page(
     out: &mut impl core::fmt::Write,
+    hostname: &str,
     st: &Status,
     token_set: bool,
     lockout_secs: Option<u64>,
 ) -> core::fmt::Result {
     out.write_str(HEAD)?;
-    out.write_str("<title>Clock update</title></head><body><h1>Clock update</h1>")?;
+    write!(out, "<title>Clock: {hostname}</title></head><body><h1>Clock: {hostname}</h1>")?;
     write_firmware_line(out, st)?;
     match lockout_secs {
         Some(secs) => write!(
@@ -581,9 +582,12 @@ pub fn write_page(
     error: Option<FormError>,
 ) -> core::fmt::Result {
     out.write_str(HEAD)?;
-    out.write_str(
-        "<style>fieldset{border:1px solid #ccc;border-radius:.3em;margin:1em 0;padding:0 1em}#p{margin:0 0 1em}</style>\
-<title>Clock</title></head><body><h1>Clock</h1>",
+    // The hostname is letters, digits and dashes, so no escaping here.
+    write!(
+        out,
+        "<style>fieldset{{border:1px solid #ccc;border-radius:.3em;margin:1em 0;padding:0 1em}}#p{{margin:0 0 1em}}</style>\
+<title>Clock: {0}</title></head><body><h1>Clock: {0}</h1>",
+        s.hostname.as_str()
     )?;
     match error {
         None => {}
@@ -1102,6 +1106,8 @@ mod tests {
         // named control with the defaults the page came with.
         let mut out = String::new();
         write_page(&mut out, &Settings::DEFAULT, &status(true), None).unwrap();
+        let host = Settings::DEFAULT.hostname.as_str();
+        assert!(out.contains(&format!("<title>Clock: {host}</title>")) && out.contains(&format!("<h1>Clock: {host}</h1>")), "{out}");
         assert!(out.contains("<button>Save</button> <b id=u hidden>Changes not saved yet.</b></form>"), "{out}");
         assert_eq!(out.matches("<script>").count(), 1);
         assert!(out.contains("f.oninput=function(){"), "{out}");
@@ -1127,7 +1133,7 @@ mod tests {
     #[test]
     fn update_page_fits_the_response_buffer() {
         let mut out = String::new();
-        write_update_page(&mut out, &status(true), true, Some(10)).unwrap();
+        write_update_page(&mut out, &"h".repeat(HOSTNAME_MAX), &status(true), true, Some(10)).unwrap();
         println!("update page: {} bytes of {PAGE_MAX}", out.len());
         assert!(out.len() <= PAGE_MAX, "{} bytes", out.len());
         assert!(out.ends_with("</html>"));

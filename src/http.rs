@@ -38,6 +38,11 @@ use crate::form::{self, FormError, HealStamp, Status};
 use crate::net::{self, Mode};
 use crate::{auth, clock, heal, ota, sensors, settings};
 
+/// The tab icon: the panel as pixel art, a 32 px `12:34` and a 16 px
+/// `1:23` as PNG entries in one ICO, served at the path browsers ask
+/// for by themselves.
+const FAVICON: &[u8] = include_bytes!("favicon.ico");
+
 /// Connections served at once, each with its own buffers and task.
 pub const LISTENERS: usize = 3;
 
@@ -156,15 +161,21 @@ impl Response {
     }
 }
 
-impl core::fmt::Write for Response {
-    fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        let end = self.len + s.len();
+impl Response {
+    fn write_bytes(&mut self, bytes: &[u8]) -> core::fmt::Result {
+        let end = self.len + bytes.len();
         if end > self.buf.len() {
             return Err(core::fmt::Error);
         }
-        self.buf[self.len..end].copy_from_slice(s.as_bytes());
+        self.buf[self.len..end].copy_from_slice(bytes);
         self.len = end;
         Ok(())
+    }
+}
+
+impl core::fmt::Write for Response {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        self.write_bytes(s.as_bytes())
     }
 }
 
@@ -388,11 +399,17 @@ fn respond(out: &mut Response, req: &Request<'_>, body: &[u8]) -> Result<Then, c
             buzzer::preview(trial.melody);
             redirect_home(out, None)?;
         }
+        (Method::Get, "/favicon.ico") => {
+            // The one response a browser may cache: the icon only
+            // changes with the firmware.
+            out.write_str("HTTP/1.0 200 OK\r\nContent-Type: image/x-icon\r\nConnection: close\r\nCache-Control: max-age=86400\r\n\r\n")?;
+            out.write_bytes(FAVICON)?;
+        }
         (Method::Get, "/update") => {
             // Opening the page puts a PIN on the panel; the page asks for it.
             let lockout_secs = auth::issue_pin(random()).err();
             status_line(out, "200 OK", "text/html; charset=utf-8")?;
-            form::write_update_page(out, &status(), auth::token_enabled(), lockout_secs)?;
+            form::write_update_page(out, settings::get().hostname.as_str(), &status(), auth::token_enabled(), lockout_secs)?;
         }
         (Method::Post, "/pin") => {
             // A PIN without the page, for a script that reads the serial
