@@ -4378,3 +4378,37 @@ trimmed yellow's green by the brightness step, `[2, 3, 4, 4, 4]` for
 brightness-dependent `Settings::color` are gone again, and the
 palette test locks in the 2. One press of the top button from yellow
 is still lime for the comparison.
+
+#### Wi-Fi status line on the page (after yellow) — built 2026-11-01, not yet verified on the bench
+
+The user asked for the network and the signal on the settings page.
+The signal is only in the serial log today: `net::log_status` reads
+`controller.rssi()` once a minute inside `wifi_task`, and the
+controller belongs to that task, so the HTTP handler cannot ask the
+driver itself. The same pattern as the sensors: the Wi-Fi task
+publishes the reading in an atomic (`net::RSSI`, one writer, with a
+sentinel for "not connected") and `net::rssi()` reads it. It is
+written on connect, cleared on disconnect, and refreshed every
+`RSSI_PERIOD` (10 s) by the inner loop, which keeps logging its
+minute line every sixth sample so the log is as it was. The RSSI is
+the last beacon's, so a station that stopped hearing its AP shows the
+stale figure until the disconnect lands, same as the log line.
+
+`form::Status` gains `rssi: Option<i8>`; the SSID is the stored one
+(`Settings::wifi.ssid`), which is the only network the station ever
+joins, so `write_status` takes the settings' SSID rather than a copy
+in `Status`. The page shows `Wi-Fi <b>home</b>, −62 dBm.` under the
+firmware line, `Wi-Fi <b>home</b>: not connected.` without a reading,
+and `Wi-Fi: no network stored.` with an empty SSID. `/api` gains the
+read-only key `rssi` (dBm, or `null` when not connected and on the
+access point, where the setup form has no status line). The page
+test's worst case now stores a hostile SSID of 32 `"` (192 bytes
+escaped) and a four-character `-100`: 3899 bytes of the 3968, 69 to
+spare, which is the settings page's new ceiling to watch. The yellow
+entry's 3663 was without the hostile SSID; the escaped line alone is
+the growth. The minus on the page is ASCII, same as the log.
+
+**Verify on the bench.** `curl http://<ip>/` shows the line with the
+stored network and a figure near the minute log's `rssi`; `/api` has
+`"rssi":-NN`; after `scripts/reload.sh` the first page is "not
+connected" only if fetched before the connect, then the figure.

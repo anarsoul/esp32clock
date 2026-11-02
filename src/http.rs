@@ -298,6 +298,7 @@ fn status() -> Status {
         last_heal,
         temp_dc,
         light,
+        rssi: net::rssi(),
     }
 }
 

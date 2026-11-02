@@ -44,6 +44,9 @@ pub struct Status {
     pub temp_dc: Option<i16>,
     /// The light index, 0 (dark) to 100: `None` before the first reading.
     pub light: Option<u8>,
+    /// The station's signal in dBm: `None` while not connected, and on
+    /// the access point.
+    pub rssi: Option<i8>,
 }
 
 /// The time of a self-heal, converted by the caller so this module stays
@@ -414,8 +417,8 @@ impl<T: core::fmt::Display> core::fmt::Display for OrNull<T> {
 /// are set, never their values), followed by the read-only status keys
 /// `version`, `slot`, `mode`, `uptime` (seconds), `heals`, `temp_c` and
 /// `temp_f` (tenths, or null with no thermometer), `light` (0 to 100,
-/// or null before the first reading) and `last_heal` (Unix seconds or
-/// null).
+/// or null before the first reading), `rssi` (dBm, or null while not
+/// connected) and `last_heal` (Unix seconds or null).
 pub fn write_json(out: &mut impl core::fmt::Write, s: &Settings, st: &Status) -> core::fmt::Result {
     write!(
         out,
@@ -429,7 +432,7 @@ pub fn write_json(out: &mut impl core::fmt::Write, s: &Settings, st: &Status) ->
     write_days(out, s.alarm_days)?;
     write!(
         out,
-        "\",\"skip\":{},\"melody\":\"{}\",\"twelve_hour\":{},\"tz\":{},\"temp_offset\":{},\"temp_show\":\"{}\",\"hostname\":\"{}\",\"ssid\":\"{}\",\"password_set\":{},\"token_set\":{},\"version\":\"{}\",\"slot\":\"{}\",\"mode\":\"{}\",\"uptime\":{},\"heals\":{},\"temp_c\":{},\"temp_f\":{},\"light\":{},\"last_heal\":",
+        "\",\"skip\":{},\"melody\":\"{}\",\"twelve_hour\":{},\"tz\":{},\"temp_offset\":{},\"temp_show\":\"{}\",\"hostname\":\"{}\",\"ssid\":\"{}\",\"password_set\":{},\"token_set\":{},\"version\":\"{}\",\"slot\":\"{}\",\"mode\":\"{}\",\"uptime\":{},\"heals\":{},\"temp_c\":{},\"temp_f\":{},\"light\":{},\"rssi\":{},\"last_heal\":",
         s.skip_next,
         melody::name(s.melody),
         s.twelve_hour,
@@ -448,6 +451,7 @@ pub fn write_json(out: &mut impl core::fmt::Write, s: &Settings, st: &Status) ->
         OrNull(st.temp_dc.map(Tenths)),
         OrNull(st.temp_dc.map(|dc| Tenths(fahrenheit_tenths(dc)))),
         OrNull(st.light),
+        OrNull(st.rssi),
     )?;
     match st.last_heal {
         Some(h) => writeln!(out, "{}}}", h.unix_secs),
@@ -456,9 +460,12 @@ pub fn write_json(out: &mut impl core::fmt::Write, s: &Settings, st: &Status) ->
 }
 
 /// The status lines under the form: the firmware with a link to the
-/// update page, then uptime and self-heals, then the room.
-fn write_status(out: &mut impl core::fmt::Write, st: &Status) -> core::fmt::Result {
+/// update page, the network and its signal, the room, then uptime and
+/// self-heals. `ssid` is the stored network, the only one the station
+/// joins.
+fn write_status(out: &mut impl core::fmt::Write, ssid: &str, st: &Status) -> core::fmt::Result {
     write_firmware_line(out, st)?;
+    write_wifi_line(out, ssid, st)?;
     write_room_line(out, st)?;
     write!(out, "<p><small>Up {}. Self-heal resets since power-up: {}", Span(st.uptime_secs as i64), st.heals)?;
     if let Some(h) = st.last_heal {
@@ -468,6 +475,17 @@ fn write_status(out: &mut impl core::fmt::Write, st: &Status) -> core::fmt::Resu
         }
     }
     out.write_str(".</small></p>")
+}
+
+/// The network and the signal from its last beacon, or why not.
+fn write_wifi_line(out: &mut impl core::fmt::Write, ssid: &str, st: &Status) -> core::fmt::Result {
+    if ssid.is_empty() {
+        return out.write_str("<p><small>Wi-Fi: no network stored.</small></p>");
+    }
+    match st.rssi {
+        Some(rssi) => write!(out, "<p><small>Wi-Fi <b>{}</b>, {rssi} dBm.</small></p>", HtmlStr(ssid)),
+        None => write!(out, "<p><small>Wi-Fi <b>{}</b>: not connected.</small></p>", HtmlStr(ssid)),
+    }
 }
 
 /// The sensors: the temperature in both units and the light index, or
@@ -624,7 +642,7 @@ fetch('/play',{{method:'POST',redirect:'manual',headers:{{'Content-Type':'applic
         tlim = Tenths(TEMP_OFFSET_LIMIT_DC),
         hmax = HOSTNAME_MAX,
     )?;
-    write_status(out, st)?;
+    write_status(out, s.wifi.ssid.as_str(), st)?;
     out.write_str(
         "<p><small>Scriptable: <code>GET /api</code>, <code>POST /api</code> with the same fields.</small></p></body></html>",
     )
@@ -807,6 +825,7 @@ mod tests {
             last_heal: heal.then_some(HealStamp { unix_secs: 1_800_000_000, weekday: 2, hour: 23, minute: 59, ago_secs: Some(400 * 86_400) }),
             temp_dc: Some(-200),
             light: Some(100),
+            rssi: Some(-100),
         }
     }
 
@@ -1034,15 +1053,15 @@ mod tests {
         assert!(out.contains(r#""ssid":"my \"net\"\\\u0001""#), "{out}");
         assert!(out.contains(r#""password_set":true,"token_set":true"#));
         assert!(!out.contains("secret"));
-        assert!(out.contains(r#""temp_c":-20.0,"temp_f":-4.0,"light":100,"last_heal""#), "{out}");
+        assert!(out.contains(r#""temp_c":-20.0,"temp_f":-4.0,"light":100,"rssi":-100,"last_heal""#), "{out}");
         assert!(out.contains(r#""temp_offset":0.0,"temp_show":"c","hostname""#), "{out}");
         assert!(out.contains(r#""last_heal":1800000000}"#));
         assert!(out.ends_with("}\n"));
         let mut none = String::new();
         let mut unread = status(false);
-        (unread.temp_dc, unread.light) = (None, None);
+        (unread.temp_dc, unread.light, unread.rssi) = (None, None, None);
         write_json(&mut none, &Settings::DEFAULT, &unread).unwrap();
-        assert!(none.contains(r#""temp_c":null,"temp_f":null,"light":null"#), "{none}");
+        assert!(none.contains(r#""temp_c":null,"temp_f":null,"light":null,"rssi":null"#), "{none}");
         assert!(none.contains(r#""password_set":false,"token_set":false"#));
         assert!(none.ends_with(r#""last_heal":null}"#.to_string().as_str() ) || none.ends_with("null}\n"));
     }
@@ -1065,11 +1084,25 @@ mod tests {
         s.twelve_hour = true;
         s.tz_offset_minutes = -TZ_LIMIT_MINUTES;
         s.melody = melody::RANDOM;
+        s.wifi.ssid = Text::new(&"\"".repeat(SSID_MAX)).unwrap(); // escaped into the Wi-Fi line
         let mut out = String::new();
         write_page(&mut out, &s, &status(true), Some(FormError::Forbidden)).unwrap();
         println!("settings page: {} bytes of {PAGE_MAX}", out.len());
         assert!(out.len() <= PAGE_MAX, "{} bytes", out.len());
         assert!(out.ends_with("</html>"));
+        assert!(out.contains(&format!("Wi-Fi <b>{}</b>, -100 dBm.", "&quot;".repeat(SSID_MAX))), "{out}");
+    }
+
+    #[test]
+    fn wifi_line_says_why_not() {
+        let mut st = status(false);
+        st.rssi = None;
+        let mut out = String::new();
+        write_status(&mut out, "home", &st).unwrap();
+        assert!(out.contains("Wi-Fi <b>home</b>: not connected."), "{out}");
+        out.clear();
+        write_status(&mut out, "", &st).unwrap();
+        assert!(out.contains("Wi-Fi: no network stored."), "{out}");
     }
 
     #[test]

@@ -101,11 +101,15 @@ line, and the JSON with the read-only keys `version`, `slot` (the app
 slot the firmware runs from), `mode` (`sta` or `ap`), `uptime` (seconds), `heals` (self-heal
 resets since power-up), `temp_c` and `temp_f` (the room in tenths, `null`
 with no thermometer fitted or before the first reading), `light` (0 dark
-to 100, `null` before the first reading) and `last_heal` (Unix seconds
-or null); posting them is refused as an unknown key. The page shows the
-room on a line under the status (`Room 23.4 °C (74.1 °F), light 62 %`),
-and the minute heartbeat logs the filtered millivolts of both dividers
-for calibration. `skip_next` (page checkbox, key `skip`) is
+to 100, `null` before the first reading), `rssi` (the station's signal
+in dBm from its last beacon, read every 10 s by `net::wifi_task` into
+an atomic, `null` while not connected and on the access point) and
+`last_heal` (Unix seconds or null); posting them is refused as an
+unknown key. The page shows the network and the signal under the
+firmware line (`Wi-Fi home, -62 dBm.`, or `not connected`, or `no
+network stored`), the room on the line after (`Room 23.4 °C (74.1 °F),
+light 62 %`), and the minute heartbeat logs the filtered millivolts of
+both dividers for calibration. `skip_next` (page checkbox, key `skip`) is
 the one setting the record does not store: it skips one alarm and is cleared
 by it or by a power cut; a software reset (self-heal, panic) carries it over
 in RTC RAM, see `src/carry.rs`. `POST /play` previews the melody chosen in the form
@@ -373,8 +377,9 @@ module ends with its `#[cfg(test)] mod tests`.
   overflow is a 500, not a truncation. The headers are 88 bytes;
   `core::http::PAGE_MAX` (3968) is what a page may take, and the
   `form` tests build each page at its worst case and assert it
-  (2026-11-01: settings 3629 in its three fieldsets with the Play script, update 2989, setup with twelve
-  32-character networks 3039). `cargo host-test` after adding a field
+  (2026-11-01: settings 3899 in its three fieldsets with the Play
+  script, the Wi-Fi line and a stored SSID of 32 `"`; update 2989;
+  setup with twelve 32-character networks 3039). `cargo host-test` after adding a field
   or label; the test prints the sizes with `-- --nocapture`. The setup
   page's network list stops at `form::NETWORK_LIST_BUDGET` (1900)
   bytes, strongest first, with a "N more not shown" line, because a
@@ -422,7 +427,7 @@ module ends with its `#[cfg(test)] mod tests`.
 
 ## Verifying without a board
 
-`cargo host-test` runs the tests of `core/` on the host (75 on
+`cargo host-test` runs the tests of `core/` on the host (76 on
 2026-11-01): the AiP33628 encoder against a behavioural model of the
 chip (shift on CLK rise, latch on DIN rise while CLK high), the panel
 map, the palette and brightness tables, the hostname, password and

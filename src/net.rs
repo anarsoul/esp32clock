@@ -6,7 +6,7 @@
 
 use core::cell::RefCell;
 use core::net::{IpAddr, SocketAddr};
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 
 use critical_section::Mutex as CsMutex;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
@@ -42,8 +42,22 @@ const LOCAL_PORT: u16 = 12345;
 const NTP_TIMEOUT: Duration = Duration::from_secs(5);
 const RECONNECT_DELAY: Duration = Duration::from_secs(5);
 
-/// How often the station logs its signal while connected.
-const STATUS_PERIOD: Duration = Duration::from_secs(60);
+/// How often the station reads its signal into `RSSI` while connected,
+/// and how many of those readings make the minute log line.
+const RSSI_PERIOD: Duration = Duration::from_secs(10);
+const STATUS_EVERY: u32 = 6;
+
+/// The station's signal from the last beacon, in dBm, for the page and
+/// `/api`; `NO_RSSI` while not connected. Written only by `wifi_task`.
+static RSSI: AtomicI32 = AtomicI32::new(NO_RSSI);
+const NO_RSSI: i32 = i32::MIN;
+
+/// The signal of the network the station is joined to, in dBm, or
+/// `None` when it is not connected (and always on the access point).
+pub fn rssi() -> Option<i8> {
+    let v = RSSI.load(Ordering::Relaxed);
+    (v != NO_RSSI).then_some(v as i8)
+}
 
 /// How often the gateway is pinged while the stack has an address, and
 /// how long one reply may take. The probe is the only thing that can
@@ -293,6 +307,14 @@ fn log_status(controller: &WifiController<'static>, since: Instant) {
     }
 }
 
+/// Read the signal into `RSSI` for the page and `/api`. A driver that
+/// has nothing to say leaves the last reading, as the log line does.
+fn publish_rssi(controller: &WifiController<'static>) {
+    if let Ok(rssi) = controller.rssi() {
+        RSSI.store(rssi, Ordering::Relaxed);
+    }
+}
+
 /// Keep the station connected, and run DHCP only while it is. The stack
 /// starts with no IPv4 configuration; it is switched on `LINK_SETTLE`
 /// after each connect and off at each disconnect, so the first discover
@@ -362,14 +384,16 @@ pub async fn wifi_task(mut controller: WifiController<'static>, stack: Stack<'st
             }
         }
         let since = Instant::now();
+        publish_rssi(&controller);
         Timer::after(LINK_SETTLE).await;
         start_dhcp(stack);
+        let mut samples: u32 = 0;
         loop {
             // The disconnect wait subscribes to the driver's events anew
             // each time, so an event that lands while the status line is
             // being written is missed; the next wait then sees the station
             // already disconnected and returns the error at once.
-            match select(controller.wait_for_disconnect_async(), Timer::after(STATUS_PERIOD)).await {
+            match select(controller.wait_for_disconnect_async(), Timer::after(RSSI_PERIOD)).await {
                 Either::First(Ok(info)) => {
                     warn!(
                         "wifi: disconnected from {} after {} s: {:?}, rssi {}",
@@ -384,9 +408,16 @@ pub async fn wifi_task(mut controller: WifiController<'static>, stack: Stack<'st
                     warn!("wifi: disconnect wait failed after {} s: {e:?}", since.elapsed().as_secs());
                     break;
                 }
-                Either::Second(()) => log_status(&controller, since),
+                Either::Second(()) => {
+                    publish_rssi(&controller);
+                    samples += 1;
+                    if samples.is_multiple_of(STATUS_EVERY) {
+                        log_status(&controller, since);
+                    }
+                }
             }
         }
+        RSSI.store(NO_RSSI, Ordering::Relaxed);
         stop_dhcp(stack);
         Timer::after(RECONNECT_DELAY).await;
     }
