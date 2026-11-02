@@ -4357,8 +4357,9 @@ same reason and is left alone until someone says so.
 For the comparison the old mix stays in the palette as a ninth
 colour, `lime` `(0, 7, 7)`, placed right after yellow so one press
 of the top button flips between the two; the page's select and `/api`
-take `color=lime`. It is a bench colour to be removed once yellow is
-settled. The insertion shifts the stored index of green and the
+take `color=lime`. It went in as a bench colour to be removed once
+yellow was settled; the user kept it as a ninth colour ("I like it as
+an extra color", 2026-11-01), so it stays. The insertion shifts the stored index of green and the
 colours after it by one: a clock saved on green comes up lime after
 the update, and an image from before this one reading a record that
 says white (index 8) lands on its last entry, white, by the clamp in
@@ -4377,7 +4378,7 @@ trimmed yellow's green by the brightness step, `[2, 3, 4, 4, 4]` for
 `(0, 2, 7)` at every brightness, the `YELLOW_GREEN` ramp and the
 brightness-dependent `Settings::color` are gone again, and the
 palette test locks in the 2. One press of the top button from yellow
-is still lime for the comparison.
+is lime, kept as a colour of its own.
 
 #### Wi-Fi status line on the page (after yellow) — DONE, verified on the bench 2026-11-01
 

@@ -674,8 +674,8 @@ mod tests {
         // the table mapped 255 to 7, 96 to 1 and 0 to 0. Yellow left that
         // on 2026-11-01: full green with full red looked pale green on the
         // panel and half green still had a tint, so its green is held at
-        // level 2, and the old mix sits next to it as "lime" for the
-        // comparison.
+        // level 2, and the old mix sits next to it as "lime", kept as a
+        // colour of its own.
         let old_rgb = [(255, 0, 0), (255, 96, 0), (255, 255, 0), (255, 255, 0), (0, 255, 0), (0, 255, 255), (0, 0, 255), (255, 0, 255), (255, 255, 255)];
         let g = |v: u8| match v {
             255 => MAX_LEVEL,
@@ -688,7 +688,7 @@ mod tests {
         }
         assert_eq!(PALETTE.len(), PALETTE_NAMES.len());
         // Yellow keeps the green well below the red, and above orange's touch;
-        // lime is the next entry, so one press of the top button compares them.
+        // lime is the next entry, so one press of the top button shows both.
         let yellow = PALETTE[2];
         assert!(yellow.green > PALETTE[1].green && yellow.green < yellow.red && yellow.blue == 0);
         assert_eq!(PALETTE_NAMES[3], "lime");
