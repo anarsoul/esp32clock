@@ -1319,7 +1319,12 @@ Bugs, in rough order of value:
   no page until power is cut. With a one-hour lease that is about one
   uplink death in twelve. Fix: bound the wait (`with_timeout(PROBE_PERIOD,
   wait_config_up())`) and, once armed, count a period with the link up
-  and no address as a failed probe.
+  and no address as a failed probe. Left as is, 2026-11-02: a corner case
+  that needs a link to die in the last minutes of its lease, while a
+  marginal link trips the probe budget well before that. The fix, if
+  it is ever wanted, is the bounded wait above with the no-address
+  period scored like a lost ping, and the streak logic moved into
+  `core` under test.
 - ~~**The sweep's trailing dash is dark and blinks the armed mark.**~~
   Done after M10 (colour in levels, dead state and nits), 2026-10-29.
   `display::dimmed` scales components by 64/256, so none exceeds 63,
