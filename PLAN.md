@@ -4337,3 +4337,44 @@ legends and the fields in the given order, Play after the melody
 select; a form post of the current values is a `303` to `/` and the
 record reads back unchanged; `POST /play` with `melody=beeps` alone
 is a `303`. The buttons in a browser are for the user to try.
+
+#### Yellow was pale green (after the settings groups) — DONE, verified on the panel 2026-11-01
+
+The user: yellow on the panel "doesn't look yellow, more like very
+light green". The palette had yellow as red and green at equal full
+duty, `(0, 7, 7)`, which is what the old gamma made of RGB (255, 255,
+0); on this panel's LEDs the green die puts out far more light per
+unit of current than the red, so equal duty is a greenish yellow.
+`settings::PALETTE` now has yellow at `(0, 4, 7)`: green at a little
+over half duty, red full. Nothing else moves; orange stays `(0, 1,
+7)`, so the three warm colours are red, a touch of green, and about
+half green. The palette test
+(`palette_is_the_old_gamma_of_the_old_rgb_but_for_yellow`) locks the
+other seven to the old gamma and yellow to this, with green between
+orange's and red's. White `(7, 7, 7)` is presumably greenish for the
+same reason and is left alone until someone says so.
+
+For the comparison the old mix stays in the palette as a ninth
+colour, `lime` `(0, 7, 7)`, placed right after yellow so one press
+of the top button flips between the two; the page's select and `/api`
+take `color=lime`. It is a bench colour to be removed once yellow is
+settled. The insertion shifts the stored index of green and the
+colours after it by one: a clock saved on green comes up lime after
+the update, and an image from before this one reading a record that
+says white (index 8) lands on its last entry, white, by the clamp in
+`from_record`. The settings page grows by one `<option>`, 3663 bytes.
+
+**Panel, 2026-11-01, first look.** Better: yellow is yellow at 50 %,
+the top step offered, but still has a green tint at 10 %. Lime is
+lime and stays. The green die keeps its efficiency at a low drive
+current while the red one loses it, so no one mix holds across the
+brightness steps. The first try was a ramp: `Settings::color`
+trimmed yellow's green by the brightness step, `[2, 3, 4, 4, 4]` for
+10, 25, 50, 75 and 100 %, with the palette entry the 50 % mix.
+
+**Panel, 2026-11-01, second look.** Good at 10 %, green-ish at 25 and
+50 %; the user asked for level 2 flat. Done: the palette's yellow is
+`(0, 2, 7)` at every brightness, the `YELLOW_GREEN` ramp and the
+brightness-dependent `Settings::color` are gone again, and the
+palette test locks in the 2. One press of the top button from yellow
+is still lime for the comparison.

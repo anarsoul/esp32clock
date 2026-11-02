@@ -24,11 +24,16 @@ use crate::panel::{Levels, MAX_LEVEL};
 const F: u8 = MAX_LEVEL;
 
 /// Colours the top button cycles through, as duty levels in the panel's
-/// blue-green-red order. Orange has a touch of green.
-pub const PALETTE: [Levels; 8] = [
+/// blue-green-red order. Orange has a touch of green. Yellow runs the
+/// green at two sevenths: the green die puts out far more light than
+/// the red one, and at equal duty the panel showed a pale green, not
+/// yellow, and at half green still a tint (2026-11-01). Lime is the
+/// equal-duty mix, kept next to yellow so one press compares the two.
+pub const PALETTE: [Levels; 9] = [
     Levels::new(0, 0, F), // red
     Levels::new(0, 1, F), // orange
-    Levels::new(0, F, F), // yellow
+    Levels::new(0, 2, F), // yellow
+    Levels::new(0, F, F), // lime
     Levels::new(0, F, 0), // green
     Levels::new(F, F, 0), // cyan
     Levels::new(F, 0, 0), // blue
@@ -37,7 +42,7 @@ pub const PALETTE: [Levels; 8] = [
 ];
 
 /// Names of the palette entries, for the page and the API.
-pub const PALETTE_NAMES: [&str; 8] = ["red", "orange", "yellow", "green", "cyan", "blue", "magenta", "white"];
+pub const PALETTE_NAMES: [&str; 9] = ["red", "orange", "yellow", "lime", "green", "cyan", "blue", "magenta", "white"];
 
 /// Every brightness the firmware knows, as a percent for the page and
 /// the current step (0 is 2.5 mA, 15 is 40.4 mA per lit sink) it means,
@@ -664,19 +669,30 @@ mod tests {
     }
 
     #[test]
-    fn palette_is_the_old_gamma_of_the_old_rgb() {
+    fn palette_is_the_old_gamma_of_the_old_rgb_but_for_yellow() {
         // The palette was 8-bit RGB through a gamma table until 2026-10-29;
-        // the table mapped 255 to 7, 96 to 1 and 0 to 0.
-        let old_rgb = [(255, 0, 0), (255, 96, 0), (255, 255, 0), (0, 255, 0), (0, 255, 255), (0, 0, 255), (255, 0, 255), (255, 255, 255)];
+        // the table mapped 255 to 7, 96 to 1 and 0 to 0. Yellow left that
+        // on 2026-11-01: full green with full red looked pale green on the
+        // panel and half green still had a tint, so its green is held at
+        // level 2, and the old mix sits next to it as "lime" for the
+        // comparison.
+        let old_rgb = [(255, 0, 0), (255, 96, 0), (255, 255, 0), (255, 255, 0), (0, 255, 0), (0, 255, 255), (0, 0, 255), (255, 0, 255), (255, 255, 255)];
         let g = |v: u8| match v {
             255 => MAX_LEVEL,
             96 => 1,
             _ => 0,
         };
         for (i, (r, gr, b)) in old_rgb.iter().enumerate() {
-            assert_eq!(PALETTE[i], Levels::new(g(*b), g(*gr), g(*r)), "{}", PALETTE_NAMES[i]);
+            let want = if PALETTE_NAMES[i] == "yellow" { Levels::new(0, 2, MAX_LEVEL) } else { Levels::new(g(*b), g(*gr), g(*r)) };
+            assert_eq!(PALETTE[i], want, "{}", PALETTE_NAMES[i]);
         }
         assert_eq!(PALETTE.len(), PALETTE_NAMES.len());
+        // Yellow keeps the green well below the red, and above orange's touch;
+        // lime is the next entry, so one press of the top button compares them.
+        let yellow = PALETTE[2];
+        assert!(yellow.green > PALETTE[1].green && yellow.green < yellow.red && yellow.blue == 0);
+        assert_eq!(PALETTE_NAMES[3], "lime");
+        assert_eq!(PALETTE[3], Levels::new(0, MAX_LEVEL, MAX_LEVEL));
     }
 
     #[test]
