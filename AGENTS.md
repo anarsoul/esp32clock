@@ -109,7 +109,7 @@ for calibration. `skip_next` (page checkbox, key `skip`) is
 the one setting the record does not store: it skips one alarm and is cleared
 by it or by a power cut; a software reset (self-heal, panic) carries it over
 in RTC RAM, see `src/carry.rs`. `POST /play` previews the melody chosen in the form
-without saving. `rust-version` must stay at 1.95 or higher or cargo's
+without saving; the page posts it by script so the form is not reloaded. `rust-version` must stay at 1.95 or higher or cargo's
 MSRV-aware resolver picks an esp-rom-sys that esp-storage cannot build with.
 
 ## Controls
@@ -373,7 +373,7 @@ module ends with its `#[cfg(test)] mod tests`.
   overflow is a 500, not a truncation. The headers are 88 bytes;
   `core::http::PAGE_MAX` (3968) is what a page may take, and the
   `form` tests build each page at its worst case and assert it
-  (2026-11-01: settings 3121, update 2989, setup with twelve
+  (2026-11-01: settings 3629 in its three fieldsets with the Play script, update 2989, setup with twelve
   32-character networks 3039). `cargo host-test` after adding a field
   or label; the test prints the sizes with `-- --nocapture`. The setup
   page's network list stops at `form::NETWORK_LIST_BUDGET` (1900)

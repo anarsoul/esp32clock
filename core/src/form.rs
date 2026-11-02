@@ -563,15 +563,40 @@ pub fn write_page(
     error: Option<FormError>,
 ) -> core::fmt::Result {
     out.write_str(HEAD)?;
-    out.write_str("<title>Clock</title></head><body><h1>Clock</h1>")?;
+    out.write_str(
+        "<style>fieldset{border:1px solid #ccc;border-radius:.3em;margin:1em 0;padding:0 1em}#p{margin:0 0 1em}</style>\
+<title>Clock</title></head><body><h1>Clock</h1>",
+    )?;
     match error {
         None => {}
         Some(FormError::BadValue) => out.write_str("<p class=err>Nothing was saved: a field had a bad value.</p>")?,
         Some(FormError::UnknownKey) => out.write_str("<p class=err>Nothing was saved: an unknown field was sent.</p>")?,
         Some(FormError::Forbidden) => out.write_str("<p class=err>Nothing was saved: the network is set with the token.</p>")?,
     }
-    out.write_str("<form method=post action=/>")?;
-    out.write_str("<label>Colour <select name=color>")?;
+    write!(
+        out,
+        "<form method=post action=/><fieldset><legend>Alarm</legend>\
+<label><input type=checkbox name=armed{}> Alarm armed</label>\
+<label>Alarm time <input type=time name=alarm value={:02}:{:02}></label>\
+<label>Alarm days <select name=days>{}</select></label>\
+<label><input type=checkbox name=skip{}> Skip the next alarm</label>\
+<label>Alarm sound <select name=melody id=m>",
+        if s.alarm_armed { " checked" } else { "" },
+        s.alarm_hour,
+        s.alarm_minute,
+        DayOptions(s.alarm_days),
+        if s.skip_next { " checked" } else { "" },
+    )?;
+    for (i, m) in melody::MELODIES.iter().enumerate() {
+        write!(out, "<option value={}{}>{}</option>", m.name, if i == s.melody { " selected" } else { "" }, m.label)?;
+    }
+    write!(
+        out,
+        "<option value={}{}>Random tune</option></select></label><button formaction=/play id=p>Play</button></fieldset>\
+<fieldset><legend>Display</legend><label>Colour <select name=color>",
+        melody::RANDOM_NAME,
+        if s.melody == melody::RANDOM { " selected" } else { "" }
+    )?;
     for (i, name) in PALETTE_NAMES.iter().enumerate() {
         write!(out, "<option value={name}{}>{name}</option>", if i == s.color { " selected" } else { "" })?;
     }
@@ -579,37 +604,21 @@ pub fn write_page(
     for (i, pct) in BRIGHTNESS_STEPS.iter().enumerate() {
         write!(out, "<option value={pct}{}>{pct} %</option>", if i == s.brightness { " selected" } else { "" })?;
     }
-    out.write_str("</select></label><label>Alarm sound <select name=melody>")?;
-    for (i, m) in melody::MELODIES.iter().enumerate() {
-        write!(out, "<option value={}{}>{}</option>", m.name, if i == s.melody { " selected" } else { "" }, m.label)?;
-    }
-    write!(
-        out,
-        "<option value={}{}>Random tune</option>",
-        melody::RANDOM_NAME,
-        if s.melody == melody::RANDOM { " selected" } else { "" }
-    )?;
     writeln!(
         out,
-        "</select></label><label>Alarm <input type=time name=alarm value={:02}:{:02}></label>\
-<label><input type=checkbox name=armed{}> Alarm armed</label>\
-<label>Alarm days <select name=days>{}</select></label>\
-<label><input type=checkbox name=skip{}> Skip the next alarm</label>\
-<label><input type=checkbox name=twelve_hour{}> 12 hour clock</label>\
+        "</select></label><label>Temperature on the panel <select name=temp_show>{}</select></label>\
+<label><input type=checkbox name=twelve_hour{}> 12 hour clock</label></fieldset>\
+<fieldset><legend>Other</legend>\
 <label>Timezone, minutes east of UTC <input type=number name=tz min=-{lim} max={lim} step=15 value={}></label>\
 <label>Thermometer offset, °C <input type=number name=temp_offset min=-{tlim} max={tlim} step=0.1 value={}></label>\
-<label>Temperature on the panel <select name=temp_show>{}</select></label>\
-<label>Hostname, for the DHCP server <input type=text name=hostname maxlength={hmax} pattern=\"[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?\" value=\"{}\"></label>\
-<button>Save</button> <button formaction=/play>Play</button></form>",
-        s.alarm_hour,
-        s.alarm_minute,
-        if s.alarm_armed { " checked" } else { "" },
-        DayOptions(s.alarm_days),
-        if s.skip_next { " checked" } else { "" },
+<label>Hostname, for the DHCP server <input type=text name=hostname maxlength={hmax} pattern=\"[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?\" value=\"{}\"></label></fieldset>\
+<button>Save</button></form>\
+<script>var m=document.getElementById('m');document.getElementById('p').onclick=function(e){{e.preventDefault();\
+fetch('/play',{{method:'POST',redirect:'manual',headers:{{'Content-Type':'application/x-www-form-urlencoded'}},body:'melody='+m.value}})}}</script>",
+        TempShowOptions(s.temp_show),
         if s.twelve_hour { " checked" } else { "" },
         s.tz_offset_minutes,
         Tenths(s.temp_offset_dc),
-        TempShowOptions(s.temp_show),
         s.hostname.as_str(),
         lim = TZ_LIMIT_MINUTES,
         tlim = Tenths(TEMP_OFFSET_LIMIT_DC),

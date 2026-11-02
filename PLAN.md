@@ -4301,3 +4301,39 @@ in 32 to 43 ms; `scripts/ota.sh` put the 714 KB image through the
 is the bound), and the clock rebooted into `ota_1` with the record
 and the carry intact. The evening's failed-probe count is still
 owed.
+
+#### Settings page in three groups (after the short frames) — DONE, verified in a browser 2026-11-01
+
+The settings form was one run of twelve labels. It is now three
+`<fieldset>`s with a legend each, in the order the user gave (and
+reordered once at his request after the first look): Alarm (armed,
+time, days, skip the next, sound, Play), Display (colour, brightness,
+temperature on the panel, 12 hour clock) and Other (timezone,
+thermometer offset, hostname). Save stays below the last group. Play
+sits under the melody select and no longer reloads
+the page: a four-line script posts `melody=<picked>` to `/play` by
+`fetch` (no redirect followed), so the browser keeps every unsaved
+field, the picked tune first of all; without script the button still
+has `formaction=/play` and works the old way, with the reload. The
+handler is unchanged: it applies the body to a scratch copy, and a
+body with the melody alone is a valid form. The fieldset rule (a thin border, rounded,
+the labels' own margins inside) is a second `<style>` written by
+`write_page` alone and not in the shared `HEAD`, because the setup
+page's worst case had 62 bytes to spare under `PAGE_MAX` and the rule
+is 77: in `HEAD` it put `provision_page_budget_is_covered` over by 15
+bytes. The settings page is 3629 bytes (was 3121), the other two
+unchanged. The field names and `/api` are untouched, so a script sees
+no difference.
+
+**Verify on the bench.** The page shows the three groups with the
+fields in that order; a save from it still takes every field; the
+Play button plays the picked tune and leaves the form as it was. The
+reorder was flashed and fetched the same way: 3387 bytes, the
+legends and fields in the new order, `POST /play` still a `303`.
+
+**Bench, 2026-11-01.** test-clock (10.1.1.30, the old bench board)
+flashed over USB: the page comes back at 3382 bytes with the three
+legends and the fields in the given order, Play after the melody
+select; a form post of the current values is a `303` to `/` and the
+record reads back unchanged; `POST /play` with `melody=beeps` alone
+is a `303`. The buttons in a browser are for the user to try.
