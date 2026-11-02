@@ -4418,3 +4418,82 @@ connected" only if fetched before the connect, then the figure.
 session, test-clock (10.1.1.30, on `esptest`) answers `/api` with
 `"rssi":-41` after `"light"` and the page with `Wi-Fi <b>esptest</b>,
 -41 dBm.` under the firmware line, 172 s after the flash.
+
+#### Unsaved-changes mark on the settings page (after the Wi-Fi line) — DONE, verified on the bench 2026-11-02 with headless Chromium against the clock
+
+The user asked for an indication on the settings page when the form
+has been edited but not saved. The page is a plain form posted whole
+by the Save button, so "modified but not saved" is a browser-side
+state: nothing on the clock knows about an edit until the post. A
+script on the page does it, the same way the Play button already
+posts by script.
+
+Design: `<b id=u hidden>Changes not saved yet.</b>` after the Save
+button, and the page's one script (the Play handler merged into it)
+sets `f.oninput` on the form to compare every named control with the
+defaults the page was served with: a checkbox against
+`defaultChecked`, a select against its option's `defaultSelected`, a
+field against `defaultValue`. The mark shows while any differs and
+hides again when the user puts the field back, so it tracks
+"modified", not "touched". `input` bubbles from every control,
+selects and checkboxes included, and the Play button changes no
+control, so it does not trip the mark. A save reloads the page from
+the record, with fresh defaults, so the mark is gone after a save or
+a refused one (the form then shows what is stored, under the error
+notice). Every `<select>` writes `selected` on its stored option,
+which the comparison relies on; the `DayOptions`, `TempShowOptions`
+and the three inline loops all do. A change made on the buttons while
+the page is open is not seen by it (the page is stale either way) and
+not in scope. No warning on leaving the page: that would have to be
+undone for the Save button's own navigation, and the user asked for a
+mark, not a gate.
+
+Size: the settings page was 69 bytes under `PAGE_MAX` at its worst
+and the mark with its script is 308, so `RESPONSE_BUF` had to grow.
+The user chose 6 KB (`6 * 1024`, `PAGE_MAX` 6016) over the minimum,
+for the next feature's sake. The buffer is in each of the three
+listener tasks' futures, so static RAM grows 6 KB and the main stack
+shrinks by the same: `.stack` went from 90664 to 84520 bytes (`llvm-readelf -S`), about 82.5 KB. The settings
+page is 4207 at its worst, 1809 to spare; the setup page's list
+budget `NETWORK_LIST_BUDGET` stays at 1900 (the list is capped for
+the page's sake, not the buffer's, and twelve networks is plenty), so
+its spare grows to 2110. The `form` size tests measure the new worst
+case, and a new test checks the mark and the comparison are on the
+page. `AGENTS.md` carries the new sizes.
+
+**Verify in a browser.** Open `http://<ip>/`: no mark. Change the
+colour: "Changes not saved yet." appears after the Save button. Put
+the colour back: it goes. Tick "Skip the next alarm", press Play: the
+mark stays and the tune plays. Save: the page comes back without the
+mark and with the box ticked.
+
+**Bench, 2026-11-02.** test-clock (10.1.1.30) took the build by
+`scripts/ota.sh` (715168 bytes, 13.9 s, back on `ota_0` within a
+second of the reboot). The page is 3776 bytes as served, with the
+mark and the one script. The browser side was driven from the
+session: headless Chromium (`chromium --headless=new
+--remote-debugging-port`) with a Node script over the DevTools
+protocol, the checkbox and the buttons by mouse events at the
+elements' positions, the colour select by setting its value and
+dispatching the `input` event a pick fires, the mark read back from
+`u.hidden` and every request the page made logged. Served: hidden.
+Colour changed: shown, "Changes not saved yet."; put back: hidden.
+Skip ticked by a click: shown. Play clicked: `POST /play
+melody=beeps` and the mark stays with the box ticked; Chrome aborts
+the 303's `GET /` itself (`net::ERR_ABORTED`, `redirect: 'manual'`
+doing its job), so the clock serves no second page for a preview.
+Save clicked: the post carries `skip=on`, the page comes back with
+the mark hidden and the box ticked, `/api` says `"skip":true`. The
+box unticked: shown; saved: hidden, `"skip":false`. The settings
+were left as found.
+
+Two things from the run. The default headless window is 493 px high
+and the Save button sits at 899, so the first run's clicks on it
+landed nowhere; the script now refuses a target outside the viewport
+and the window is set to 1400 (`Emulation.setDeviceMetricsOverride`).
+And between the OTA and the end of that first run the stored melody
+went from beeps to ode: the browser's requests, logged on a replay of
+the same clicks, hold nothing that sets a melody, the replay does not
+reproduce it, and the firmware writes the melody only from `POST /`
+and `POST /api`; most likely a save from another browser at the
+bench. It was put back with `POST /api melody=beeps`.

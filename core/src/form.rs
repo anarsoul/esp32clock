@@ -630,9 +630,12 @@ pub fn write_page(
 <label>Timezone, minutes east of UTC <input type=number name=tz min=-{lim} max={lim} step=15 value={}></label>\
 <label>Thermometer offset, °C <input type=number name=temp_offset min=-{tlim} max={tlim} step=0.1 value={}></label>\
 <label>Hostname, for the DHCP server <input type=text name=hostname maxlength={hmax} pattern=\"[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?\" value=\"{}\"></label></fieldset>\
-<button>Save</button></form>\
-<script>var m=document.getElementById('m');document.getElementById('p').onclick=function(e){{e.preventDefault();\
-fetch('/play',{{method:'POST',redirect:'manual',headers:{{'Content-Type':'application/x-www-form-urlencoded'}},body:'melody='+m.value}})}}</script>",
+<button>Save</button> <b id=u hidden>Changes not saved yet.</b></form>\
+<script>var m=document.getElementById('m'),f=document.forms[0],u=document.getElementById('u');\
+document.getElementById('p').onclick=function(e){{e.preventDefault();\
+fetch('/play',{{method:'POST',redirect:'manual',headers:{{'Content-Type':'application/x-www-form-urlencoded'}},body:'melody='+m.value}})}};\
+f.oninput=function(){{var d=false;for(var e of f.elements)if(e.name&&(e.type=='checkbox'?e.checked!=e.defaultChecked:\
+e.options?!e.options[e.selectedIndex].defaultSelected:e.value!=e.defaultValue))d=true;u.hidden=!d}}</script>",
         TempShowOptions(s.temp_show),
         if s.twelve_hour { " checked" } else { "" },
         s.tz_offset_minutes,
@@ -1091,6 +1094,22 @@ mod tests {
         assert!(out.len() <= PAGE_MAX, "{} bytes", out.len());
         assert!(out.ends_with("</html>"));
         assert!(out.contains(&format!("Wi-Fi <b>{}</b>, -100 dBm.", "&quot;".repeat(SSID_MAX))), "{out}");
+    }
+
+    #[test]
+    fn page_marks_unsaved_changes() {
+        // The mark is hidden as served and the one script compares every
+        // named control with the defaults the page came with.
+        let mut out = String::new();
+        write_page(&mut out, &Settings::DEFAULT, &status(true), None).unwrap();
+        assert!(out.contains("<button>Save</button> <b id=u hidden>Changes not saved yet.</b></form>"), "{out}");
+        assert_eq!(out.matches("<script>").count(), 1);
+        assert!(out.contains("f.oninput=function(){"), "{out}");
+        for check in ["e.checked!=e.defaultChecked", "e.options[e.selectedIndex].defaultSelected", "e.value!=e.defaultValue", "u.hidden=!d"] {
+            assert!(out.contains(check), "{check}");
+        }
+        // Every select marks its stored option, which the comparison needs.
+        assert_eq!(out.matches("<select").count(), out.matches(" selected").count());
     }
 
     #[test]

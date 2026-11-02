@@ -260,7 +260,7 @@ module ends with its `#[cfg(test)] mod tests`.
 | `src/storage.rs` | the one flash handle (`with_flash`), nvs partition lookup, `sequential-storage` map over it, debounced persist task that compares records, not structs, and resets into station mode after a save that changed the credentials, or after any save on the access point with a network stored |
 | `src/heal.rs` | deliberate resets: `reboot` blanks the panel through `scan::stop`, carries the time and resets, for `/reload` and the OTA reboot; `reset`, the self-heal, waits out a ringing alarm and counts itself first; `switch_mode`, the reset between station and access point, which starts the carry record over and freezes it |
 | `core/src/auth.rs` | the API token (a setting; constant-time compare) and the panel PIN with its TTL and lockout; `token`, `token_or_pin`, `issue_pin`, `pin_to_show`; `Refusal` with its HTTP status; pure rules with the clock and the random number passed in |
-| `core/src/form.rs` | key=value parsing, all-or-nothing `apply` on a copy, JSON, the HTML page with its error notice and the read-only `Status` lines, the update page with its upload and token scripts, `JsonStr`/`HtmlStr` escaping for the SSID, `parse_token`; pure logic |
+| `core/src/form.rs` | key=value parsing, all-or-nothing `apply` on a copy, JSON, the HTML page with its error notice, its unsaved-changes mark (a script compares the form with the defaults it was served with) and the read-only `Status` lines, the update page with its upload and token scripts, `JsonStr`/`HtmlStr` escaping for the SSID, `parse_token`; pure logic |
 | `core/src/http.rs` | `Method`, `Head`, `parse_head`; `RESPONSE_BUF` and `PAGE_MAX`, which the page tests assert against |
 | `src/http.rs` | HTTP/1.0 server, `LISTENERS` sockets each in its own task: `GET`/`POST` on `/` (the settings page, or the setup form on the access point) and `/api`, `POST /play`, `GET /update`, `POST /ota` with the body streamed to `ota::install`, `POST /reload` and `POST /ap` with the token, `POST /token` with the token or the PIN, `POST /pin`, `POST /scan` on the access point; a refused form redirects to `/?error=…`; per-listener state and counters for the heartbeat |
 | `core/src/buttons.rs` | `Button`, `Kind`, `Event` |
@@ -373,27 +373,29 @@ module ends with its `#[cfg(test)] mod tests`.
 
 ## Sizes that bite
 
-- `http::RESPONSE_BUF` (4096) holds the whole page plus headers, and
+- `http::RESPONSE_BUF` (6 KB, one per listener task; raised from 4096
+  on 2026-11-02) holds the whole page plus headers, and
   overflow is a 500, not a truncation. The headers are 88 bytes;
-  `core::http::PAGE_MAX` (3968) is what a page may take, and the
+  `core::http::PAGE_MAX` (6016) is what a page may take, and the
   `form` tests build each page at its worst case and assert it
-  (2026-11-01: settings 3899 in its three fieldsets with the Play
-  script, the Wi-Fi line and a stored SSID of 32 `"`; update 2989;
-  setup with twelve 32-character networks 3039). `cargo host-test` after adding a field
+  (2026-11-02: settings 4207 in its three fieldsets with the Play and
+  unsaved-changes script, the Wi-Fi line and a stored SSID of 32 `"`;
+  update 2989; setup with twelve 32-character networks 3039). `cargo host-test` after adding a field
   or label; the test prints the sizes with `-- --nocapture`. The setup
   page's network list stops at `form::NETWORK_LIST_BUDGET` (1900)
   bytes, strongest first, with a "N more not shown" line, because a
   listed SSID of 32 `"` is 417 bytes of `<option>` through `HtmlStr`
   (twice per network) and five of them would pass the buffer; the rest
   of the page at its worst is 2006, and `provision_page_budget_is_covered`
-  locks the sum under `PAGE_MAX`, with 62 bytes to spare.
+  locks the sum under `PAGE_MAX`; the budget was set when the page
+  had 3968 and stays, since twelve networks is plenty.
 - `http::RX_BUF` (4096) is the TCP receive window; 1 KB made an upload
   one segment per round trip. `REQUEST_BUF` (1536) still bounds the
   head; an upload's body stays on the socket.
 - An OTA image must fit a slot (`partitions.csv`, 0x1E0000 = 1920 KB);
   the release image is about 650 KB. Static RAM: `ota.rs` holds 11 KB
   of buffers, and what the statics leave of DRAM is the main stack,
-  about 96 KB now (`Settings` is 171 bytes of record and sits in several
+  about 82 KB now (`Settings` is 171 bytes of record and sits in several
   task futures); check `.stack` in `llvm-readelf -S` after adding one.
 - `form::apply` decodes each key into 16 bytes and each value into 64
   (`form::VALUE_MAX`, the password); longer input is reported as a bad
