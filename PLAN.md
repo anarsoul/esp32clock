@@ -4588,3 +4588,88 @@ single short press a second or more later still steps the colour.
 **Panel, 2026-11-02.** The user rang the alarm and slapped both
 buttons, with and without a lingering hand: the ring stopped and
 nothing else changed; a press a second later worked as before.
+
+#### Two pages for the two PIN actions (after the press quiet) — DONE, verified on the panel and in a browser 2026-11-02
+
+The update page did two things with one PIN field: a firmware upload
+and the API token form under it, with nothing saying which to do or
+that the one PIN serves either. The user asked for two pages, each
+issuing its own PIN, and for the token page to be reachable by its
+address only: the settings page keeps its `Update` link, and nothing
+links to `/token`, so a visitor who follows links can at most upload
+an image, and the token is a thing one changes on purpose, from the
+documentation.
+
+**`GET /update`** is the upload alone: the firmware line, a sentence
+saying what to do (choose the image, type the four digits the clock
+is showing, press Upload), the file input first, the PIN under it,
+the button and the progress bar. It issues a PIN as before.
+
+**`GET /token`** is new: the same heading, whether a token is set,
+the same PIN sentence, the new-token field (`type=password`), the PIN
+and a `Set token` button. It issues a PIN as before (the same
+`auth::issue_pin`, so opening either page replaces an unused PIN and
+the lockout notice is the same). It posts `POST /token` with the PIN
+in the header exactly as the old form did; the route is unchanged, and
+the script path with `Bearer` is unchanged. An empty token still
+clears, since that is how the script paths are closed, but the page
+asks the browser's `confirm()` first, because an empty field and a
+press is otherwise one slip away from closing `ota.sh`. The page
+links back to the settings; nothing links to it.
+
+**A spent PIN leaves the panel.** Found by the user on the first try:
+a wrong PIN answered `403: wrong PIN`, the next click `403: no PIN
+issued: open the page first`, and the panel kept showing the digits
+for the rest of the minute. The display learned of a PIN only from
+`issue_pin`; now `auth::SHOW_PIN` carries an `Option<u16>`, and
+`token_or_pin` signals `None` after any attempt that spent the PIN
+(right, wrong or expired; not the attempt with nothing pending, which
+has nothing on the panel to end). `ui::hide_pin` goes back to the
+clock from `ShowPin` only, without the press quiet window, since no
+press happened; `pin_leaves_the_panel_when_spent` covers both. A
+successful upload spends the PIN too, so the panel goes to the clock
+before the scan stops for the write. The Upload button, which came
+back after an error for a retry that could only fail (the PIN is
+spent), now stays disabled after any answer as the token page's does,
+and both pages' status lines end with "Reload this page for a new
+PIN." after an error.
+
+**Shared script.** The `$`, `say` and `pin` helpers both pages use
+are one constant, `form::PIN_JS`, so the two scripts are only their
+own request.
+
+**Texts.** The refusals in `auth` that named the update page name
+neither: "no PIN issued: open the page first", "PIN expired: reload
+the page", "no credentials: the PIN the clock shows or the token", and
+"no token set: build one in or set one on /token". The doc comments
+in `auth`, `config`, `ui` and `display` that said "the update page's
+PIN" say the page's PIN, either page.
+
+**Tests.** `update_page_fits_the_response_buffer` loses the token
+argument; `token_page_fits_the_response_buffer` is new; and
+`nothing_links_to_the_token_page` builds the settings, setup and update
+pages and asserts none contains `/token`, so the rule outlives this
+entry, and that the update page no longer links to itself from its
+firmware line. The pages at their worst: update 2476 (was 3027),
+token 2043, of `PAGE_MAX` 6016; both scripts were checked with `node
+--check` from the served page. `AGENTS.md` describes the token page
+under `POST /token` and carries the new sizes.
+
+**Verify in a browser.** Open `http://<ip>/update`: one sentence of
+instructions, a file input, a PIN field, Upload, no token form; the
+panel shows a PIN. Open `http://<ip>/token`: the token form, whether
+one is set, a new PIN on the panel; set a token with it, `/api` says
+`token_set: true`; reload, leave the field empty, press Set token: the
+browser asks, Cancel changes nothing and no request is made (the PIN
+is still good); OK clears it and `token_set` turns false. On either
+page, a wrong PIN: `403: wrong PIN` and the panel back on the clock at
+once, the button greyed and the line saying to reload for a new PIN;
+reload and the panel shows a new one. Search the
+settings page's source for `/token`: nothing.
+
+**Panel and browser, 2026-11-02.** The user found the first cut's gap
+on the update page (a wrong PIN left the digits on the panel, and the
+Upload button invited a retry that could only fail); with the spent
+PIN signalled to the display and both buttons staying disabled, the
+user verified the pages and the panel: the wrong PIN takes the digits
+off at once and the line says to reload for a new one.

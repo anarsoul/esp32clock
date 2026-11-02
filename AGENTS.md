@@ -55,7 +55,7 @@ image. `scripts/ota.sh` builds, makes the application image with
 writes the other slot, selects it and reboots. The token is
 `API_TOKEN` at build time and a setting after that (`src/auth.rs`): a
 build without one has no script path (a `Bearer` request is `403`)
-until one is set from `/update` with the PIN or by `POST /token`, and
+until one is set from `/token` with the PIN or by `POST /token`, and
 the boot line says `api token: stored`, `built in`, `cleared` or
 `none`. The Wi-Fi credentials are seeds the same way, and `WIFI_SSID`
 may be empty: whatever the record lacks is filled from the build at
@@ -127,7 +127,9 @@ MSRV-aware resolver picks an esp-rom-sys that esp-storage cannot build with.
 | both long | show the IP, one octet at a time, twice |
 | both held 10 s | reset into the access point; from the access point, back to the station if a network is stored |
 
-Opening `http://<ip>/update` shows a four-digit PIN for a minute.
+Opening `http://<ip>/update` shows a four-digit PIN for a minute, or
+until it is used, right or wrong; so does `http://<ip>/token`, the
+API-token page, which no page links to.
 
 Provisioning: a clock with no network in its record (and none built
 in), or one whose buttons were held 10 s, boots as an access point
@@ -205,8 +207,13 @@ alarm. It is the way to exercise the carry record from a script:
 
 `POST /token` with `token=<new>` (8 to 32 printable characters without
 spaces, empty to clear) and either `Bearer <current token>` or `PIN
-<digits>` sets the API token; the update page has a form for it next
-to the upload. The body is parsed before the PIN is spent, so a bad
+<digits>` sets the API token. `GET /token` is the page for it: the
+new token, the PIN it issues when opened just as `/update` does, and
+whether one is set; an empty token asks the browser to confirm before
+it clears. Nothing links to that page on purpose (the settings page
+links to `/update` and no further, and the `form` tests assert it),
+so the token is changed by someone who typed the address; it is
+documented here and nowhere on the clock. The body is parsed before the PIN is spent, so a bad
 token costs a `400` and not the PIN. `POST /pin` issues a PIN without
 the page, on the panel and in the serial log and never in the
 response, for a bench script (`scripts/pin.sh`). One PIN is one
@@ -219,7 +226,8 @@ clock draw four random digits, show them on the panel for a minute
 (any press ends it; ringing and alarm-set take precedence) and log them,
 so the uploader must be able to see the clock or the serial port. A PIN
 is good for five minutes and one attempt; a wrong one locks new PINs out
-for ten seconds. The page posts the chosen file the same way as the
+for ten seconds. The attempt, right or wrong, takes the digits off the
+panel (`auth::pin_to_show` yields `None`, `ui::hide_pin`). The page posts the chosen file the same way as the
 script (raw body plus header, no multipart) and polls `/api` until the
 clock is back. The credentials are checked before
 the body is read, and a refused upload reads and discards the rest of
@@ -262,9 +270,9 @@ module ends with its `#[cfg(test)] mod tests`.
 | `src/storage.rs` | the one flash handle (`with_flash`), nvs partition lookup, `sequential-storage` map over it, debounced persist task that compares records, not structs, and resets into station mode after a save that changed the credentials, or after any save on the access point with a network stored |
 | `src/heal.rs` | deliberate resets: `reboot` blanks the panel through `scan::stop`, carries the time and resets, for `/reload` and the OTA reboot; `reset`, the self-heal, waits out a ringing alarm and counts itself first; `switch_mode`, the reset between station and access point, which starts the carry record over and freezes it |
 | `core/src/auth.rs` | the API token (a setting; constant-time compare) and the panel PIN with its TTL and lockout; `token`, `token_or_pin`, `issue_pin`, `pin_to_show`; `Refusal` with its HTTP status; pure rules with the clock and the random number passed in |
-| `core/src/form.rs` | key=value parsing, all-or-nothing `apply` on a copy, JSON, the HTML page with its error notice, its unsaved-changes mark (a script compares the form with the defaults it was served with) and the read-only `Status` lines, the update page with its upload and token scripts, `JsonStr`/`HtmlStr` escaping for the SSID, `parse_token`; pure logic |
+| `core/src/form.rs` | key=value parsing, all-or-nothing `apply` on a copy, JSON, the HTML page with its error notice, its unsaved-changes mark (a script compares the form with the defaults it was served with) and the read-only `Status` lines, the update and token pages, each its own script over the shared `PIN_JS` helpers and `PIN_FIELD`, `JsonStr`/`HtmlStr` escaping for the SSID, `parse_token`; pure logic |
 | `core/src/http.rs` | `Method`, `Head`, `parse_head`; `RESPONSE_BUF` and `PAGE_MAX`, which the page tests assert against |
-| `src/http.rs` | HTTP/1.0 server, `LISTENERS` sockets each in its own task: `GET`/`POST` on `/` (the settings page, or the setup form on the access point) and `/api`, `POST /play`, `GET /update`, `POST /ota` with the body streamed to `ota::install`, `POST /reload` and `POST /ap` with the token, `POST /token` with the token or the PIN, `POST /pin`, `POST /scan` on the access point, `GET /favicon.ico` (`src/favicon.ico` embedded, the one cacheable response); the settings and update pages are titled and headed `Clock: <hostname>`; a refused form redirects to `/?error=…`; per-listener state and counters for the heartbeat |
+| `src/http.rs` | HTTP/1.0 server, `LISTENERS` sockets each in its own task: `GET`/`POST` on `/` (the settings page, or the setup form on the access point) and `/api`, `POST /play`, `GET /update` and `GET /token` (each issues a PIN), `POST /ota` with the body streamed to `ota::install`, `POST /reload` and `POST /ap` with the token, `POST /token` with the token or the PIN, `POST /pin`, `POST /scan` on the access point, `GET /favicon.ico` (`src/favicon.ico` embedded, the one cacheable response); the settings, update and token pages are titled and headed `Clock: <hostname>`; a refused form redirects to `/?error=…`; per-listener state and counters for the heartbeat |
 | `core/src/buttons.rs` | `Button`, `Kind`, `Event` |
 | `src/buttons.rs` | debounced short/long press events, the two-button long press, and the 10 s two-button `Hold` |
 | `core/src/melody.rs` | alarm tunes as pitch and length data with tempo; `RANDOM` and the pure `pick` that turns it into a tune; pure |
@@ -382,7 +390,7 @@ module ends with its `#[cfg(test)] mod tests`.
   `form` tests build each page at its worst case and assert it
   (2026-11-02: settings 4259 in its three fieldsets with the Play and
   unsaved-changes script, the Wi-Fi line, a stored SSID of 32 `"` and
-  the hostname in the title and heading; update 3027; setup with twelve 32-character networks 3039). `cargo host-test` after adding a field
+  the hostname in the title and heading; update 2476 and token 2043 since the split of 2026-11-02; setup with twelve 32-character networks 3039). `cargo host-test` after adding a field
   or label; the test prints the sizes with `-- --nocapture`. The setup
   page's network list stops at `form::NETWORK_LIST_BUDGET` (1900)
   bytes, strongest first, with a "N more not shown" line, because a
@@ -431,8 +439,8 @@ module ends with its `#[cfg(test)] mod tests`.
 
 ## Verifying without a board
 
-`cargo host-test` runs the tests of `core/` on the host (76 on
-2026-11-01): the AiP33628 encoder against a behavioural model of the
+`cargo host-test` runs the tests of `core/` on the host (81 on
+2026-11-02): the AiP33628 encoder against a behavioural model of the
 chip (shift on CLK rise, latch on DIN rise while CLK high), the panel
 map, the palette and brightness tables, the hostname, password and
 token rules, the record round trip and every older version, the form

@@ -464,7 +464,7 @@ pub fn write_json(out: &mut impl core::fmt::Write, s: &Settings, st: &Status) ->
 /// self-heals. `ssid` is the stored network, the only one the station
 /// joins.
 fn write_status(out: &mut impl core::fmt::Write, ssid: &str, st: &Status) -> core::fmt::Result {
-    write_firmware_line(out, st)?;
+    write_firmware_line(out, st, true)?;
     write_wifi_line(out, ssid, st)?;
     write_room_line(out, st)?;
     write!(out, "<p><small>Up {}. Self-heal resets since power-up: {}", Span(st.uptime_secs as i64), st.heals)?;
@@ -498,8 +498,14 @@ fn write_room_line(out: &mut impl core::fmt::Write, st: &Status) -> core::fmt::R
     }
 }
 
-fn write_firmware_line(out: &mut impl core::fmt::Write, st: &Status) -> core::fmt::Result {
-    write!(out, "<p><small>Firmware {} in {}. <a href=/update>Update</a>.</small></p>", st.version, st.slot)
+/// The firmware and its slot; `link` adds the way to the update page,
+/// which that page itself leaves out.
+fn write_firmware_line(out: &mut impl core::fmt::Write, st: &Status, link: bool) -> core::fmt::Result {
+    write!(out, "<p><small>Firmware {} in {}.", st.version, st.slot)?;
+    if link {
+        out.write_str(" <a href=/update>Update</a>.")?;
+    }
+    out.write_str("</small></p>")
 }
 
 /// Shared `<head>`: the viewport and the styles of both pages.
@@ -508,56 +514,60 @@ const HEAD: &str = "<!doctype html><html><head><meta charset=utf-8><meta name=vi
 label{display:block;margin:.8em 0}select,input{font-size:1em;width:100%;box-sizing:border-box}input[type=checkbox]{width:auto}\
 button{font-size:1em;padding:.5em 1.5em;margin-top:1em}p.err{color:#b00}progress{width:100%}[hidden]{display:none}</style>";
 
-/// The firmware update page: a file input and the PIN the clock is
-/// showing, posted as the raw body of `/ota` by script with the PIN in
-/// the header, which is what the curl path sends with its token, so the
-/// server needs no multipart. `XMLHttpRequest` for the progress bar;
-/// after a `200` the page polls `/api` until the clock is back. A
-/// second form sets the API token the same way, `POST /token` with the
-/// PIN in the header; `token_set` says whether one is set now.
-/// `lockout_secs` is set when no PIN was issued because of a wrong
-/// attempt just before.
-pub fn write_update_page(
-    out: &mut impl core::fmt::Write,
-    hostname: &str,
-    st: &Status,
-    token_set: bool,
-    lockout_secs: Option<u64>,
-) -> core::fmt::Result {
-    out.write_str(HEAD)?;
-    write!(out, "<title>Clock: {hostname}</title></head><body><h1>Clock: {hostname}</h1>")?;
-    write_firmware_line(out, st)?;
+/// The sentence both PIN pages open with, or the lockout notice when
+/// no PIN was issued because of a wrong attempt just before.
+fn write_pin_notice(out: &mut impl core::fmt::Write, lockout_secs: Option<u64>) -> core::fmt::Result {
     match lockout_secs {
         Some(secs) => write!(
             out,
             "<p class=err>A wrong PIN was entered. Reload this page in {secs} s to get a new one.</p>"
-        )?,
-        None => out.write_str("<p>The clock is showing a four-digit PIN. Enter it below. One PIN is one action; reload for another.</p>")?,
+        ),
+        None => out.write_str("<p>The clock is showing a four-digit PIN. It is good for one try; reload this page for another.</p>"),
     }
-    out.write_str(
-        "<label>PIN on the clock<input type=text inputmode=numeric pattern=[0-9]* maxlength=4 autocomplete=off id=t></label>\
-<label>Image file (<code>scripts/ota.sh</code> makes it)<input type=file id=f></label>\
-<button id=b>Upload</button><progress id=p value=0 max=1 hidden></progress>\
-<p id=s>The panel goes dark for about ten seconds while the image is written. Do not unplug.</p>",
-    )?;
-    write!(
-        out,
-        "<h2>API token</h2><p><small>What the scripts send as <code>Bearer</code>; never shown. {}. Empty clears it.</small></p>\
-<label>New token, 8 to 32 characters<input type=password maxlength={} autocomplete=new-password id=k></label>\
-<button id=c>Set token</button>",
-        if token_set { "One is set" } else { "None is set" },
-        TOKEN_MAX
-    )?;
-    out.write_str(
-        "<p><a href=/>Back to the settings</a></p>\
-<script>\
-var $=function(i){return document.getElementById(i)},f=$('f'),t=$('t'),b=$('b'),p=$('p'),s=$('s'),k=$('k'),c=$('c');\
+}
+
+/// The PIN field of both pages: four digits, no autocomplete.
+const PIN_FIELD: &str = "<label>PIN on the clock<input type=text inputmode=numeric pattern=[0-9]* maxlength=4 autocomplete=off id=t></label>";
+
+/// The script both PIN pages start with: `$` by id, `say` into the
+/// status line `s` (an error in red) and `pin`, which checks the PIN
+/// field `t` holds four digits and says so if not.
+const PIN_JS: &str = "<p><a href=/>Back to the settings</a></p><script>\
+var $=function(i){return document.getElementById(i)},t=$('t'),s=$('s');\
 function say(m,e){s.textContent=m;s.className=e?'err':''}\
 function pin(){if(/^[0-9]{4}$/.test(t.value))return true;say('Enter the four digits the clock is showing.',1);return false}\
-c.onclick=function(){if(!pin())return;var y=new XMLHttpRequest();y.open('POST','/token');\
-y.setRequestHeader('Authorization','PIN '+t.value);y.setRequestHeader('Content-Type','application/x-www-form-urlencoded');\
-y.onload=function(){say(y.status+': '+y.responseText.trim(),y.status!=200)};y.onerror=function(){say('Request failed.',1)};\
-y.send('token='+encodeURIComponent(k.value))};\
+";
+
+/// The firmware update page: a file input and the PIN the clock is
+/// showing, posted as the raw body of `/ota` by script with the PIN in
+/// the header, which is what the curl path sends with its token, so the
+/// server needs no multipart. `XMLHttpRequest` for the progress bar;
+/// after a `200` the page polls `/api` until the clock is back. The
+/// button stays disabled after an answer either way: the PIN is spent,
+/// and the status line says to reload for another.
+/// `lockout_secs` is set when no PIN was issued because of a wrong
+/// attempt just before. The token has its own page, `write_token_page`,
+/// which this one does not mention.
+pub fn write_update_page(
+    out: &mut impl core::fmt::Write,
+    hostname: &str,
+    st: &Status,
+    lockout_secs: Option<u64>,
+) -> core::fmt::Result {
+    out.write_str(HEAD)?;
+    write!(out, "<title>Clock: {hostname}</title></head><body><h1>Clock: {hostname}</h1><h2>Firmware update</h2>")?;
+    write_firmware_line(out, st, false)?;
+    out.write_str("<p>Choose the image file, type the PIN the clock is showing and press Upload.</p>")?;
+    write_pin_notice(out, lockout_secs)?;
+    out.write_str("<label>Image file (<code>scripts/ota.sh</code> makes it)<input type=file id=f></label>")?;
+    out.write_str(PIN_FIELD)?;
+    out.write_str(
+        "<button id=b>Upload</button><progress id=p value=0 max=1 hidden></progress>\
+<p id=s>The panel goes dark for about ten seconds while the image is written. Do not unplug.</p>",
+    )?;
+    out.write_str(PIN_JS)?;
+    out.write_str(
+        "var f=$('f'),b=$('b'),p=$('p');\
 function poll(n){fetch('/api',{cache:'no-store'}).then(function(x){return x.json()})\
 .then(function(j){say('Back up: firmware '+j.version+' in '+j.slot+'.')})\
 .catch(function(){if(n>0)setTimeout(function(){poll(n-1)},2000);else say('The clock has not come back; check it.',1)})}\
@@ -565,10 +575,54 @@ b.onclick=function(){if(!f.files[0]){say('Choose an image file.',1);return}\
 if(!pin())return;\
 var x=new XMLHttpRequest();x.open('POST','/ota');x.setRequestHeader('Authorization','PIN '+t.value);\
 x.upload.onprogress=function(e){if(e.lengthComputable)p.value=e.loaded/e.total};\
-x.onload=function(){b.disabled=false;if(x.status==200){say(x.responseText.trim()+' Waiting for the clock to come back.');setTimeout(function(){poll(20)},5000)}\
-else say(x.status+': '+x.responseText.trim(),1)};\
-x.onerror=function(){b.disabled=false;say('Upload failed: connection lost.',1)};\
+x.onload=function(){if(x.status==200){say(x.responseText.trim()+' Waiting for the clock to come back.');setTimeout(function(){poll(20)},5000)}\
+else say(x.status+': '+x.responseText.trim()+' Reload this page for a new PIN.',1)};\
+x.onerror=function(){say('Upload failed: connection lost. Reload this page for a new PIN.',1)};\
 b.disabled=true;p.hidden=false;p.value=0;say('Uploading.');x.send(f.files[0])}\
+</script></body></html>",
+    )
+}
+
+/// The API token page, `GET /token`: a new token and the PIN the clock
+/// is showing, posted as `POST /token` with the PIN in the header, the
+/// same request a script makes with `Bearer`. `token_set` says whether
+/// one is set now; an empty token clears it, after the browser's
+/// `confirm()`, since clearing closes the script paths. The button
+/// stays disabled after an answer, since the PIN is spent, and the
+/// status line says to reload for another. Nothing links
+/// here on purpose: the settings page links to the update page and no
+/// further, so the token is changed by someone who typed the address.
+/// `lockout_secs` as for the update page.
+pub fn write_token_page(
+    out: &mut impl core::fmt::Write,
+    hostname: &str,
+    token_set: bool,
+    lockout_secs: Option<u64>,
+) -> core::fmt::Result {
+    out.write_str(HEAD)?;
+    write!(
+        out,
+        "<title>Clock: {hostname}</title></head><body><h1>Clock: {hostname}</h1><h2>API token</h2>\
+<p>What the scripts send as <code>Bearer</code>; never shown. {}.</p>\
+<p>Type the new token and the PIN the clock is showing, then press Set token. An empty token clears it and closes the script paths.</p>",
+        if token_set { "One is set" } else { "None is set" }
+    )?;
+    write_pin_notice(out, lockout_secs)?;
+    write!(
+        out,
+        "<label>New token, 8 to 32 characters without spaces<input type=password maxlength={TOKEN_MAX} autocomplete=new-password id=k></label>"
+    )?;
+    out.write_str(PIN_FIELD)?;
+    out.write_str("<button id=c>Set token</button><p id=s></p>")?;
+    out.write_str(PIN_JS)?;
+    out.write_str(
+        "var k=$('k'),c=$('c');\
+c.onclick=function(){if(!pin())return;\
+if(!k.value&&!confirm('Clear the token? The scripts will be refused until one is set again.'))return;\
+var y=new XMLHttpRequest();y.open('POST','/token');\
+y.setRequestHeader('Authorization','PIN '+t.value);y.setRequestHeader('Content-Type','application/x-www-form-urlencoded');\
+y.onload=function(){say(y.status+': '+y.responseText.trim()+' Reload this page for a new PIN.',y.status!=200)};y.onerror=function(){say('Request failed. Reload this page for a new PIN.',1)};\
+c.disabled=true;y.send('token='+encodeURIComponent(k.value))}\
 </script></body></html>",
     )
 }
@@ -760,7 +814,7 @@ pub fn write_provision_page(
         "<script>var n=document.getElementById('n'),o=document.getElementById('o'),i=document.getElementById('i');\
 function f(){o.hidden=i.disabled=n.value!=''}n.onchange=f;f()</script>",
     )?;
-    write_firmware_line(out, st)?;
+    write_firmware_line(out, st, true)?;
     out.write_str(
         "<p><small>Scriptable: <code>POST /api</code> with <code>ssid</code> and <code>password</code>.</small></p></body></html>",
     )
@@ -1133,10 +1187,42 @@ mod tests {
     #[test]
     fn update_page_fits_the_response_buffer() {
         let mut out = String::new();
-        write_update_page(&mut out, &"h".repeat(HOSTNAME_MAX), &status(true), true, Some(10)).unwrap();
+        write_update_page(&mut out, &"h".repeat(HOSTNAME_MAX), &status(true), Some(10)).unwrap();
         println!("update page: {} bytes of {PAGE_MAX}", out.len());
         assert!(out.len() <= PAGE_MAX, "{} bytes", out.len());
         assert!(out.ends_with("</html>"));
+    }
+
+    #[test]
+    fn token_page_fits_the_response_buffer() {
+        let mut out = String::new();
+        write_token_page(&mut out, &"h".repeat(HOSTNAME_MAX), true, Some(10)).unwrap();
+        println!("token page: {} bytes of {PAGE_MAX}", out.len());
+        assert!(out.len() <= PAGE_MAX, "{} bytes", out.len());
+        assert!(out.ends_with("</html>"));
+        assert!(out.contains("One is set"));
+        assert!(out.contains("'/token'"), "posts to the route");
+        out.clear();
+        write_token_page(&mut out, "clock", false, None).unwrap();
+        assert!(out.contains("None is set"));
+    }
+
+    /// The token page is reached by its address alone: the pages a
+    /// visitor can click through never name it.
+    #[test]
+    fn nothing_links_to_the_token_page() {
+        let mut out = String::new();
+        write_page(&mut out, &Settings::DEFAULT, &status(true), None).unwrap();
+        assert!(!out.contains("/token"), "settings page");
+        assert!(out.contains("<a href=/update>"), "the update link stays");
+        out.clear();
+        write_update_page(&mut out, "clock", &status(true), None).unwrap();
+        assert!(!out.contains("/token"), "update page");
+        assert!(!out.contains("/update"), "update page does not link to itself");
+        assert!(!out.contains("token"), "update page does not mention the token");
+        out.clear();
+        write_provision_page(&mut out, &Settings::DEFAULT, &status(false), &[], None).unwrap();
+        assert!(!out.contains("/token"), "setup page");
     }
 
     /// The setup page without a list and everything else at its worst:

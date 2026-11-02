@@ -27,7 +27,7 @@ pub const IP_STEP: Duration = Duration::from_millis(2000);
 /// Show the four octets this many times.
 const IP_ROUNDS: u64 = 2;
 
-/// The update page's PIN stays on the panel this long, unless a press
+/// The page PIN stays on the panel this long, unless a press
 /// ends it. The PIN itself is good for longer; see `auth::PIN_TTL_MS`.
 pub const PIN_SHOW: Duration = Duration::from_secs(60);
 
@@ -66,7 +66,7 @@ pub enum Mode {
     Ringing,
     /// Showing the IP address, octet by octet.
     ShowIp,
-    /// Showing the update page's PIN.
+    /// Showing the PIN of the update or token page.
     ShowPin,
 }
 
@@ -90,7 +90,7 @@ pub enum View {
     Ringing { time: LocalTime, flash: bool },
     /// Octet `index` (0 to 3) of the IP address.
     Ip { index: usize },
-    /// Four digits for the update page.
+    /// Four digits for the update or token page.
     Pin { pin: u16 },
     /// The temperature, in tenths of the unit shown, for a few seconds
     /// each minute.
@@ -185,12 +185,20 @@ impl Ui {
         }
     }
 
-    /// Show a PIN from the update page. Ringing and alarm-set keep the
+    /// Show a PIN for the update or token page. Ringing and alarm-set keep the
     /// panel; the PIN replaces the clock, the IP or an earlier PIN.
     pub fn show_pin(&mut self, pin: u16, now: Instant) {
         if matches!(self.mode, Mode::Clock | Mode::ShowIp | Mode::ShowPin) {
             self.pin = pin;
             self.enter(Mode::ShowPin, now);
+        }
+    }
+
+    /// The PIN was spent, right or wrong: back to the clock if it is
+    /// still on the panel. Not a press, so no quiet window.
+    pub fn hide_pin(&mut self, now: Instant) {
+        if self.mode == Mode::ShowPin {
+            self.enter(Mode::Clock, now);
         }
     }
 
@@ -382,6 +390,21 @@ mod tests {
         ui.handle(&mut s, press(Button::Top, Kind::Long), ms(2));
         ui.show_pin(7, ms(3));
         assert_eq!(ui.mode, Mode::SetHour, "alarm-set keeps the panel");
+    }
+
+    #[test]
+    fn pin_leaves_the_panel_when_spent() {
+        let mut ui = Ui::new();
+        let mut s = Settings::DEFAULT;
+        ui.show_pin(1234, ms(0));
+        ui.hide_pin(ms(1));
+        assert_eq!(ui.mode, Mode::Clock);
+        let color = s.color;
+        ui.handle(&mut s, press(Button::Top, Kind::Short), ms(2));
+        assert_ne!(s.color, color, "not a press: no quiet window after it");
+        ui.handle(&mut s, press(Button::Top, Kind::Long), ms(3));
+        ui.hide_pin(ms(4));
+        assert_eq!(ui.mode, Mode::SetHour, "only the PIN display is ended");
     }
 
     #[test]

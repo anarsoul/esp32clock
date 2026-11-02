@@ -8,7 +8,8 @@
 //! shown. A script sends it as `Authorization: Bearer <token>` for a
 //! firmware upload, `/reload`, the Wi-Fi credentials on `/api` and a
 //! new token on `/token`. The PIN is four digits the clock shows on its
-//! panel when the update page is opened (or `POST /pin` is sent), good
+//! panel when the update or the token page is opened (or `POST /pin` is
+//! sent), good
 //! for one attempt, so whoever uses it can see the clock; it stands in
 //! for the token on `/ota` and `/token`, the two things a clock with no
 //! token built in needs it for. The rules are pure, with the clock and
@@ -53,8 +54,8 @@ pub const PIN_TTL_MS: u64 = 5 * 60 * 1000;
 /// After a wrong PIN no new one is issued for this long.
 pub const PIN_LOCKOUT_MS: u64 = 10 * 1000;
 
-/// The PIN the update page must send: four digits the clock shows on
-/// its panel when the page is opened. One attempt uses it up, right or
+/// The PIN the update and token pages must send: four digits the clock
+/// shows on its panel when either page is opened. One attempt uses it up, right or
 /// wrong, and a wrong one starts the lockout.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PinState {
@@ -108,8 +109,10 @@ impl PinState {
 
 static PIN: CsMutex<RefCell<PinState>> = CsMutex::new(RefCell::new(PinState { pending: None, locked_until: None }));
 
-/// A PIN for the display task to show, raised by `issue_pin`.
-static SHOW_PIN: Signal<CriticalSectionRawMutex, u16> = Signal::new();
+/// A PIN for the display task to show, raised by `issue_pin`, or
+/// `None` once it is spent, right or wrong, so the panel goes back to
+/// the clock instead of showing digits that no longer open anything.
+static SHOW_PIN: Signal<CriticalSectionRawMutex, Option<u16>> = Signal::new();
 
 /// Issue a PIN from `random`: shown on the panel, logged (the serial
 /// port is physical access too, and a headless board has no panel), and
@@ -121,7 +124,7 @@ pub fn issue_pin(random: u32) -> Result<u16, u64> {
     match result {
         Ok(pin) => {
             info!("auth: PIN {pin:04} shown on the panel, good for {} min", PIN_TTL_MS / 60_000);
-            SHOW_PIN.signal(pin);
+            SHOW_PIN.signal(Some(pin));
             Ok(pin)
         }
         Err(left_ms) => {
@@ -131,8 +134,8 @@ pub fn issue_pin(random: u32) -> Result<u16, u64> {
     }
 }
 
-/// The next PIN to show on the panel.
-pub async fn pin_to_show() -> u16 {
+/// The next PIN to show on the panel, or `None` to stop showing one.
+pub async fn pin_to_show() -> Option<u16> {
     SHOW_PIN.wait().await
 }
 
@@ -148,10 +151,18 @@ pub const fn refuse(status: &'static str, text: &'static str) -> Refusal {
 }
 
 /// Check the `Authorization` header, if any: `Bearer <token>` for a
-/// script, `PIN <digits>` for the update page.
+/// script, `PIN <digits>` for the update and token pages.
 pub fn token_or_pin(header: Option<&str>) -> Result<(), Refusal> {
     let now_ms = Instant::now().as_millis();
-    with_pin(header, |digits| critical_section::with(|cs| PIN.borrow_ref_mut(cs).check(now_ms, digits)))
+    with_pin(header, |digits| {
+        let result = critical_section::with(|cs| PIN.borrow_ref_mut(cs).check(now_ms, digits));
+        // Any attempt but one with nothing pending spends the PIN; the
+        // panel has no reason to keep showing it.
+        if result != Err(PinError::None) {
+            SHOW_PIN.signal(None);
+        }
+        result
+    })
 }
 
 /// Check the header for the token alone; the PIN does not do. For
@@ -161,7 +172,7 @@ pub fn token(header: Option<&str>) -> Result<(), Refusal> {
         return Err(refuse("403 Forbidden", "no token: send Authorization: Bearer <API_TOKEN>"));
     };
     if !token_enabled() {
-        return Err(refuse("403 Forbidden", "no token set: build one in or set one from the update page"));
+        return Err(refuse("403 Forbidden", "no token set: build one in or set one on /token"));
     }
     if token_ok(token.trim().as_bytes()) { Ok(()) } else { Err(refuse("403 Forbidden", "bad token")) }
 }
@@ -170,7 +181,7 @@ pub fn token(header: Option<&str>) -> Result<(), Refusal> {
 /// on the host.
 pub fn with_pin(header: Option<&str>, check_pin: impl FnOnce(&str) -> Result<(), PinError>) -> Result<(), Refusal> {
     let Some(header) = header else {
-        return Err(refuse("403 Forbidden", "no credentials: a PIN from the update page or the token"));
+        return Err(refuse("403 Forbidden", "no credentials: the PIN the clock shows or the token"));
     };
     if header.starts_with("Bearer ") {
         return token(Some(header));
@@ -178,8 +189,8 @@ pub fn with_pin(header: Option<&str>, check_pin: impl FnOnce(&str) -> Result<(),
     if let Some(digits) = header.strip_prefix("PIN ") {
         return match check_pin(digits.trim()) {
             Ok(()) => Ok(()),
-            Err(PinError::None) => Err(refuse("403 Forbidden", "no PIN issued: open the update page first")),
-            Err(PinError::Expired) => Err(refuse("403 Forbidden", "PIN expired: reload the update page")),
+            Err(PinError::None) => Err(refuse("403 Forbidden", "no PIN issued: open the page first")),
+            Err(PinError::Expired) => Err(refuse("403 Forbidden", "PIN expired: reload the page")),
             Err(PinError::Wrong) => Err(refuse("403 Forbidden", "wrong PIN")),
         };
     }
@@ -240,8 +251,8 @@ mod tests {
         assert_eq!(with_pin(Some("PIN 1234"), pin_ok), Ok(()));
         assert_eq!(with_pin(Some("PIN  1234 "), pin_ok), Ok(()), "trimmed");
         assert_eq!(with_pin(Some("PIN 0000"), pin_ok).map_err(|r| r.text), Err("wrong PIN"));
-        assert_eq!(with_pin(Some("PIN 0000"), |_| Err(PinError::Expired)).map_err(|r| r.text), Err("PIN expired: reload the update page"));
-        assert_eq!(with_pin(Some("PIN 0000"), |_| Err(PinError::None)).map_err(|r| r.text), Err("no PIN issued: open the update page first"));
+        assert_eq!(with_pin(Some("PIN 0000"), |_| Err(PinError::Expired)).map_err(|r| r.text), Err("PIN expired: reload the page"));
+        assert_eq!(with_pin(Some("PIN 0000"), |_| Err(PinError::None)).map_err(|r| r.text), Err("no PIN issued: open the page first"));
         assert_eq!(with_pin(Some("Basic abc"), pin_ok).map_err(|r| r.text), Err("bad credentials"));
         assert_eq!(with_pin(Some("pin 1234"), pin_ok).map_err(|r| r.text), Err("bad credentials"), "the scheme is case-sensitive");
     }
@@ -252,7 +263,7 @@ mod tests {
         settings::update(|s| s.token = Secret(Text::EMPTY));
         assert!(!token_enabled());
         assert!(!token_ok(b""), "an empty token never matches");
-        assert_eq!(token(Some("Bearer ")).map_err(|r| r.text), Err("no token set: build one in or set one from the update page"));
+        assert_eq!(token(Some("Bearer ")).map_err(|r| r.text), Err("no token set: build one in or set one on /token"));
         assert_eq!(token(None).map_err(|r| r.text), Err("no token: send Authorization: Bearer <API_TOKEN>"));
         assert_eq!(token(Some("PIN 1234")).map_err(|r| r.text), Err("no token: send Authorization: Bearer <API_TOKEN>"));
         settings::update(|s| s.token = Secret(Text::literal("secret-token-1")));

@@ -12,7 +12,7 @@
 //!
 //! `API_TOKEN` is the fourth: what a script must carry for a firmware
 //! update, a reset, the Wi-Fi credentials or a new token; a build
-//! without one can be given one later from the update page. The
+//! without one can be given one later from the token page. The
 //! credentials and the token are seeds: the first saved record carries
 //! them from then on (`settings::Settings::seed`). `MAX_CURRENT_STEP` is
 //! the fifth, optional: the ceiling on the panel's drive current, for a
@@ -37,7 +37,7 @@ pub const WIFI_PASSWORD: &str = match option_env!("WIFI_PASSWORD") {
 /// Token a script must carry, as `Authorization: Bearer <token>`, for
 /// `POST /ota`, `/reload`, `/token` and the Wi-Fi credentials on
 /// `/api`. Empty when the variable was not set at build time, which
-/// closes those paths until a token is set from the update page with
+/// closes those paths until a token is set from the token page with
 /// the PIN; the boot line says which. Must be empty or 8 to 32
 /// printable characters without spaces (`settings::valid_token`,
 /// checked at compile time). Compiled in as a string, so anyone with

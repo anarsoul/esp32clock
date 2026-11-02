@@ -7,8 +7,10 @@
 //! (`POST /ota`, streamed into `ota::install`) stops it for the write.
 //!
 //! `POST /api` takes every setting; the network (`ssid`, `password`)
-//! only with the token. `POST /token` sets the token with the PIN or
-//! the old token, `POST /pin` issues a PIN for a script. `POST /reload`
+//! only with the token. `GET /update` and `GET /token` each issue a PIN
+//! and serve the page that asks for it, the upload and the token; the
+//! token page is linked from nowhere. `POST /token` sets the token with
+//! the PIN or the old token, `POST /pin` issues a PIN for a script. `POST /reload`
 //! resets with the token, `POST /ap` resets into the access point with
 //! it. On the access point `GET /` is the setup form, `POST /scan`
 //! refreshes its network list, and any other path is a redirect to the
@@ -409,7 +411,14 @@ fn respond(out: &mut Response, req: &Request<'_>, body: &[u8]) -> Result<Then, c
             // Opening the page puts a PIN on the panel; the page asks for it.
             let lockout_secs = auth::issue_pin(random()).err();
             status_line(out, "200 OK", "text/html; charset=utf-8")?;
-            form::write_update_page(out, settings::get().hostname.as_str(), &status(), auth::token_enabled(), lockout_secs)?;
+            form::write_update_page(out, settings::get().hostname.as_str(), &status(), lockout_secs)?;
+        }
+        (Method::Get, "/token") => {
+            // The token page, reached by its address only: no page links
+            // to it. A PIN of its own, the same way.
+            let lockout_secs = auth::issue_pin(random()).err();
+            status_line(out, "200 OK", "text/html; charset=utf-8")?;
+            form::write_token_page(out, settings::get().hostname.as_str(), auth::token_enabled(), lockout_secs)?;
         }
         (Method::Post, "/pin") => {
             // A PIN without the page, for a script that reads the serial
@@ -426,7 +435,7 @@ fn respond(out: &mut Response, req: &Request<'_>, body: &[u8]) -> Result<Then, c
             }
         }
         (Method::Post, "/token") => {
-            // A new API token, with the PIN from the update page or the
+            // A new API token, with the PIN from the token page or the
             // current token. The value is never logged or echoed. The
             // body is parsed before the PIN is spent, so a bad one costs
             // a 400 and not the PIN.

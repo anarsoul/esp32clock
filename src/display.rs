@@ -64,7 +64,7 @@ fn draw_ip(panel: &mut Panel, ip: Option<[u8; 4]>, index: usize) {
     panel.set_char(3, (b'0' + v % 10) as char);
 }
 
-/// The update page's PIN: four digits, colon off.
+/// The page PIN (update or token page): four digits, colon off.
 fn draw_pin(panel: &mut Panel, pin: u16) {
     let mut v = pin;
     for i in (0..4).rev() {
@@ -232,7 +232,8 @@ pub async fn display_task(stack: Stack<'static>) -> ! {
                 settings::update(|s| ui.handle(s, ev, now));
             }
             Either4::Third(_) => {}
-            Either4::Fourth(pin) => ui.show_pin(pin, Instant::now()),
+            Either4::Fourth(Some(pin)) => ui.show_pin(pin, Instant::now()),
+            Either4::Fourth(None) => ui.hide_pin(Instant::now()),
         }
     }
 }
