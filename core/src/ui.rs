@@ -31,6 +31,13 @@ const IP_ROUNDS: u64 = 2;
 /// ends it. The PIN itself is good for longer; see `auth::PIN_TTL_MS`.
 pub const PIN_SHOW: Duration = Duration::from_secs(60);
 
+/// After the press that ends a ring, the IP or the PIN, presses are
+/// ignored for this long. A two-button slap is two events, and the
+/// second would land in clock mode and step a setting; when one button
+/// is let go early the other's `Long` can trail by the whole long-press
+/// threshold (800 ms), hence a full second.
+pub const PRESS_QUIET: Duration = Duration::from_secs(1);
+
 /// After a power cut the clock comes back and gets a valid time some
 /// minutes late. On the first tick with a time, an alarm that came round
 /// within this many minutes before is rung anyway, so an outage across
@@ -111,6 +118,9 @@ pub struct Ui {
     /// A valid time has been seen since boot; the missed-alarm check is
     /// only made before that.
     had_time: bool,
+    /// Presses before this instant are dropped: the tail of the slap that
+    /// ended a ring, the IP or the PIN.
+    quiet_until: Option<Instant>,
 }
 
 impl Default for Ui {
@@ -121,7 +131,7 @@ impl Default for Ui {
 
 impl Ui {
     pub fn new() -> Self {
-        Ui { mode: Mode::Clock, since: Instant::now(), pin: 0, last_alarm: None, had_time: false }
+        Ui { mode: Mode::Clock, since: Instant::now(), pin: 0, last_alarm: None, had_time: false, quiet_until: None }
     }
 
     /// Switch mode, timing it from `now`.
@@ -132,10 +142,16 @@ impl Ui {
 
     /// Feed a button event, editing `settings` as the mode dictates.
     pub fn handle(&mut self, settings: &mut Settings, ev: Event, now: Instant) {
+        if self.quiet_until.is_some_and(|until| now < until) {
+            return;
+        }
         // A press in alarm-set restarts its timeout.
         self.since = now;
         match self.mode {
-            Mode::Ringing | Mode::ShowIp | Mode::ShowPin => self.enter(Mode::Clock, now),
+            Mode::Ringing | Mode::ShowIp | Mode::ShowPin => {
+                self.enter(Mode::Clock, now);
+                self.quiet_until = Some(now + PRESS_QUIET);
+            }
             Mode::Clock => match (ev.button, ev.kind) {
                 // The mode switch; the display task acts on it first.
                 (_, Kind::Hold) => {}
@@ -395,6 +411,39 @@ mod tests {
         assert_eq!(ui.mode, Mode::Ringing);
         ui.tick(&mut s, Some(at(1, 7, 5, 0)), ms(100_000 + RING_TIMEOUT.as_millis()));
         assert_eq!(ui.mode, Mode::Clock);
+    }
+
+    #[test]
+    fn slap_that_ends_a_ring_changes_nothing() {
+        let mut ui = Ui::new();
+        let mut s = armed();
+        ui.tick(&mut s, Some(at(0, 7, 0, 0)), ms(1000));
+        assert_eq!(ui.mode, Mode::Ringing);
+        // Both hands: one short ends the ring, the other trails by 20 ms.
+        ui.handle(&mut s, press(Button::Top, Kind::Short), ms(5000));
+        assert_eq!(ui.mode, Mode::Clock);
+        ui.handle(&mut s, press(Button::Bottom, Kind::Short), ms(5020));
+        assert_eq!(s.brightness, Settings::DEFAULT.brightness, "the trailing short is dropped");
+        // The other button still held: its long comes at the threshold.
+        ui.handle(&mut s, press(Button::Bottom, Kind::Long), ms(5790));
+        assert!(s.alarm_armed, "the trailing long is dropped");
+        ui.handle(&mut s, press(Button::Top, Kind::Long), ms(5800));
+        assert_eq!(ui.mode, Mode::Clock);
+        // A second later a press is a press again.
+        ui.handle(&mut s, press(Button::Top, Kind::Short), ms(5000 + PRESS_QUIET.as_millis()));
+        assert_eq!(s.color, (Settings::DEFAULT.color + 1) % PALETTE.len());
+        // The same after the PIN display.
+        ui.show_pin(1234, ms(10_000));
+        ui.handle(&mut s, press(Button::Bottom, Kind::Short), ms(10_100));
+        ui.handle(&mut s, press(Button::Top, Kind::Short), ms(10_120));
+        assert_eq!(ui.mode, Mode::Clock);
+        assert_eq!(s.color, (Settings::DEFAULT.color + 1) % PALETTE.len(), "dropped");
+        // A timeout starts no window.
+        ui.handle(&mut s, press(Button::Both, Kind::Long), ms(20_000));
+        ui.tick(&mut s, None, ms(20_000 + 8 * IP_STEP.as_millis()));
+        assert_eq!(ui.mode, Mode::Clock);
+        ui.handle(&mut s, press(Button::Top, Kind::Short), ms(20_010 + 8 * IP_STEP.as_millis()));
+        assert_eq!(s.color, (Settings::DEFAULT.color + 2) % PALETTE.len(), "a press after a timeout counts");
     }
 
     #[test]

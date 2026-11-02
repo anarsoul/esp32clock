@@ -172,7 +172,9 @@ it is given. A setup form that changes nothing resets at once
 (`Then::Join`); one that changes anything is committed and the
 persist task saves it, then resets.
 
-Any press ends ringing or the IP display. Set mode times out after 15 s,
+Any press ends ringing or the IP display, and presses in the second
+after it are ignored (`ui::PRESS_QUIET`), so a two-handed slap does not
+step a setting with its second event. Set mode times out after 15 s,
 ringing after 5 minutes. Self-heal: once the gateway has answered a ping, ten
 failed probes in a row (five minutes) with the link still up blank the
 panel and reset the chip (`config::PROBE_RESET_FAILURES`). The probe is

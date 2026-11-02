@@ -1252,7 +1252,10 @@ and was not forced to fire; the arithmetic in the log lines is right.
 
 Found in the same review, not yet done, in rough order of value:
 
-- **Alarm lost while in another mode.** `Ui::tick` only checks the alarm
+- ~~**Alarm lost while in another mode.**~~ Not a bug, decided 2026-11-02:
+  whoever is in alarm-set or watching the IP or the PIN has just
+  pressed the buttons and is awake; the clock has nothing to wake.
+  `Ui::tick` only checks the alarm
   in clock mode. If the alarm minute passes entirely while the user is
   in alarm-set mode or the IP display (both run about 15 s and the set
   mode is extended by every press), it never rings; the missed-alarm
@@ -1391,7 +1394,11 @@ Gaps:
   until they reload. Fix: keep the pending PIN in `Ui` and show it when
   the mode returns to clock within `PIN_TTL_MS`, or log that it was not
   shown.
-- **The missed-alarm grace is used up by the first time in any mode.**
+- ~~**The missed-alarm grace is used up by the first time in any mode.**~~
+  Not a bug, decided 2026-11-02, for the same reason as the first
+  pass's "alarm lost while in another mode": a boot that is in the IP
+  or PIN display when the first time lands has someone at the clock
+  or at its update page, awake.
   `had_time |= time.is_some()` sits outside the mode match while the
   grace check runs only in clock mode. A sync that lands during the IP
   display or a PIN at boot marks the boot as had-time and the alarm
@@ -1417,7 +1424,10 @@ Gaps:
   color=green` then `scripts/reload.sh` at once comes back with the
   old colour. Fix: have `heal::reboot` flush the persist task (or save
   synchronously through `with_flash` after `scan::stop`).
-- **The upload does not check the chip id.** The first sector is checked
+- ~~**The upload does not check the chip id.**~~ Not worth a check, decided
+  2026-11-02: the bootloader refuses the image and falls back to the
+  old firmware, which is the recovery the item itself describes.
+  The first sector is checked
   for the image magic, the descriptor magic and the hash flag, not for
   the ESP32-C3 id at bytes 12–13 of the extended header. An image built
   with the wrong `--chip` is written, selected and booted; the
@@ -1651,7 +1661,9 @@ Bugs, in rough order of value:
   good. Fix: seed only when the loaded record predates version 6 or
   nothing was loaded (`from_record` can report the version); a stored
   empty token then means none.
-- **A two-button slap to silence the alarm changes a setting.** The
+- ~~**A two-button slap to silence the alarm changes a setting.**~~ Done
+  2026-11-02, see "Quiet after the press that ends a ring" at the end:
+  a one-second quiet window in `Ui` after the press. The
   button task emits one `Short` per button on release and there is no
   `Both`/`Short` event, so two buttons released a few ms apart are two
   events: `Ui::handle` ends `Ringing` on the first and the second lands
@@ -4533,3 +4545,46 @@ digits and dashes, so nothing to escape. Worst-case sizes: settings
 still said `Clock`: the `<h1>` of both pages is `Clock: <hostname>`
 as well (settings 4259, update 3027). On test-clock over USB; both
 read back `Clock: test-clock`.
+
+#### Quiet after the press that ends a ring (after the favicon) — DONE, verified on the panel 2026-11-02
+
+The fourth pass's "two-button slap to silence the alarm changes a
+setting". The button task reports one event per button, so a slap
+with both hands is two events: the first ends `Ringing` and the
+second lands in `Clock`, where a top short steps the colour, a bottom
+short the brightness, a bottom long toggles the alarm and a top long
+opens alarm-set, and the persist task writes the change. The same
+for a press that ends the IP or the PIN display. The second event
+can trail the first by up to 800 ms, not a few: when one button of
+the pair is let go early its `Short` ends the ring at its release,
+and the other, still held, sends its `Long` at the long-press
+threshold, which the button task had held back only while both were
+down.
+
+**Fix, in `core/src/ui.rs`.** `Ui` gains `quiet_until:
+Option<Instant>`. The press that ends `Ringing`, `ShowIp` or
+`ShowPin` sets it to `now + PRESS_QUIET` (one second, past the 800 ms
+a trailing `Long` can take), and `handle` drops any event before that
+instant. The window is only started by a press, never by a timeout,
+and only by one that ends one of those three modes; a deliberate
+press one second after silencing the alarm works as before. A
+hurried double press of one button in clock mode stays two steps,
+since two presses are two presses. The `Hold` never reaches `Ui`
+during a ring anyway: the display task acts on it first. Nothing
+changes in the button task or the display task.
+
+**Host checks.** A `Short` ends a ring and a second `Short` 20 ms
+later leaves the colour alone; a `Long` of the other button 790 ms
+after leaves the alarm armed and the mode in `Clock`; a `Short` after
+the window steps the colour. The same shape for the PIN display, and
+a timeout that ends the IP display starts no window.
+
+**Verify on the panel.** Ring the alarm (set it a minute ahead, or
+wait for it) and slap both buttons: the ring stops and the colour,
+brightness and armed mark are what they were, with no `settings:
+saved` in the log. Slap with one hand lingering: the same. Then a
+single short press a second or more later still steps the colour.
+
+**Panel, 2026-11-02.** The user rang the alarm and slapped both
+buttons, with and without a lingering hand: the ring stopped and
+nothing else changed; a press a second later worked as before.
