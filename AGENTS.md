@@ -52,10 +52,14 @@ describe` without `--tags`, so a lightweight tag would not reach the
 version) runs `.github/workflows/release.yml`, which builds with the
 CI's prebuilt settings, tests, and attaches `esp32clock-ota-<tag>.bin`
 (the `/update` image) and `esp32clock-<tag>.bin` (`save-image
---merge`: the whole flash from 0, `nvs` left out so settings survive)
-to the GitHub release, then deploys `docs/` to the `gh-pages` branch
-with the release under `<tag>/` (a manifest for ESP Web Tools and the
-images) and `latest/`, keeping earlier tags. `docs/index.html` is the
+--merge`: the whole flash from 0, contiguous, so it covers `nvs` with
+erased bytes and clears the settings; `write-bin` then needs an
+`espflash reset`) to the GitHub release, then deploys `docs/` to the
+`gh-pages` branch with the release under `<tag>/` (a manifest for ESP
+Web Tools with four parts, the bootloader and partition table cut
+from the merged image, an erased `otadata` and the OTA image at
+0x20000, so `nvs` is left alone and the settings survive unless the
+erase is chosen) and `latest/`, keeping earlier tags. `docs/index.html` is the
 web installer at `https://anarsoul.github.io/esp32clock/`: it lists
 the releases from the GitHub API, newest first, and points the install
 button at the chosen tag's manifest; without the API it uses `latest/`.

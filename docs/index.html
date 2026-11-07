@@ -41,7 +41,8 @@
   <esp-web-install-button id="install" manifest="latest/manifest.json"></esp-web-install-button>
   <p class="note">
     The installer offers to erase the clock first. Erasing clears the saved settings and the stored
-    network; without it the settings survive. A clock already on your network can be updated from
+    network; without it they survive, since the installer writes the bootloader, the partition table
+    and the firmware and leaves the settings partition alone. A clock already on your network can be updated from
     <code>http://&lt;ip&gt;/update</code> with the release's <code>esp32clock-ota-*.bin</code> instead,
     with no USB.
   </p>

@@ -5084,3 +5084,21 @@ and the manifest reachable. The flasher itself needs a browser with
 Web Serial, which the session has not; the merged image is verified
 on the bench by `espflash write-bin 0x0` of the file downloaded from
 the page: the board boots `v0.1` on `ota_0` with its settings kept.
+
+**Built 2026-11-07.** The first `v0.1` tag ran green (three jobs, the
+release with both images, the `gh-pages` branch with `v0.1/` and
+`latest/`), and the bench then showed the plan's premise wrong: the
+merged image is contiguous from 0, so its bytes 0x9000 to 0xF000 are
+erased `nvs`, and `espflash write-bin 0x0` of it left the bench board
+with no settings, scanning as an access point. Two more facts from
+the same run: `write-bin` leaves the chip in the bootloader (an
+`espflash reset` after it), and the boot after the wipe seeds from the
+build, so the board was put back with a USB flash seeded with its
+network and token and one `/api` post for the rest. The fix: the
+installer flashes four parts (the bootloader and the partition table
+cut out of the merged image with `dd`, an `otadata` of 0xFF, and the
+OTA image at 0x20000) and never touches `nvs`, so the erase prompt
+means what it says; the merged file stays on the release for
+`write-bin`, documented as clearing the settings. The `v0.1` tag was
+moved to the fixed commit minutes after the first push, and the
+release re-made.

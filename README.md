@@ -231,11 +231,13 @@ three boots is rolled back.
 The easiest first flash needs no toolchain: open
 <https://anarsoul.github.io/esp32clock/> in Chrome or Edge with the
 clock on USB, pick a release and press Install. The page is ESP Web
-Tools over Web Serial; it offers to erase the clock first (which
-clears saved settings) and flashes `esp32clock-<tag>.bin`, the whole
-flash from offset 0 (bootloader, partition table, app). The same file
-is on the [releases page](https://github.com/anarsoul/esp32clock/releases)
-for `espflash write-bin 0x0 esp32clock-<tag>.bin`, next to
+Tools over Web Serial; it writes the bootloader, the partition table,
+an erased `otadata` and the firmware, leaving the settings partition
+alone, so a reflash keeps the settings unless you take the erase it
+offers first. The [releases page](https://github.com/anarsoul/esp32clock/releases)
+has `esp32clock-<tag>.bin`, the whole flash from offset 0 for
+`espflash write-bin 0x0 esp32clock-<tag>.bin` (then `espflash reset`;
+this one covers the settings partition too and clears it), next to
 `esp32clock-ota-<tag>.bin`, the update image for `/update` and
 `scripts/ota.sh`. A release is made by pushing an annotated tag `v*`
 (`.github/workflows/release.yml`).

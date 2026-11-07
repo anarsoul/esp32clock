@@ -59,12 +59,20 @@ jobs:
           # The application image, for /update and scripts/ota.sh.
           espflash save-image --chip esp32c3 --partition-table partitions.csv \
             "$ELF" "images/esp32clock-ota-${GITHUB_REF_NAME}.bin"
-          # Everything from offset 0 for a first flash: bootloader,
-          # partition table, erased otadata (so ota_0 boots) and the app;
-          # nvs is not in it, so the settings survive a reflash.
+          # Everything from offset 0 for `espflash write-bin 0x0`: the
+          # bootloader, the partition table, erased otadata (so ota_0
+          # boots) and the app. It is contiguous, so it also covers nvs
+          # with erased bytes and clears the saved settings.
           espflash save-image --chip esp32c3 --partition-table partitions.csv \
             --merge --skip-padding --flash-size 4mb \
             "$ELF" "images/esp32clock-${GITHUB_REF_NAME}.bin"
+          # The web installer writes four parts and leaves nvs alone, so
+          # the settings survive unless the erase is chosen: the bootloader
+          # and the partition table cut out of the merged image, an erased
+          # otadata, and the application image above.
+          dd if="images/esp32clock-${GITHUB_REF_NAME}.bin" of=images/bootloader.bin bs=4096 count=8 status=none
+          dd if="images/esp32clock-${GITHUB_REF_NAME}.bin" of=images/partition-table.bin bs=4096 skip=8 count=1 status=none
+          head -c 8192 /dev/zero | tr '\0' '\377' > images/otadata.bin
           ls -l images
       - uses: actions/upload-artifact@v6
         with:
@@ -83,12 +91,14 @@ jobs:
           path: images
       - uses: softprops/action-gh-release@v3
         with:
-          files: images/*
+          files: images/esp32clock-*.bin
           body: |
             Flash a clock from the browser at https://anarsoul.github.io/esp32clock/
-            (Chrome or Edge, the clock on USB), or with espflash:
+            (Chrome or Edge, the clock on USB), or with espflash, which also
+            clears the saved settings, since the file covers the whole flash:
 
                 espflash write-bin 0x0 esp32clock-${{ github.ref_name }}.bin
+                espflash reset
 
             Update a running clock from `http://<ip>/update` with
             `esp32clock-ota-${{ github.ref_name }}.bin`, or with
@@ -112,26 +122,32 @@ jobs:
       - name: Stage the release for the page
         run: |
           TAG="$GITHUB_REF_NAME"
+          # Four parts at their offsets; nvs (0x9000) is not among them.
           manifest() {
-            jq -n --arg version "${TAG#v}" --arg path "$1" '{
+            jq -n --arg version "${TAG#v}" --arg app "$1" '{
               name: "esp32clock",
               version: $version,
               new_install_prompt_erase: true,
               new_install_improv_wait_time: 0,
-              builds: [{chipFamily: "ESP32-C3", parts: [{path: $path, offset: 0}]}]
+              builds: [{chipFamily: "ESP32-C3", parts: [
+                {path: "bootloader.bin", offset: 0},
+                {path: "partition-table.bin", offset: 32768},
+                {path: "otadata.bin", offset: 65536},
+                {path: $app, offset: 131072}
+              ]}]
             }'
           }
           # The release under its tag, as the page's list offers it.
           mkdir -p "docs/$TAG"
-          cp images/*.bin "docs/$TAG/"
-          manifest "esp32clock-$TAG.bin" > "docs/$TAG/manifest.json"
+          cp images/bootloader.bin images/partition-table.bin images/otadata.bin "images/esp32clock-ota-$TAG.bin" "docs/$TAG/"
+          manifest "esp32clock-ota-$TAG.bin" > "docs/$TAG/manifest.json"
           # The same under fixed names as the fallback when the page
           # cannot ask GitHub for the list; keep_files below leaves earlier
           # tags in place, and these names are overwritten each release.
           mkdir -p docs/latest
-          cp "images/esp32clock-$TAG.bin" docs/latest/esp32clock.bin
+          cp images/bootloader.bin images/partition-table.bin images/otadata.bin docs/latest/
           cp "images/esp32clock-ota-$TAG.bin" docs/latest/esp32clock-ota.bin
-          manifest "esp32clock.bin" > docs/latest/manifest.json
+          manifest "esp32clock-ota.bin" > docs/latest/manifest.json
           cat "docs/$TAG/manifest.json"
       - uses: peaceiris/actions-gh-pages@v4
         with:
