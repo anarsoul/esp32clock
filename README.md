@@ -19,6 +19,8 @@ What the clock does:
   [Home Assistant](#home-assistant) below).
 - Firmware updates over the LAN (`/update` with a PIN shown on the panel,
   or a script with a token), two application slots with rollback.
+- A [web installer](https://anarsoul.github.io/esp32clock/) that flashes
+  a release from Chrome or Edge over USB, no toolchain needed.
 - Provisioning from the clock's own access point when no network is
   stored, with a captive portal.
 - Self-healing: the clock resets itself when the network is lost for
@@ -171,6 +173,12 @@ the same time.
 
 ## Firmware
 
+No toolchain is needed to run the clock: the
+[web installer](https://anarsoul.github.io/esp32clock/) flashes the
+latest release from Chrome or Edge with the clock on USB, and later
+updates come over the LAN; see [Prebuilt images](#prebuilt-images).
+The rest of this section is for building from source.
+
 ### Prerequisites
 
 - Rust stable 1.95 or newer. `rust-toolchain.toml` pulls the
@@ -201,6 +209,7 @@ firmware version, the network and the address the clock got.
 | `API_TOKEN` | bearer token for the scripts and the API's protected keys | none |
 | `MAX_CURRENT_STEP` | LED current ceiling, 1 to 15; 5 is the 50 % step | 5 |
 | `AP_PASSWORD` | the clock's own access point's password | `esp32clock` |
+| `MQTT_HOST`, `MQTT_PORT`, `MQTT_USER`, `MQTT_PASSWORD` | the Home Assistant broker; empty host for no MQTT, see below | empty, 1883 |
 
 ### First boot without a network
 
@@ -215,16 +224,45 @@ to the access point if the password was wrong.
 
 ### Updates over the LAN
 
-```sh
-API_TOKEN='…' scripts/ota.sh <ip>     # build, make the image, upload, reboot
-scripts/ota.sh                        # just make the image, for the /update page
-```
+A running clock takes a new firmware over Wi-Fi, no USB. First get the
+update image, `esp32clock-ota-*.bin`, from one of three places:
 
-Or open `http://<ip>/update`: the clock shows a four-digit PIN on its
-panel for a minute, and the page takes the image file and the PIN. The
-new image goes to the other slot; a failed write leaves the running
-one in place, and a new image that cannot reach the network within
-three boots is rolled back.
+- a [release](https://github.com/anarsoul/esp32clock/releases):
+  `esp32clock-ota-<tag>.bin`, under Assets;
+- the latest build of `master`: open the
+  [Actions](https://github.com/anarsoul/esp32clock/actions) tab, pick
+  the newest run of the CI workflow on `master`, scroll to Artifacts
+  and download `esp32clock-ota-<commit>`. GitHub hands artifacts out
+  as a ZIP (and asks you to be logged in); unzip it to get
+  `esp32clock-ota.bin`:
+
+  ```sh
+  unzip esp32clock-ota-<commit>.zip     # leaves esp32clock-ota.bin next to it
+  ```
+
+- your own build: `scripts/ota.sh` with no arguments builds it and
+  prints the path (`target/esp32clock-ota.bin`).
+
+Then install it, either way:
+
+- **From the browser.** Open `http://<ip>/update`. The clock shows a
+  four-digit PIN on its panel for a minute; choose the `.bin` file,
+  type the PIN and press Upload. The panel is dark for the write,
+  about ten seconds, and the page waits for the clock to come back.
+- **From the shell**, with the clock's API token (`esp32clock` on the
+  prebuilt images, or what you built with):
+
+  ```sh
+  API_TOKEN='…' scripts/ota.sh <ip> esp32clock-ota-<tag>.bin   # send this file
+  API_TOKEN='…' scripts/ota.sh <ip>                             # build, then send
+  ```
+
+  The script is one `curl`: a `POST` of the raw file to `/ota` with
+  `Authorization: Bearer <token>`.
+
+The new image goes to the other slot; a failed or interrupted write
+leaves the running one in place, and a new image that cannot reach the
+network within three boots is rolled back. Settings are kept.
 
 ### Prebuilt images
 
@@ -244,10 +282,8 @@ this one covers the settings partition too and clears it), next to
 
 Between releases, every push is built on GitHub Actions
 (`.github/workflows/ci.yml`) and the OTA image is attached to the run
-as an artifact: open the Actions tab, pick the latest run on `master`,
-download `esp32clock-ota-<commit>` and unzip it to get
-`esp32clock-ota.bin`. GitHub asks for a login to download artifacts
-and keeps them for 90 days. The images are built with:
+as an artifact for 90 days; "Updates over the LAN" above says how to
+fetch and install it. The images are built with:
 
 | setting | value in the prebuilt images |
 | --- | --- |
@@ -257,12 +293,9 @@ and keeps them for 90 days. The images are built with:
 | everything else | the defaults: brightness cap 50 %, access point password `esp32clock` |
 
 The OTA image is an update image, for a clock that has been flashed
-once over USB (the web installer or `cargo run` above). Install it
-from `http://<ip>/update` with the PIN, or from the shell:
-
-```sh
-API_TOKEN=esp32clock scripts/ota.sh <ip> esp32clock-ota.bin
-```
+once over USB (the web installer or `cargo run` above); install it as
+"Updates over the LAN" says, with `API_TOKEN=esp32clock` on the
+shell path.
 
 The token is printed here, so change it once the clock is on your
 network: open `http://<ip>/token`, type a new one (8 to 32 printable
