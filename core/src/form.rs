@@ -7,11 +7,13 @@
 use core::fmt::Write as _;
 
 use crate::melody;
+use crate::mqtt::Link;
 use crate::sensors::{Tenths, fahrenheit_tenths};
 use crate::settings::{
-    BRIGHTNESS_STEPS, Credentials, DAY_NAMES, DAYS_ALL, DAYS_WEEKDAYS, DAYS_WEEKEND, HOSTNAME_MAX, Hostname, PALETTE_NAMES,
-    PASSWORD_MAX, PASSWORD_MIN, SSID_MAX, Secret, Settings, TEMP_OFFSET_LIMIT_DC, TOKEN_MAX, TZ_LIMIT_MINUTES, TempShow,
-    Text, valid_password, valid_token,
+    BRIGHTNESS_STEPS, BROKER_HOST_MAX, BROKER_PASSWORD_MAX, BROKER_USER_MAX, Credentials, DAY_NAMES, DAYS_ALL, DAYS_WEEKDAYS,
+    DAYS_WEEKEND, HOSTNAME_MAX, Hostname, PALETTE_NAMES, PASSWORD_MAX, PASSWORD_MIN, SSID_MAX, Secret, Settings,
+    TEMP_OFFSET_LIMIT_DC, TOKEN_MAX, TZ_LIMIT_MINUTES, TempShow, Text, valid_broker_host, valid_broker_password,
+    valid_broker_user, valid_password, valid_token,
 };
 
 /// Longest form value, decoded: the password.
@@ -47,6 +49,10 @@ pub struct Status {
     /// The station's signal in dBm: `None` while not connected, and on
     /// the access point.
     pub rssi: Option<i8>,
+    /// What the MQTT task is doing.
+    pub mqtt: Link,
+    /// Whether the alarm is ringing right now.
+    pub ringing: bool,
 }
 
 /// The time of a self-heal, converted by the caller so this module stays
@@ -89,9 +95,29 @@ impl core::fmt::Display for Span {
 pub enum FormError {
     UnknownKey,
     BadValue,
-    /// A credential key (`ssid`, `password`) from a request that did not
-    /// carry the token.
+    /// A network key (`ssid`, `password`) or a broker key (`mqtt_*`)
+    /// from a request that may not set it (`Allow`).
     Forbidden,
+}
+
+/// Which guarded keys a request may set. The network keys need the
+/// token on `/api`, or the access point's own page; the broker keys
+/// need the token on `/api` too, since pointing the clock at another
+/// broker would hand that broker the stored password, but the settings
+/// page takes them, as it takes the hostname and the alarm.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Allow {
+    pub network: bool,
+    pub broker: bool,
+}
+
+impl Allow {
+    /// `/api` without the token, and a command over MQTT.
+    pub const NONE: Allow = Allow { network: false, broker: false };
+    /// The settings page.
+    pub const PAGE: Allow = Allow { network: false, broker: true };
+    /// `/api` with the token, and the setup form on the access point.
+    pub const ALL: Allow = Allow { network: true, broker: true };
 }
 
 /// A string inside JSON quotes: `"` and `\` escaped, control characters
@@ -211,14 +237,52 @@ pub fn write_days(out: &mut impl core::fmt::Write, mask: u8) -> core::fmt::Resul
     }
 }
 
-/// Apply one key and value to `s`. `credentials` says whether the
-/// request may set the network (`ssid`, `password`): only with the
-/// token, or on the access point's own page. The check is on the key,
-/// never on whether the value would change anything, so a request
-/// without the token learns nothing about the stored password.
-pub fn apply_one(s: &mut Settings, key: &str, value: &str, credentials: bool) -> Result<(), FormError> {
+/// Apply one key and value to `s`. `allow` says whether the request may
+/// set the network (`ssid`, `password`) and the broker (`mqtt_*`). The
+/// check is on the key, never on whether the value would change
+/// anything, so a request without the token learns nothing about the
+/// stored passwords.
+pub fn apply_one(s: &mut Settings, key: &str, value: &str, allow: Allow) -> Result<(), FormError> {
     match key {
-        "ssid" | "ssid_pick" | "password" if !credentials => return Err(FormError::Forbidden),
+        "ssid" | "ssid_pick" | "password" if !allow.network => return Err(FormError::Forbidden),
+        "mqtt_host" | "mqtt_port" | "mqtt_user" | "mqtt_password" if !allow.broker => return Err(FormError::Forbidden),
+        // An empty host is MQTT off and takes the user and password with
+        // it, so the record keeps no stale secret; the flag keeps a
+        // build's `MQTT_HOST` from filling it back in at boot.
+        "mqtt_host" => {
+            if !valid_broker_host(value) {
+                return Err(FormError::BadValue);
+            }
+            s.mqtt.host = Text::new(value).ok_or(FormError::BadValue)?;
+            s.mqtt_cleared = value.is_empty();
+            if value.is_empty() {
+                s.mqtt.user = Text::EMPTY;
+                s.mqtt.password = Secret(Text::EMPTY);
+            }
+        }
+        "mqtt_port" => {
+            let port: u16 = value.parse().map_err(|_| FormError::BadValue)?;
+            if port == 0 {
+                return Err(FormError::BadValue);
+            }
+            s.mqtt.port = port;
+        }
+        "mqtt_user" => {
+            if !valid_broker_user(value) {
+                return Err(FormError::BadValue);
+            }
+            s.mqtt.user = Text::new(value).ok_or(FormError::BadValue)?;
+        }
+        // The page's field is write-only and always posted: empty keeps
+        // the stored password. Clearing the host is the way to drop it.
+        "mqtt_password" => {
+            if !valid_broker_password(value) {
+                return Err(FormError::BadValue);
+            }
+            if !value.is_empty() {
+                s.mqtt.password = Secret(Text::new(value).ok_or(FormError::BadValue)?);
+            }
+        }
         // The setup form sends both the list's choice and the typed name,
         // one of them empty; empty means unchanged.
         "ssid" | "ssid_pick" => {
@@ -239,10 +303,16 @@ pub fn apply_one(s: &mut Settings, key: &str, value: &str, credentials: bool) ->
             let pct = parse_u8(value).ok_or(FormError::BadValue)?;
             s.brightness = BRIGHTNESS_STEPS.iter().position(|p| *p == pct).ok_or(FormError::BadValue)?;
         }
+        // `HH:MM`, or `HH:MM:SS` as Home Assistant's time entity sends
+        // it; the seconds are checked and dropped.
         "alarm" => {
-            let (h, m) = value.split_once(':').ok_or(FormError::BadValue)?;
+            let (h, rest) = value.split_once(':').ok_or(FormError::BadValue)?;
+            let (m, sec) = match rest.split_once(':') {
+                Some((m, sec)) => (m, parse_u8(sec).ok_or(FormError::BadValue)?),
+                None => (rest, 0),
+            };
             let (h, m) = (parse_u8(h).ok_or(FormError::BadValue)?, parse_u8(m).ok_or(FormError::BadValue)?);
-            if h >= 24 || m >= 60 {
+            if h >= 24 || m >= 60 || sec >= 60 {
                 return Err(FormError::BadValue);
             }
             s.alarm_hour = h;
@@ -297,13 +367,13 @@ pub fn parse_tenths(value: &str) -> Option<i16> {
 
 /// Apply every `key=value` pair of a form body or query string to `s`.
 /// With `checkboxes_absent_off`, as for the page's form, the boolean
-/// fields are turned off unless the body turns them on. `credentials`
-/// is passed to `apply_one`. The first bad pair stops and is reported;
+/// fields are turned off unless the body turns them on. `allow` is
+/// passed to `apply_one`. The first bad pair stops and is reported;
 /// earlier pairs stay applied, so the caller works on a copy. A
 /// non-empty `ssid_pick` (the setup form's list) wins over `ssid` (its
 /// typed field) whatever their order, since a browser may send a stale
 /// typed name along with the pick.
-pub fn apply(s: &mut Settings, body: &[u8], checkboxes_absent_off: bool, credentials: bool) -> Result<(), FormError> {
+pub fn apply(s: &mut Settings, body: &[u8], checkboxes_absent_off: bool, allow: Allow) -> Result<(), FormError> {
     if checkboxes_absent_off {
         s.alarm_armed = false;
         s.twelve_hour = false;
@@ -317,7 +387,7 @@ pub fn apply(s: &mut Settings, body: &[u8], checkboxes_absent_off: bool, credent
         let vn = percent_decode(value, &mut vbuf).ok_or(FormError::BadValue)?;
         let key = core::str::from_utf8(&kbuf[..kn]).map_err(|_| FormError::UnknownKey)?;
         let value = core::str::from_utf8(&vbuf[..vn]).map_err(|_| FormError::BadValue)?;
-        apply_one(s, key, value, credentials)?;
+        apply_one(s, key, value, allow)?;
         if key == "ssid_pick" && !value.is_empty() {
             pick = Some(s.wifi.ssid);
         }
@@ -432,7 +502,9 @@ pub fn write_json(out: &mut impl core::fmt::Write, s: &Settings, st: &Status) ->
     write_days(out, s.alarm_days)?;
     write!(
         out,
-        "\",\"skip\":{},\"melody\":\"{}\",\"twelve_hour\":{},\"tz\":{},\"temp_offset\":{},\"temp_show\":\"{}\",\"hostname\":\"{}\",\"ssid\":\"{}\",\"password_set\":{},\"token_set\":{},\"version\":\"{}\",\"slot\":\"{}\",\"mode\":\"{}\",\"uptime\":{},\"heals\":{},\"temp_c\":{},\"temp_f\":{},\"light\":{},\"rssi\":{},\"last_heal\":",
+        "\",\"skip\":{},\"melody\":\"{}\",\"twelve_hour\":{},\"tz\":{},\"temp_offset\":{},\"temp_show\":\"{}\",\"hostname\":\"{}\",\"ssid\":\"{}\",\"password_set\":{},\"token_set\":{},\
+\"mqtt_host\":\"{}\",\"mqtt_port\":{},\"mqtt_user\":\"{}\",\"mqtt_password_set\":{},\"mqtt\":\"{}\",\"ringing\":{},\
+\"version\":\"{}\",\"slot\":\"{}\",\"mode\":\"{}\",\"uptime\":{},\"heals\":{},\"temp_c\":{},\"temp_f\":{},\"light\":{},\"rssi\":{},\"last_heal\":",
         s.skip_next,
         melody::name(s.melody),
         s.twelve_hour,
@@ -443,6 +515,12 @@ pub fn write_json(out: &mut impl core::fmt::Write, s: &Settings, st: &Status) ->
         JsonStr(s.wifi.ssid.as_str()),
         !s.wifi.password.0.is_empty(),
         !s.token.0.is_empty(),
+        s.mqtt.host.as_str(),
+        s.mqtt.port,
+        JsonStr(s.mqtt.user.as_str()),
+        !s.mqtt.password.0.is_empty(),
+        st.mqtt.name(),
+        st.ringing,
         st.version,
         st.slot,
         st.mode,
@@ -463,9 +541,10 @@ pub fn write_json(out: &mut impl core::fmt::Write, s: &Settings, st: &Status) ->
 /// update page, the network and its signal, the room, then uptime and
 /// self-heals. `ssid` is the stored network, the only one the station
 /// joins.
-fn write_status(out: &mut impl core::fmt::Write, ssid: &str, st: &Status) -> core::fmt::Result {
+fn write_status(out: &mut impl core::fmt::Write, s: &Settings, st: &Status) -> core::fmt::Result {
     write_firmware_line(out, st, true)?;
-    write_wifi_line(out, ssid, st)?;
+    write_wifi_line(out, s.wifi.ssid.as_str(), st)?;
+    write_mqtt_line(out, s, st)?;
     write_room_line(out, st)?;
     write!(out, "<p><small>Up {}. Self-heal resets since power-up: {}", Span(st.uptime_secs as i64), st.heals)?;
     if let Some(h) = st.last_heal {
@@ -486,6 +565,18 @@ fn write_wifi_line(out: &mut impl core::fmt::Write, ssid: &str, st: &Status) -> 
         Some(rssi) => write!(out, "<p><small>Wi-Fi <b>{}</b>, {rssi} dBm.</small></p>", HtmlStr(ssid)),
         None => write!(out, "<p><small>Wi-Fi <b>{}</b>: not connected.</small></p>", HtmlStr(ssid)),
     }
+}
+
+/// The broker and whether the clock is on it, or why not.
+fn write_mqtt_line(out: &mut impl core::fmt::Write, s: &Settings, st: &Status) -> core::fmt::Result {
+    if s.mqtt.is_none() {
+        return out.write_str("<p><small>MQTT off.</small></p>");
+    }
+    write!(out, "<p><small>MQTT {} <b>{}:{}</b>", st.mqtt.name(), s.mqtt.host.as_str(), s.mqtt.port)?;
+    if let Link::Connecting { last_error: Some(e) } = st.mqtt {
+        write!(out, ", last: {e}")?;
+    }
+    out.write_str(".</small></p>")
 }
 
 /// The sensors: the temperature in both units and the light index, or
@@ -688,6 +779,11 @@ pub fn write_page(
 <label>Timezone, minutes east of UTC <input type=number name=tz min=-{lim} max={lim} step=15 value={}></label>\
 <label>Thermometer offset, °C <input type=number name=temp_offset min=-{tlim} max={tlim} step=0.1 value={}></label>\
 <label>Hostname, for the DHCP server <input type=text name=hostname maxlength={hmax} pattern=\"[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?\" value=\"{}\"></label></fieldset>\
+<fieldset><legend>Home Assistant</legend>\
+<label>MQTT broker, empty for none <input type=text name=mqtt_host maxlength={bmax} pattern=\"[A-Za-z0-9.-]*\" value=\"{}\"></label>\
+<label>Port <input type=number name=mqtt_port min=1 max=65535 value={}></label>\
+<label>User <input type=text name=mqtt_user maxlength={umax} autocomplete=off value=\"{}\"></label>\
+<label>Password, empty keeps the stored one <input type=password name=mqtt_password maxlength={pmax} autocomplete=new-password></label></fieldset>\
 <button>Save</button> <b id=u hidden>Changes not saved yet.</b></form>\
 <script>var m=document.getElementById('m'),f=document.forms[0],u=document.getElementById('u');\
 document.getElementById('p').onclick=function(e){{e.preventDefault();\
@@ -699,11 +795,17 @@ e.options?!e.options[e.selectedIndex].defaultSelected:e.value!=e.defaultValue))d
         s.tz_offset_minutes,
         Tenths(s.temp_offset_dc),
         s.hostname.as_str(),
+        s.mqtt.host.as_str(),
+        s.mqtt.port,
+        HtmlStr(s.mqtt.user.as_str()),
         lim = TZ_LIMIT_MINUTES,
         tlim = Tenths(TEMP_OFFSET_LIMIT_DC),
         hmax = HOSTNAME_MAX,
+        bmax = BROKER_HOST_MAX,
+        umax = BROKER_USER_MAX,
+        pmax = BROKER_PASSWORD_MAX,
     )?;
-    write_status(out, s.wifi.ssid.as_str(), st)?;
+    write_status(out, s, st)?;
     out.write_str(
         "<p><small>Scriptable: <code>GET /api</code>, <code>POST /api</code> with the same fields.</small></p></body></html>",
     )
@@ -887,6 +989,8 @@ mod tests {
             temp_dc: Some(-200),
             light: Some(100),
             rssi: Some(-100),
+            mqtt: Link::Connecting { last_error: Some("connection refused by the broker") },
+            ringing: true,
         }
     }
 
@@ -939,7 +1043,7 @@ mod tests {
     fn apply_sets_every_key() {
         let mut s = Settings::DEFAULT;
         let body = b"color=cyan&brightness=25&alarm=06%3A30&armed=on&days=weekend&skip=1&twelve_hour=true&tz=-420&temp_offset=-0.7&temp_show=f&hostname=Bedroom-Clock&melody=random";
-        apply(&mut s, body, true, false).unwrap();
+        apply(&mut s, body, true, Allow::NONE).unwrap();
         assert_eq!(s.color, PALETTE_NAMES.iter().position(|n| *n == "cyan").unwrap());
         assert_eq!(s.brightness_pct(), 25);
         assert_eq!((s.alarm_hour, s.alarm_minute), (6, 30));
@@ -951,17 +1055,33 @@ mod tests {
         assert_eq!(s.hostname.as_str(), "bedroom-clock");
         assert_eq!(s.melody, melody::RANDOM);
         assert!(s.is_valid());
+        // The broker keys, with the page's allowance.
+        apply(&mut s, b"mqtt_host=10.1.1.5&mqtt_port=1884&mqtt_user=clock&mqtt_password=p%26ss+word", true, Allow::PAGE).unwrap();
+        assert_eq!((s.mqtt.host.as_str(), s.mqtt.port, s.mqtt.user.as_str(), s.mqtt.password.0.as_str()), ("10.1.1.5", 1884, "clock", "p&ss word"));
+        assert!(s.is_valid());
+        // An empty password keeps the stored one; an empty host clears everything and sets the flag.
+        apply(&mut s, b"mqtt_password=", false, Allow::PAGE).unwrap();
+        assert_eq!(s.mqtt.password.0.as_str(), "p&ss word");
+        assert!(!s.mqtt_cleared);
+        apply(&mut s, b"mqtt_host=", false, Allow::PAGE).unwrap();
+        assert!(s.mqtt.is_none() && s.mqtt.user.is_empty() && s.mqtt.password.0.is_empty() && s.mqtt_cleared);
+        assert_eq!(s.mqtt.port, 1884, "the port stays");
+        apply(&mut s, b"mqtt_host=broker.lan", false, Allow::PAGE).unwrap();
+        assert!(!s.mqtt_cleared);
+        // The alarm as Home Assistant's time entity sends it.
+        apply(&mut s, b"alarm=07%3A45%3A00", false, Allow::NONE).unwrap();
+        assert_eq!((s.alarm_hour, s.alarm_minute), (7, 45));
         // The page's form: absent checkboxes turn off; the API's does not.
-        apply(&mut s, b"tz=0", true, false).unwrap();
+        apply(&mut s, b"tz=0", true, Allow::NONE).unwrap();
         assert!(!s.alarm_armed && !s.skip_next && !s.twelve_hour);
         s.alarm_armed = true;
-        apply(&mut s, b"tz=60", false, false).unwrap();
+        apply(&mut s, b"tz=60", false, Allow::NONE).unwrap();
         assert!(s.alarm_armed);
         // An empty body, stray separators and a key without a value.
-        apply(&mut s, b"", false, false).unwrap();
-        apply(&mut s, b"&&tz=15&", false, false).unwrap();
+        apply(&mut s, b"", false, Allow::NONE).unwrap();
+        apply(&mut s, b"&&tz=15&", false, Allow::NONE).unwrap();
         assert_eq!(s.tz_offset_minutes, 15);
-        assert_eq!(apply(&mut s, b"armed", false, false), Ok(()));
+        assert_eq!(apply(&mut s, b"armed", false, Allow::NONE), Ok(()));
         assert!(!s.alarm_armed);
     }
 
@@ -970,7 +1090,7 @@ mod tests {
         let s0 = Settings::DEFAULT;
         let try_body = |body: &[u8]| {
             let mut s = s0;
-            apply(&mut s, body, false, false)
+            apply(&mut s, body, false, Allow::NONE)
         };
         assert_eq!(try_body(b"colour=red"), Err(FormError::UnknownKey));
         assert_eq!(try_body(b"color=pink"), Err(FormError::BadValue));
@@ -979,6 +1099,9 @@ mod tests {
         assert_eq!(try_body(b"alarm=24:00"), Err(FormError::BadValue));
         assert_eq!(try_body(b"alarm=23:60"), Err(FormError::BadValue));
         assert_eq!(try_body(b"alarm=7"), Err(FormError::BadValue));
+        assert_eq!(try_body(b"alarm=07:45:60"), Err(FormError::BadValue));
+        assert_eq!(try_body(b"alarm=07:45:x"), Err(FormError::BadValue));
+        assert_eq!(try_body(b"alarm=07:45:00"), Ok(()));
         assert_eq!(try_body(b"tz=841"), Err(FormError::BadValue));
         assert_eq!(try_body(b"tz=-841"), Err(FormError::BadValue));
         assert_eq!(try_body(b"tz=840"), Ok(()));
@@ -1005,27 +1128,55 @@ mod tests {
     }
 
     #[test]
+    fn broker_keys_need_the_allowance_and_their_rules() {
+        let page = |body: &[u8]| {
+            let mut s = Settings::DEFAULT;
+            apply(&mut s, body, false, Allow::PAGE).map(|()| s)
+        };
+        for body in [b"mqtt_host=x".as_slice(), b"mqtt_port=1883", b"mqtt_user=", b"mqtt_password=", b"tz=0&mqtt_host="] {
+            let mut s = Settings::DEFAULT;
+            assert_eq!(apply(&mut s, body, false, Allow::NONE), Err(FormError::Forbidden), "{:?}", core::str::from_utf8(body));
+            assert!(apply(&mut s, body, false, Allow::ALL).is_ok());
+        }
+        assert_eq!(page(b"ssid=x").err(), Some(FormError::Forbidden), "the page still may not set the network");
+        assert_eq!(page(b"mqtt_host=a+b").err(), Some(FormError::BadValue));
+        assert_eq!(page(b"mqtt_host=a%3A1883").err(), Some(FormError::BadValue));
+        assert_eq!(page(b"mqtt_port=0").err(), Some(FormError::BadValue));
+        assert_eq!(page(b"mqtt_port=65536").err(), Some(FormError::BadValue));
+        assert_eq!(page(b"mqtt_port=abc").err(), Some(FormError::BadValue));
+        assert_eq!(page(b"mqtt_user=a+b").err(), Some(FormError::BadValue));
+        assert_eq!(page(b"mqtt_password=%09").err(), Some(FormError::BadValue));
+        let long_host = format!("mqtt_host={}", "h".repeat(BROKER_HOST_MAX + 1));
+        assert_eq!(page(long_host.as_bytes()).err(), Some(FormError::BadValue));
+        let long_user = format!("mqtt_user={}", "u".repeat(BROKER_USER_MAX + 1));
+        assert_eq!(page(long_user.as_bytes()).err(), Some(FormError::BadValue));
+        let long_password = format!("mqtt_password={}", "p".repeat(BROKER_PASSWORD_MAX + 1));
+        assert_eq!(page(long_password.as_bytes()).err(), Some(FormError::BadValue), "VALUE_MAX is the password's length");
+        assert_eq!(page(b"mqtt_host=homeassistant.local&mqtt_port=65535").map(|s| s.mqtt.port), Ok(65535));
+    }
+
+    #[test]
     fn network_keys_need_the_credentials_flag() {
         let mut s = Settings::DEFAULT;
         s.wifi.ssid = Text::new("home").unwrap();
         // Refused on the key alone, even when the value is what is stored.
         for body in [b"ssid=home".as_slice(), b"ssid_pick=home", b"password=", b"tz=0&password=12345678"] {
             let mut t = s;
-            assert_eq!(apply(&mut t, body, false, false), Err(FormError::Forbidden), "{:?}", core::str::from_utf8(body));
+            assert_eq!(apply(&mut t, body, false, Allow::NONE), Err(FormError::Forbidden), "{:?}", core::str::from_utf8(body));
         }
         let mut t = s;
-        apply(&mut t, b"ssid_pick=&ssid=Caf%C3%A9+Net&password=p%26ss+word", false, true).unwrap();
+        apply(&mut t, b"ssid_pick=&ssid=Caf%C3%A9+Net&password=p%26ss+word", false, Allow::ALL).unwrap();
         assert_eq!(t.wifi.ssid.as_str(), "Café Net");
         assert_eq!(t.wifi.password.0.as_str(), "p&ss word");
         // Empty SSID leaves the network alone; the password rule applies.
         let mut u = t;
-        apply(&mut u, b"ssid=&ssid_pick=", false, true).unwrap();
+        apply(&mut u, b"ssid=&ssid_pick=", false, Allow::ALL).unwrap();
         assert_eq!(u.wifi.ssid, t.wifi.ssid);
-        assert_eq!(apply(&mut u, b"password=1234567", false, true), Err(FormError::BadValue));
-        apply(&mut u, b"password=", false, true).unwrap();
+        assert_eq!(apply(&mut u, b"password=1234567", false, Allow::ALL), Err(FormError::BadValue));
+        apply(&mut u, b"password=", false, Allow::ALL).unwrap();
         assert!(u.wifi.password.0.is_empty(), "empty is an open network");
         let long = format!("ssid={}", "s".repeat(SSID_MAX + 1));
-        assert_eq!(apply(&mut u, long.as_bytes(), false, true), Err(FormError::BadValue));
+        assert_eq!(apply(&mut u, long.as_bytes(), false, Allow::ALL), Err(FormError::BadValue));
     }
 
     /// The list's pick wins over the typed name in either order; the
@@ -1034,18 +1185,18 @@ mod tests {
     fn the_pick_wins_over_the_typed_name() {
         for body in [b"ssid_pick=new&ssid=old&password=12345678".as_slice(), b"ssid=old&ssid_pick=new&password=12345678"] {
             let mut s = Settings::DEFAULT;
-            apply(&mut s, body, false, true).unwrap();
+            apply(&mut s, body, false, Allow::ALL).unwrap();
             assert_eq!(s.wifi.ssid.as_str(), "new", "{:?}", core::str::from_utf8(body));
             assert_eq!(s.wifi.password.0.as_str(), "12345678");
         }
         let mut s = Settings::DEFAULT;
-        apply(&mut s, b"ssid_pick=&ssid=typed", false, true).unwrap();
+        apply(&mut s, b"ssid_pick=&ssid=typed", false, Allow::ALL).unwrap();
         assert_eq!(s.wifi.ssid.as_str(), "typed");
-        apply(&mut s, b"ssid_pick=picked&ssid=", false, true).unwrap();
+        apply(&mut s, b"ssid_pick=picked&ssid=", false, Allow::ALL).unwrap();
         assert_eq!(s.wifi.ssid.as_str(), "picked");
         // A bad pick is still refused, and the key still needs the flag.
-        assert_eq!(apply(&mut s, b"ssid_pick=x&ssid=%zz", false, true), Err(FormError::BadValue));
-        assert_eq!(apply(&mut s, b"ssid_pick=x", false, false), Err(FormError::Forbidden));
+        assert_eq!(apply(&mut s, b"ssid_pick=x&ssid=%zz", false, Allow::ALL), Err(FormError::BadValue));
+        assert_eq!(apply(&mut s, b"ssid_pick=x", false, Allow::NONE), Err(FormError::Forbidden));
     }
 
     #[test]
@@ -1114,6 +1265,14 @@ mod tests {
         assert!(out.contains(r#""ssid":"my \"net\"\\\u0001""#), "{out}");
         assert!(out.contains(r#""password_set":true,"token_set":true"#));
         assert!(!out.contains("secret"));
+        assert!(out.contains(r#""mqtt_host":"","mqtt_port":1883,"mqtt_user":"","mqtt_password_set":false,"mqtt":"connecting","ringing":true,"version""#), "{out}");
+        s.mqtt.host = Text::new("broker.lan").unwrap();
+        s.mqtt.user = Text::new("cl\"ock").unwrap();
+        s.mqtt.password = Secret(Text::new("secret-mqtt").unwrap());
+        let mut with = String::new();
+        write_json(&mut with, &s, &status(true)).unwrap();
+        assert!(with.contains(r#""mqtt_host":"broker.lan","mqtt_port":1883,"mqtt_user":"cl\"ock","mqtt_password_set":true"#), "{with}");
+        assert!(!with.contains("secret"));
         assert!(out.contains(r#""temp_c":-20.0,"temp_f":-4.0,"light":100,"rssi":-100,"last_heal""#), "{out}");
         assert!(out.contains(r#""temp_offset":0.0,"temp_show":"c","hostname""#), "{out}");
         assert!(out.contains(r#""last_heal":1800000000}"#));
@@ -1146,6 +1305,9 @@ mod tests {
         s.tz_offset_minutes = -TZ_LIMIT_MINUTES;
         s.melody = melody::RANDOM;
         s.wifi.ssid = Text::new(&"\"".repeat(SSID_MAX)).unwrap(); // escaped into the Wi-Fi line
+        s.mqtt.host = Text::new(&"h".repeat(BROKER_HOST_MAX)).unwrap(); // twice: the field and the status line
+        s.mqtt.port = 65535;
+        s.mqtt.user = Text::new(&"\"".repeat(BROKER_USER_MAX)).unwrap(); // escaped into the field
         let mut out = String::new();
         write_page(&mut out, &s, &status(true), Some(FormError::Forbidden)).unwrap();
         println!("settings page: {} bytes of {PAGE_MAX}", out.len());
@@ -1176,12 +1338,24 @@ mod tests {
     fn wifi_line_says_why_not() {
         let mut st = status(false);
         st.rssi = None;
+        let mut s = Settings::DEFAULT;
+        s.wifi.ssid = Text::new("home").unwrap();
         let mut out = String::new();
-        write_status(&mut out, "home", &st).unwrap();
+        write_status(&mut out, &s, &st).unwrap();
         assert!(out.contains("Wi-Fi <b>home</b>: not connected."), "{out}");
+        assert!(out.contains("MQTT off."), "{out}");
         out.clear();
-        write_status(&mut out, "", &st).unwrap();
+        write_status(&mut out, &Settings::DEFAULT, &st).unwrap();
         assert!(out.contains("Wi-Fi: no network stored."), "{out}");
+        // The broker line: connecting with the last error, then connected.
+        s.mqtt.host = Text::new("10.1.1.5").unwrap();
+        out.clear();
+        write_status(&mut out, &s, &st).unwrap();
+        assert!(out.contains("MQTT connecting <b>10.1.1.5:1883</b>, last: connection refused by the broker."), "{out}");
+        st.mqtt = Link::Connected;
+        out.clear();
+        write_status(&mut out, &s, &st).unwrap();
+        assert!(out.contains("MQTT connected <b>10.1.1.5:1883</b>."), "{out}");
     }
 
     #[test]

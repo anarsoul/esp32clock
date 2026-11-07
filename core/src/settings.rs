@@ -15,7 +15,7 @@ use embassy_sync::watch::{Receiver, Watch};
 
 use crate::config::{
     API_TOKEN, DEFAULT_ALARM, DEFAULT_BRIGHTNESS, DEFAULT_COLOR, DEFAULT_HOSTNAME, DEFAULT_TWELVE_HOUR,
-    DEFAULT_TZ_OFFSET_MINUTES, MAX_CURRENT_STEP, WIFI_PASSWORD, WIFI_SSID,
+    DEFAULT_TZ_OFFSET_MINUTES, MAX_CURRENT_STEP, MQTT_HOST, MQTT_PASSWORD, MQTT_PORT, MQTT_USER, WIFI_PASSWORD, WIFI_SSID,
 };
 use crate::melody;
 use crate::panel::{Levels, MAX_LEVEL};
@@ -272,6 +272,106 @@ const _: () = assert!(
 );
 const _: () = assert!(valid_token(API_TOKEN), "API_TOKEN must be empty or 8 to 32 printable characters without spaces");
 
+/// Longest broker host (an IPv4 literal or a DNS name; a name is 63
+/// bytes a label but this is a LAN), user and password.
+pub const BROKER_HOST_MAX: usize = 64;
+pub const BROKER_USER_MAX: usize = 32;
+pub const BROKER_PASSWORD_MAX: usize = 64;
+
+/// The MQTT broker the clock announces itself to for Home Assistant.
+/// `NONE` (an empty host) means MQTT is off.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Broker {
+    pub host: Text<BROKER_HOST_MAX>,
+    pub port: u16,
+    pub user: Text<BROKER_USER_MAX>,
+    pub password: Secret<BROKER_PASSWORD_MAX>,
+}
+
+impl Broker {
+    pub const NONE: Broker = Broker { host: Text::EMPTY, port: MQTT_PORT, user: Text::EMPTY, password: Secret(Text::EMPTY) };
+
+    /// The build-time seed, checked at compile time.
+    const BUILT_IN: Broker = Broker {
+        host: Text::literal(MQTT_HOST),
+        port: MQTT_PORT,
+        user: Text::literal(MQTT_USER),
+        password: Secret(Text::literal(MQTT_PASSWORD)),
+    };
+
+    pub fn is_none(&self) -> bool {
+        self.host.is_empty()
+    }
+
+    /// The host is empty or a host name, the port is not 0, the user has
+    /// no spaces, and both the user and the password are printable.
+    pub fn is_valid(&self) -> bool {
+        valid_broker_host(self.host.as_str())
+            && self.port != 0
+            && valid_broker_user(self.user.as_str())
+            && valid_broker_password(self.password.0.as_str())
+    }
+}
+
+/// Empty, or up to `BROKER_HOST_MAX` of letters, digits, dots and
+/// dashes: an IPv4 literal or a DNS name, what `dns_query` and the
+/// socket take, and nothing a log line or a page need escape.
+pub const fn valid_broker_host(h: &str) -> bool {
+    let b = h.as_bytes();
+    if b.len() > BROKER_HOST_MAX {
+        return false;
+    }
+    let mut i = 0;
+    while i < b.len() {
+        if !(b[i].is_ascii_alphanumeric() || b[i] == b'.' || b[i] == b'-') {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// Printable ASCII, no spaces, up to the length: a user name that
+/// survives a shell and a configuration file.
+const fn printable_no_spaces(s: &str, max: usize) -> bool {
+    let b = s.as_bytes();
+    if b.len() > max {
+        return false;
+    }
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] <= b' ' || b[i] > b'~' {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+pub const fn valid_broker_user(u: &str) -> bool {
+    printable_no_spaces(u, BROKER_USER_MAX)
+}
+
+/// Printable ASCII with spaces allowed, up to `BROKER_PASSWORD_MAX`.
+pub const fn valid_broker_password(p: &str) -> bool {
+    let b = p.as_bytes();
+    if b.len() > BROKER_PASSWORD_MAX {
+        return false;
+    }
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] < b' ' || b[i] > b'~' {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+const _: () = assert!(valid_broker_host(MQTT_HOST), "MQTT_HOST must be up to 64 of letters, digits, dots and dashes");
+const _: () = assert!(valid_broker_user(MQTT_USER), "MQTT_USER must be up to 32 printable characters without spaces");
+const _: () = assert!(valid_broker_password(MQTT_PASSWORD), "MQTT_PASSWORD must be up to 64 printable characters");
+
 /// Whether the panel shows the temperature for a few seconds each
 /// minute, and in which unit.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -337,10 +437,15 @@ pub struct Settings {
     /// boot; a token that was never set is filled. Not a form or API
     /// key, not in the JSON; stored as a flag bit.
     pub token_cleared: bool,
+    /// The MQTT broker for Home Assistant; `Broker::NONE` for no MQTT.
+    pub mqtt: Broker,
+    /// The broker was cleared on the page, so the build's `MQTT_HOST`
+    /// must not fill it back in at boot. A flag bit like `token_cleared`.
+    pub mqtt_cleared: bool,
 }
 
 /// Bytes in a stored record.
-pub const RECORD_LEN: usize = 171;
+pub const RECORD_LEN: usize = 336;
 
 /// The thermometer offset's bound, tenths of a degree either way.
 pub const TEMP_OFFSET_LIMIT_DC: i16 = 100;
@@ -349,7 +454,7 @@ pub const TEMP_OFFSET_LIMIT_DC: i16 = 100;
 /// the new fields and teach `from_record` the old one, or the user's
 /// settings are lost; never reorder, since an older image reads a newer
 /// record by its prefix.
-const RECORD_VERSION: u8 = 9;
+const RECORD_VERSION: u8 = 10;
 
 /// Where the hostname sits in a version 3 record.
 const RECORD_HOSTNAME_LEN: usize = 9;
@@ -378,6 +483,7 @@ const RECORD_TOKEN: usize = RECORD_TOKEN_LEN + 1;
 /// does not know are ignored, so a later image may add some.
 const RECORD_FLAGS: usize = RECORD_TOKEN + TOKEN_MAX;
 const FLAG_TOKEN_CLEARED: u8 = 1 << 0;
+const FLAG_MQTT_CLEARED: u8 = 1 << 1;
 
 /// Where the thermometer offset sits in a version 8 record, two bytes
 /// little-endian.
@@ -385,7 +491,18 @@ const RECORD_TEMP_OFFSET: usize = RECORD_FLAGS + 1;
 
 /// Where the temperature-on-the-panel byte sits in a version 9 record.
 const RECORD_TEMP_SHOW: usize = RECORD_TEMP_OFFSET + 2;
-const _: () = assert!(RECORD_TEMP_SHOW + 1 == RECORD_LEN, "RECORD_LEN does not match the layout");
+
+/// Where the MQTT broker sits in a version 10 record: the host, a
+/// length byte and its field; the port, two bytes little-endian; the
+/// user and the password, each a length byte and its field.
+const RECORD_BROKER_HOST_LEN: usize = RECORD_TEMP_SHOW + 1;
+const RECORD_BROKER_HOST: usize = RECORD_BROKER_HOST_LEN + 1;
+const RECORD_BROKER_PORT: usize = RECORD_BROKER_HOST + BROKER_HOST_MAX;
+const RECORD_BROKER_USER_LEN: usize = RECORD_BROKER_PORT + 2;
+const RECORD_BROKER_USER: usize = RECORD_BROKER_USER_LEN + 1;
+const RECORD_BROKER_PASSWORD_LEN: usize = RECORD_BROKER_USER + BROKER_USER_MAX;
+const RECORD_BROKER_PASSWORD: usize = RECORD_BROKER_PASSWORD_LEN + 1;
+const _: () = assert!(RECORD_BROKER_PASSWORD + BROKER_PASSWORD_MAX == RECORD_LEN, "RECORD_LEN does not match the layout");
 
 /// Day names, Monday first, for the page and the API.
 pub const DAY_NAMES: [&str; 7] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
@@ -423,19 +540,24 @@ impl Settings {
         wifi: Credentials::NONE,
         token: Secret(Text::EMPTY),
         token_cleared: false,
+        mqtt: Broker::NONE,
+        mqtt_cleared: false,
     };
 
-    /// Fill in what the build has and the record lacks: the network and
-    /// the token. Run once on the loaded value before `init`; the next
-    /// save then carries them in the record, after which the record wins
-    /// over a later build's constants. A token cleared on purpose
-    /// (`token_cleared`) stays empty.
+    /// Fill in what the build has and the record lacks: the network, the
+    /// token and the broker. Run once on the loaded value before `init`;
+    /// the next save then carries them in the record, after which the
+    /// record wins over a later build's constants. A token or a broker
+    /// cleared on purpose (`token_cleared`, `mqtt_cleared`) stays empty.
     pub fn seed(&mut self) {
         if self.wifi.is_none() && !Credentials::BUILT_IN.is_none() {
             self.wifi = Credentials::BUILT_IN;
         }
         if self.token.0.is_empty() && !self.token_cleared && !API_TOKEN.is_empty() {
             self.token = Secret(Text::literal(API_TOKEN));
+        }
+        if self.mqtt.is_none() && !self.mqtt_cleared && !Broker::BUILT_IN.is_none() {
+            self.mqtt = Broker::BUILT_IN;
         }
     }
 
@@ -466,6 +588,7 @@ impl Settings {
             && self.melody <= melody::RANDOM
             && self.wifi.is_valid()
             && valid_token(self.token.0.as_str())
+            && self.mqtt.is_valid()
     }
 
     /// Whether the alarm rings on `weekday` (0 Monday to 6 Sunday).
@@ -478,7 +601,8 @@ impl Settings {
     /// hostname length, hostname padded to 24 bytes, alarm days, melody
     /// (`0xff` for random), then the SSID, the password and the token,
     /// each a length byte and a padded field, then the flags byte, the
-    /// thermometer offset and the temperature-on-the-panel byte.
+    /// thermometer offset, the temperature-on-the-panel byte, and the
+    /// broker: host, port, user and password.
     pub fn to_record(&self) -> [u8; RECORD_LEN] {
         let tz = self.tz_offset_minutes.to_le_bytes();
         let mut r = [0u8; RECORD_LEN];
@@ -503,9 +627,16 @@ impl Settings {
         r[RECORD_PASSWORD..RECORD_PASSWORD + PASSWORD_MAX].copy_from_slice(&self.wifi.password.0.bytes);
         r[RECORD_TOKEN_LEN] = self.token.0.len;
         r[RECORD_TOKEN..RECORD_TOKEN + TOKEN_MAX].copy_from_slice(&self.token.0.bytes);
-        r[RECORD_FLAGS] = if self.token_cleared { FLAG_TOKEN_CLEARED } else { 0 };
+        r[RECORD_FLAGS] = if self.token_cleared { FLAG_TOKEN_CLEARED } else { 0 } | if self.mqtt_cleared { FLAG_MQTT_CLEARED } else { 0 };
         r[RECORD_TEMP_OFFSET..RECORD_TEMP_OFFSET + 2].copy_from_slice(&self.temp_offset_dc.to_le_bytes());
         r[RECORD_TEMP_SHOW] = self.temp_show as u8;
+        r[RECORD_BROKER_HOST_LEN] = self.mqtt.host.len;
+        r[RECORD_BROKER_HOST..RECORD_BROKER_HOST + BROKER_HOST_MAX].copy_from_slice(&self.mqtt.host.bytes);
+        r[RECORD_BROKER_PORT..RECORD_BROKER_PORT + 2].copy_from_slice(&self.mqtt.port.to_le_bytes());
+        r[RECORD_BROKER_USER_LEN] = self.mqtt.user.len;
+        r[RECORD_BROKER_USER..RECORD_BROKER_USER + BROKER_USER_MAX].copy_from_slice(&self.mqtt.user.bytes);
+        r[RECORD_BROKER_PASSWORD_LEN] = self.mqtt.password.0.len;
+        r[RECORD_BROKER_PASSWORD..RECORD_BROKER_PASSWORD + BROKER_PASSWORD_MAX].copy_from_slice(&self.mqtt.password.0.bytes);
         r
     }
 
@@ -515,8 +646,9 @@ impl Settings {
     /// 4 (M7) after the alarm days, version 5 (M8) after the melody, so
     /// those read as no network and no token, version 6 (M10) after
     /// the token, so no flags, version 7 after the flags, so no
-    /// thermometer offset, and version 8 after the offset, so the
-    /// temperature on the panel at its default. Versions are append-only, so a record
+    /// thermometer offset, version 8 after the offset, so the
+    /// temperature on the panel at its default, and version 9 after
+    /// that byte, so no broker. Versions are append-only, so a record
     /// from a newer image is read by the prefix this one knows, and a
     /// colour, brightness or melody index past this image's table (an
     /// entry a newer image added, or a higher current ceiling) lands on
@@ -563,13 +695,26 @@ impl Settings {
             s.token = Secret(Text::from_record(*r.get(RECORD_TOKEN_LEN)?, r.get(RECORD_TOKEN..RECORD_TOKEN + TOKEN_MAX)?)?);
         }
         if version >= 7 {
-            s.token_cleared = *r.get(RECORD_FLAGS)? & FLAG_TOKEN_CLEARED != 0;
+            let flags = *r.get(RECORD_FLAGS)?;
+            s.token_cleared = flags & FLAG_TOKEN_CLEARED != 0;
+            s.mqtt_cleared = flags & FLAG_MQTT_CLEARED != 0;
         }
         if version >= 8 {
             s.temp_offset_dc = i16::from_le_bytes([*r.get(RECORD_TEMP_OFFSET)?, *r.get(RECORD_TEMP_OFFSET + 1)?]);
         }
         if version >= 9 {
             s.temp_show = TempShow::from_byte(*r.get(RECORD_TEMP_SHOW)?)?;
+        }
+        if version >= 10 {
+            s.mqtt = Broker {
+                host: Text::from_record(*r.get(RECORD_BROKER_HOST_LEN)?, r.get(RECORD_BROKER_HOST..RECORD_BROKER_HOST + BROKER_HOST_MAX)?)?,
+                port: u16::from_le_bytes([*r.get(RECORD_BROKER_PORT)?, *r.get(RECORD_BROKER_PORT + 1)?]),
+                user: Text::from_record(*r.get(RECORD_BROKER_USER_LEN)?, r.get(RECORD_BROKER_USER..RECORD_BROKER_USER + BROKER_USER_MAX)?)?,
+                password: Secret(Text::from_record(
+                    *r.get(RECORD_BROKER_PASSWORD_LEN)?,
+                    r.get(RECORD_BROKER_PASSWORD..RECORD_BROKER_PASSWORD + BROKER_PASSWORD_MAX)?,
+                )?),
+            };
         }
         s.color = s.color.min(PALETTE.len() - 1);
         // A record saved by a build with a higher ceiling may name a step
@@ -583,8 +728,9 @@ impl Settings {
     }
 }
 
-/// Receivers: the display task, the persist task and the hostname task.
-const RECEIVERS: usize = 3;
+/// Receivers: the display task, the persist task, the hostname task and
+/// the MQTT task.
+const RECEIVERS: usize = 4;
 
 static WATCH: Watch<CriticalSectionRawMutex, Settings, RECEIVERS> = Watch::new();
 
@@ -651,6 +797,13 @@ mod tests {
             },
             token: Secret(Text::new(&"t".repeat(TOKEN_MAX)).unwrap()),
             token_cleared: false,
+            mqtt: Broker {
+                host: Text::new(&"h".repeat(BROKER_HOST_MAX)).unwrap(),
+                port: 65535,
+                user: Text::new(&"u".repeat(BROKER_USER_MAX)).unwrap(),
+                password: Secret(Text::new(&"w".repeat(BROKER_PASSWORD_MAX)).unwrap()),
+            },
+            mqtt_cleared: false,
         }
     }
 
@@ -737,6 +890,7 @@ mod tests {
             6 => RECORD_FLAGS,
             7 => RECORD_TEMP_OFFSET,
             8 => RECORD_TEMP_SHOW,
+            9 => RECORD_BROKER_HOST_LEN,
             _ => RECORD_LEN,
         }
     }
@@ -760,7 +914,9 @@ mod tests {
             assert_eq!(got.token, if version >= 6 { s.token } else { Secret(Text::EMPTY) }, "v{version} token");
             assert!(!got.token_cleared, "v{version} has no flags");
             assert_eq!(got.temp_offset_dc, if version >= 8 { s.temp_offset_dc } else { 0 }, "v{version} thermometer offset");
-            assert_eq!(got.temp_show, d.temp_show, "v{version} has no temperature on the panel");
+            assert_eq!(got.temp_show, if version >= 9 { s.temp_show } else { d.temp_show }, "v{version} temperature on the panel");
+            assert_eq!(got.mqtt, Broker::NONE, "v{version} has no broker");
+            assert!(!got.mqtt_cleared);
         }
     }
 
@@ -773,7 +929,7 @@ mod tests {
         assert_eq!(Settings::from_record(&r), Some(s));
         // Flag bits a later image may add are ignored.
         let mut flagged = s.to_record();
-        flagged[RECORD_FLAGS] |= 0xFE;
+        flagged[RECORD_FLAGS] |= 0xFC;
         assert_eq!(Settings::from_record(&flagged), Some(s));
     }
 
@@ -792,6 +948,11 @@ mod tests {
         assert!(with(&|r| r[RECORD_TOKEN_LEN] = TOKEN_MIN as u8 - 1).is_none(), "token of 7");
         assert!(with(&|r| r[RECORD_TOKEN] = b' ').is_none(), "token with a space");
         assert!(with(&|r| r[RECORD_SSID] = 0xFF).is_none(), "SSID not UTF-8");
+        assert!(with(&|r| r[RECORD_BROKER_HOST_LEN] = BROKER_HOST_MAX as u8 + 1).is_none(), "host length past the field");
+        assert!(with(&|r| r[RECORD_BROKER_HOST] = b' ').is_none(), "host with a space");
+        assert!(with(&|r| r[RECORD_BROKER_PORT..RECORD_BROKER_PORT + 2].copy_from_slice(&[0, 0])).is_none(), "port 0");
+        assert!(with(&|r| r[RECORD_BROKER_USER] = b' ').is_none(), "user with a space");
+        assert!(with(&|r| r[RECORD_BROKER_PASSWORD] = 0x7f).is_none(), "password with a control character");
         assert!(with(&|r| r[3] = 24).is_none(), "alarm hour 24");
         assert!(with(&|r| r[4] = 60).is_none(), "alarm minute 60");
         assert!(with(&|r| r[2] = BRIGHTNESS_CHOICES.len() as u8).is_none(), "brightness past the whole list");
@@ -813,6 +974,8 @@ mod tests {
         })
         .unwrap();
         assert!(open.wifi.is_none() && open.token.0.is_empty());
+        let no_mqtt = with(&|r| r[RECORD_BROKER_HOST_LEN] = 0).unwrap();
+        assert!(no_mqtt.mqtt.is_none(), "an empty host is MQTT off");
     }
 
     #[test]
@@ -833,6 +996,16 @@ mod tests {
         assert_eq!(Settings::from_record(&cleared.to_record()), Some(cleared));
         assert_eq!(cleared.to_record()[RECORD_FLAGS], FLAG_TOKEN_CLEARED);
         assert_eq!(full().to_record()[RECORD_FLAGS], 0);
+        // The broker the same way: filled when never set, not when cleared.
+        assert_eq!(d.mqtt.is_none(), MQTT_HOST.is_empty());
+        let mut off = Settings { mqtt: Broker::NONE, mqtt_cleared: true, ..full() };
+        off.seed();
+        assert!(off.mqtt.is_none() && off.mqtt_cleared);
+        assert_eq!(Settings::from_record(&off.to_record()), Some(off));
+        assert_eq!(off.to_record()[RECORD_FLAGS], FLAG_MQTT_CLEARED);
+        let both = Settings { token: Secret(Text::EMPTY), token_cleared: true, ..off };
+        assert_eq!(both.to_record()[RECORD_FLAGS], FLAG_TOKEN_CLEARED | FLAG_MQTT_CLEARED);
+        assert_eq!(Settings::from_record(&both.to_record()), Some(both));
     }
 
     #[test]
@@ -842,6 +1015,8 @@ mod tests {
         assert!(text.contains(&"s".repeat(SSID_MAX)), "the SSID is shown");
         assert!(!text.contains("pppp"), "the password is hidden");
         assert!(!text.contains("tttt"), "the token is hidden");
+        assert!(text.contains(&"h".repeat(BROKER_HOST_MAX)) && text.contains(&"u".repeat(BROKER_USER_MAX)), "the broker and its user are shown");
+        assert!(!text.contains("wwww"), "the broker password is hidden");
         assert_eq!(format!("{:?}", s.token), "<set>");
         assert_eq!(format!("{:?}", Secret(Text::<8>::EMPTY)), "<none>");
         assert_eq!(format!("{:?}", s.hostname), format!("{:?}", s.hostname.as_str()));
@@ -864,6 +1039,32 @@ mod tests {
         assert!(!valid_password(&"p".repeat(PASSWORD_MAX + 1)));
         assert!(Text::<4>::new("abcde").is_none());
         assert_eq!(Text::<4>::new("abcd").map(|t| t.len()), Some(4));
+    }
+
+    #[test]
+    fn broker_rules() {
+        assert!(valid_broker_host(""));
+        assert!(valid_broker_host("10.1.1.5"));
+        assert!(valid_broker_host("homeassistant.local"));
+        assert!(valid_broker_host("mqtt-1.example.com"));
+        assert!(valid_broker_host(&"h".repeat(BROKER_HOST_MAX)));
+        assert!(!valid_broker_host(&"h".repeat(BROKER_HOST_MAX + 1)));
+        assert!(!valid_broker_host("a b"));
+        assert!(!valid_broker_host("a_b"));
+        assert!(!valid_broker_host("http://a"));
+        assert!(!valid_broker_host("a:1883"));
+        assert!(valid_broker_user(""));
+        assert!(valid_broker_user("clock"));
+        assert!(!valid_broker_user("cl ock"));
+        assert!(!valid_broker_user(&"u".repeat(BROKER_USER_MAX + 1)));
+        assert!(valid_broker_password(""));
+        assert!(valid_broker_password("p&ss word"));
+        assert!(!valid_broker_password("tab\there"));
+        assert!(!valid_broker_password(&"p".repeat(BROKER_PASSWORD_MAX + 1)));
+        assert!(Broker::NONE.is_none() && Broker::NONE.is_valid());
+        assert_eq!(Broker::NONE.port, MQTT_PORT);
+        assert!(!Broker { port: 0, ..Broker::NONE }.is_valid());
+        assert!(!Settings { mqtt: Broker { port: 0, ..Broker::NONE }, ..Settings::DEFAULT }.is_valid());
     }
 
     #[test]

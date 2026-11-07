@@ -5,12 +5,14 @@
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use embassy_futures::select::{Either4, select4};
+use embassy_futures::select::{Either, Either4, select, select4};
 use embassy_net::Stack;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Instant, Timer};
 use log::info;
 
-use crate::buttons::{self, Kind};
+use crate::buttons::{self, Button, Event, Kind};
 use crate::buzzer;
 use crate::net::{self, Mode};
 use crate::panel::{Panel, ScanImage};
@@ -129,6 +131,22 @@ pub fn ringing() -> bool {
     RINGING.load(Ordering::Relaxed)
 }
 
+/// The ringing edges, for the MQTT task's state message.
+static RINGING_CHANGED: Signal<CriticalSectionRawMutex, bool> = Signal::new();
+
+/// Wait for the alarm to start or stop ringing; the new state.
+pub async fn ringing_changed() -> bool {
+    RINGING_CHANGED.wait().await
+}
+
+/// An end to the ring asked for from elsewhere (the MQTT `silence`
+/// command): acts as a press would, and only while ringing.
+static SILENCE: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+pub fn silence() {
+    SILENCE.signal(());
+}
+
 /// Run the UI: wait for a tick, a button or a settings change from
 /// elsewhere, update, draw, ring. `stack` is only asked for the IP.
 #[embassy_executor::task]
@@ -189,6 +207,7 @@ pub async fn display_task(stack: Stack<'static>) -> ! {
                 buzzer::stop();
                 RINGING.store(false, Ordering::Relaxed);
             }
+            RINGING_CHANGED.signal(was_ringing);
         }
 
         let view = ui.view(&current, time, now.as_millis(), sensors::room().0);
@@ -211,7 +230,7 @@ pub async fn display_task(stack: Stack<'static>) -> ! {
             Timer::after(wait + Duration::from_millis(2)),
             buttons::next_event(),
             changes.changed(),
-            auth::pin_to_show(),
+            select(auth::pin_to_show(), SILENCE.wait()),
         )
         .await
         {
@@ -232,8 +251,14 @@ pub async fn display_task(stack: Stack<'static>) -> ! {
                 settings::update(|s| ui.handle(s, ev, now));
             }
             Either4::Third(_) => {}
-            Either4::Fourth(Some(pin)) => ui.show_pin(pin, Instant::now()),
-            Either4::Fourth(None) => ui.hide_pin(Instant::now()),
+            Either4::Fourth(Either::First(Some(pin))) => ui.show_pin(pin, Instant::now()),
+            Either4::Fourth(Either::First(None)) => ui.hide_pin(Instant::now()),
+            Either4::Fourth(Either::Second(())) => {
+                if ui.ringing() {
+                    let press = Event { button: Button::Bottom, kind: Kind::Short };
+                    settings::update(|s| ui.handle(s, press, Instant::now()));
+                }
+            }
         }
     }
 }

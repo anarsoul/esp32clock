@@ -4678,3 +4678,333 @@ Upload button invited a retry that could only fail); with the spent
 PIN signalled to the display and both buttons staying disabled, the
 user verified the pages and the panel: the wrong PIN takes the digits
 off at once and the line says to reload for a new one.
+
+### M12 — Home Assistant over MQTT — DONE, verified in Home Assistant by the user and on the bench 2026-11-07
+
+**Goal.** The clock shows up in Home Assistant as one device with its
+settings as entities (colour, brightness, alarm time, armed, skip,
+days, melody, 12 hour, temperature on the panel) and its readings as
+sensors (room temperature, light, signal, uptime, self-heals, whether
+the alarm is ringing), plus three buttons (play the melody, silence,
+reload). Nothing is typed into Home Assistant: the clock announces
+itself with MQTT discovery. The broker is a setting on the page, with
+build-time defaults like the Wi-Fi credentials and the token.
+
+**What Home Assistant expects** (its MQTT integration page, read
+2026-11-07). Discovery is a JSON payload on
+`<prefix>/<component>/<object_id>/config`, prefix `homeassistant`.
+Since 2024.11 one payload per *device* is the recommended form:
+component `device`, root keys `dev` (device: `ids`, `name`, `mf`,
+`mdl`, `sw`, `cu` for the configuration URL), `o` (origin: `name`,
+`sw`, `url`), `cmps` (components, each with `p` = platform and
+`uniq_id`), and shared `stat_t`, `avty_t`, `qos` that every component
+inherits. Keys have documented abbreviations (`cmd_t`, `val_tpl`,
+`cmd_tpl`, `dev_cla`, `stat_cla`, `unit_of_meas`, `ent_cat`, `ic`,
+`ops`, `pl_on`, `pl_off`, `pl_prs`). The payload need not be
+retained: the recommended way is to subscribe to Home Assistant's
+birth message, `homeassistant/status` = `online`, and resend
+discovery when it arrives, after a short random delay. An empty
+retained payload on the config topic removes the device. State topics
+should be retained so an entity has a state right after a restart.
+The `time` platform takes a parsable time string as state and sends
+`HH:MM:SS` as the command; `select` takes `ops` and echoes the chosen
+option; `switch` and `binary_sensor` take `pl_on`/`pl_off`; a sensor
+whose template renders `None` goes `unknown`.
+
+**Client crate: `rust-mqtt` 0.6.0** (the user's pick, and it fits:
+released 2026-09-22 as the rewrite of obabec's crate, `no_std`, async
+over `embedded-io-async` 0.7 and `heapless` 0.9, both the versions
+this firmware already uses; MIT OR Apache-2.0). It does the protocol
+and nothing else: no reconnect, no keepalive loop, no background
+task, which is what this firmware wants, since every other network
+task here owns its own loop. Features: `default-features = false,
+features = ["v5", "bump", "log", "log-level-warn"]`, so no `alloc`;
+received topics and payloads land in a `BumpBuffer` over a 1 KB
+static, reset after each event is handled (the one `unsafe` call in
+the module: the event has been dropped by then). The client's const
+parameters are small: one QoS 1 flight at most, two subscriptions,
+no topic aliases, no user properties. Checked 2026-11-07: with those features the crate
+builds for `riscv32imc-unknown-none-elf` on stable with no `alloc`,
+pulling in only `const_fn` beyond what the firmware already has.
+Everything is published at
+QoS 0: the broker is on the LAN and TCP delivers to it, and QoS 0
+keeps the session stateless, so `clean start` on every connect.
+`poll_header` is documented cancel-safe and `poll_body` is run to
+completion, which is what the select loop below relies on. The one
+constraint it imposes: **the broker must speak MQTT 5**. Mosquitto
+1.6 and later does (Home Assistant's Mosquitto add-on ships 2.x), so
+do EMQX and NanoMQ. No TLS: `embedded-tls` or esp-mbedtls would cost
+on the order of 100 KB of flash and tens of KB of RAM, the add-on's
+default listener is plain 1883, and the LAN is the trust boundary the
+rest of the clock already assumes (the page and `/api` are plain
+HTTP). Give the clock its own broker user, with an ACL on
+`esp32clock/#` and `homeassistant/#` if the broker has ACLs.
+
+**Settings.** A `Broker` struct in the settings, keys `mqtt_host`,
+`mqtt_port`, `mqtt_user`, `mqtt_password`:
+
+| field | type | rule |
+| --- | --- | --- |
+| `host` | `Text<64>` | an IPv4 literal or a DNS name: `[A-Za-z0-9.-]`, no spaces; empty means MQTT off |
+| `port` | `u16` | 1 to 65535, default 1883 |
+| `user` | `Text<32>` | printable, no spaces; empty for an anonymous broker |
+| `password` | `Secret<64>` | any printable; never read back, `mqtt_password_set` in the JSON |
+
+Record version 10 appends them after `temp_show`: a length byte and
+64 for the host, two bytes for the port, a length byte and 32 for the
+user, a length byte and 64 for the password, so `RECORD_LEN` goes
+from 171 to 336 and `storage.rs`'s scratch from 256 to 512 (the item
+is the record plus 9, padded to a word). A version 9 record reads as
+MQTT off, as the append-only rule says. The flags byte gains bit 1,
+`FLAG_MQTT_CLEARED`, with the token's meaning: a host cleared on the
+page stays cleared across a boot of a build that has `MQTT_HOST`
+built in; a host never set is filled from the build.
+
+Build-time defaults, read by `core/src/config.rs` with
+`rerun-if-env-changed` in `core/build.rs`: `MQTT_HOST`, `MQTT_PORT`
+(1883 when unset), `MQTT_USER`, `MQTT_PASSWORD`. `Settings::seed`
+fills the whole broker from the build when the record's host is empty
+and not cleared, the same shape as the Wi-Fi seed; the CI build sets
+none, so its image has MQTT off until the page turns it on.
+
+**On the page and the API.** The settings page gets a fourth
+fieldset, "Home Assistant", with Broker, Port, User and Password.
+The password field is write-only and always posted: empty keeps the
+stored one, as the Wi-Fi password does on the setup form. Clearing
+the host turns MQTT off and clears the user and password with it, so
+the record carries no stale secret; that is also the way to drop a
+password without a new one. The form takes the four keys without the
+token, as the user asked (the page already changes the hostname and
+the alarm from the LAN). `/api` takes them with the `Bearer` token
+only, like the network keys, since pointing the clock at another
+broker would hand that broker the stored password; refused on the
+key alone, never on the value. The setup form on the access point
+does not carry them: it is for the network, and the page is a click
+away once the clock is on it. The JSON gains `mqtt_host`,
+`mqtt_port`, `mqtt_user`, `mqtt_password_set`, and the read-only
+`mqtt`: `"off"`, `"connecting"` or `"connected"`, plus `ringing`
+(bool), which the discovery below uses. The status line under the
+form says `MQTT connected to 10.1.1.5:1883`, `MQTT connecting to …,
+last: connection refused`, or `MQTT off`. The fieldset is about 550
+bytes of page; the settings page at its worst was 4259 of
+`PAGE_MAX` 6016, so it should fit, and the page test will say. If it
+does not, `RESPONSE_BUF` goes to 8 KB (6 KB of RAM across the three
+listeners), not the page.
+
+**Topics.** The device id is `clock-` and the last three bytes of
+the MAC in hex, `clock-a1b2c3`: stable across hostname changes, so no
+retained message goes stale when the user renames the clock, and
+unique on a LAN (the access point's `clock-xxxx` uses two bytes; it
+is a name people type, this one is not). The base is
+`esp32clock/clock-a1b2c3/`:
+
+| topic | way | payload |
+| --- | --- | --- |
+| `…/status` | out, retained; also the will | `online` or `offline` |
+| `…/state` | out, retained | the `/api` JSON, byte for byte |
+| `…/set/<key>` | in, one subscription `set/+` | the value exactly as `/api` takes it |
+| `…/cmd` | in | `play`, `silence`, `reload` |
+| `homeassistant/status` | in | `online` resends discovery after 0 to 2 s |
+| `homeassistant/device/clock-a1b2c3/config` | out, not retained | the device discovery payload |
+
+The state is the existing `form::write_json` output, so there is no
+second serialisation to keep in step: every entity's `val_tpl` reads
+a key of that JSON. A command is `form::apply_one` on a copy with the
+key from the topic and the payload as the value, committed with one
+`settings::update` if it parsed, exactly the `/api` path; the keys
+allowed are the clock's own, `color`, `brightness`, `alarm`,
+`armed`, `days`, `skip`, `melody`, `twelve_hour`, `temp_show`,
+`temp_offset` and `tz`, and anything else (`hostname`, `ssid`,
+`password`, `token`, `mqtt_*`, unknown) is logged and dropped: the
+broker is not a way to move the clock to another network or broker.
+The state is published after connect, on every settings change
+(debounced 300 ms like the persist task, so a run of button presses
+is one message), on the ringing edges, and every 60 s for the
+sensors, the signal and the uptime. `cmd` `play` is
+`buzzer::preview` of the stored melody, `silence` ends a ring the way
+a press does, `reload` is `heal::reboot` after the goodbye below.
+
+**Discovery payload.** One device, named after the hostname
+(renamed on the next resend, which a hostname change triggers),
+manufacturer `esp32clock`, model `HU-058 on ESP32-C3`, `sw` the
+firmware version, `cu` `http://<ip>/`; origin `esp32clock` with the
+version and the repository URL; root `stat_t` the state topic,
+`avty_t` the status topic, `qos` 0. Components, each `uniq_id`
+`clock-a1b2c3_<name>`:
+
+| component | platform | keys |
+| --- | --- | --- |
+| Colour | `select` | `ops` the palette names, `val_tpl` `{{ value_json.color }}`, `cmd_t` `set/color` |
+| Brightness | `select` | `ops` the offered steps as `10`, `25`, `50`, `val_tpl` `{{ value_json.brightness }}`, `cmd_t` `set/brightness` |
+| Alarm | `time` | `val_tpl` `{{ value_json.alarm }}`, `cmd_t` `set/alarm`, `cmd_tpl` `{{ value[:5] }}` (HA sends `HH:MM:SS`, the parser takes `HH:MM`) |
+| Alarm armed | `switch` | `val_tpl` `{{ 'on' if value_json.armed else 'off' }}`, `pl_on` `on`, `pl_off` `off`, `cmd_t` `set/armed` |
+| Skip next alarm | `switch` | the same on `skip` |
+| Alarm days | `text` | `val_tpl` `{{ value_json.days }}`, `cmd_t` `set/days`: `all`, `weekdays`, `weekend` or `mon,tue,…`, the API's own format |
+| Melody | `select` | `ops` the tune names and `random` |
+| 12 hour clock | `switch` | on `twelve_hour`, `ent_cat` `config` |
+| Temperature on panel | `select` | `ops` `off`, `c`, `f`, `ent_cat` `config` |
+| Temperature | `sensor` | `dev_cla` `temperature`, `unit_of_meas` `°C`, `stat_cla` `measurement`, `val_tpl` `{{ value_json.temp_c }}` (`null` renders `None`, which HA reads as unknown) |
+| Light | `sensor` | `unit_of_meas` `%`, `ic` `mdi:brightness-5`, `val_tpl` `{{ value_json.light }}` |
+| Signal | `sensor` | `dev_cla` `signal_strength`, `unit_of_meas` `dBm`, `ent_cat` `diagnostic` |
+| Uptime | `sensor` | `dev_cla` `duration`, `unit_of_meas` `s`, `ent_cat` `diagnostic` |
+| Self-heals | `sensor` | `ic` `mdi:restart-alert`, `ent_cat` `diagnostic` |
+| Ringing | `binary_sensor` | `val_tpl` on `ringing`, `pl_on` `on`, `pl_off` `off`, `ic` `mdi:alarm-light` |
+| Play melody | `button` | `cmd_t` `cmd`, `pl_prs` `play` |
+| Silence | `button` | `pl_prs` `silence` |
+| Reload | `button` | `dev_cla` `restart`, `pl_prs` `reload`, `ent_cat` `diagnostic` |
+
+Seventeen components come to about 3 KB with the abbreviations,
+built with `core::fmt::Write` into a 4 KB static (`mqtt::DISCOVERY_MAX`);
+a host test builds it at the worst hostname and asserts the size,
+printing it as the page tests do. A `light` entity for colour and
+brightness was considered and dropped: a light has an off state the
+panel does not have, and the palette is nine named duty triples, not
+RGB, so two selects say what the clock does.
+
+**The task.** `src/mqtt.rs`, `mqtt_task(stack)`, spawned on the
+station only (the access point has no LAN). Its loop:
+
+1. Host empty: wait for a settings change. Otherwise wait for the
+   stack's address, resolve the host (an IPv4 literal is parsed, a
+   name goes to `dns_query`, 5 s timeout), connect TCP (5 s timeout;
+   receive buffer 1 KB, send buffer 2 KB), then `connect` with a 60 s
+   keepalive, the user and password, the will on `status` =
+   `offline` retained, client id the device id.
+2. Publish `status` = `online` retained, subscribe `set/+` and
+   `homeassistant/status`, publish discovery, publish the state.
+3. Select over `poll_header`, the settings receiver, the ringing
+   edge (a `Signal` the display task sets on the edges), the 60 s
+   state timer, the keepalive timer (ping after 45 s without a send,
+   drop the connection if no `Pingresp` within 10 s), and the
+   goodbye signal. A header is followed by `poll_body` without
+   cancellation, then the event is dispatched and the bump buffer
+   reset. Publishes happen between polls from the same task, so no
+   two client futures ever exist at once.
+4. Any error: `abort`, close the socket, `connecting`, log the reason
+   once (`connection refused`, `not authorized`, `dns failed`, …),
+   back off 5 s doubling to 60 s, and from step 1. A change to the
+   broker settings disconnects cleanly and starts over with the new
+   ones; a cleared host publishes `offline` retained, disconnects and
+   goes to the off wait, so Home Assistant shows the device
+   unavailable rather than a stale state.
+
+**Goodbye before a reset.** `heal::reboot`, `heal::reset`,
+`heal::switch_mode` and the OTA reboot already pause `RESET_PAUSE`
+after `scan::stop`; they first set a `GOODBYE` signal and wait up to
+500 ms for the task to publish `offline` retained and send
+DISCONNECT, so Home Assistant shows the clock unavailable within a
+second instead of after the broker's 90 s keepalive timeout. A panic
+cannot do this, as with the scan; the will covers it late.
+
+**Sizes.** One TCP socket: `StackResources` 10 to 11. One more
+`Watch` receiver: `RECEIVERS` 3 to 4. Static RAM: socket buffers 3 KB,
+bump buffer 1 KB, discovery 4 KB, the state JSON about 1 KB, so about
+9 KB; check `.stack` in `llvm-readelf -S` after. The minute heartbeat
+gains an `mqtt:` line: state, connects, publishes, commands, last
+error.
+
+**Pure half, `core/src/mqtt.rs`**: `DeviceId` from the MAC and its
+topics; `write_discovery`; `command_key` (the key after `set/`, or
+the `cmd` payload as a `Command`); `apply_command` with the allow
+list over `form::apply_one`. Tests: the discovery payload fits
+`DISCOVERY_MAX` at the worst hostname and parses as JSON (`serde_json`
+as a `core` dev-dependency, host only), every `value_json.<key>` it
+references is a key of `write_json`'s output, the keys every `set/`
+component commands are accepted by `apply_command` and the refused
+keys are refused, `command_key` on good and bad topics, the broker
+rules, the record round trip for version 10 and the read of version
+9, `apply_sets_every_key` with the four new keys, the page sizes, and
+`seed` with the cleared flag. The task itself is not under test, like
+the other socket tasks.
+
+**Files.** New: `core/src/mqtt.rs`, `src/mqtt.rs`. Touched:
+`core/src/settings.rs` (the struct, record, seed, flags),
+`core/src/config.rs` and `core/build.rs` (the four variables),
+`core/src/form.rs` (`apply_one`, `write_json`, the fieldset, the
+status line, `Status.mqtt` and `Status.ringing`), `src/http.rs`
+(`status()`, the `Bearer` rule for `mqtt_*` on `/api`),
+`src/display.rs` (the ringing signal), `src/heal.rs` and `src/ota.rs`
+(the goodbye), `src/storage.rs` (scratch), `src/bin/main.rs` (spawn,
+`StackResources`, the heartbeat line), `Cargo.toml` (`rust-mqtt`,
+`serde_json` for the host), `AGENTS.md` (settings, layout rows,
+sizes, env vars) and `README.md` (a Home Assistant section under
+"Using the clock").
+
+**Verify on the bench.** Build with `MQTT_HOST=<broker>
+MQTT_USER=clock MQTT_PASSWORD=…` or type them into the page; the log
+says `mqtt: connected to <host>:1883 as clock-xxxxxx`. On the host,
+`mosquitto_sub -v -t 'esp32clock/#' -t 'homeassistant/#'` shows
+`status online`, the state JSON and the discovery payload. Home
+Assistant's MQTT integration shows a device named after the hostname
+with the entities above. Change the colour from Home Assistant: the
+panel follows within a second and the state topic carries the new
+colour. Press the top button: the Colour select follows. `mosquitto_pub
+-t esp32clock/clock-xxxxxx/set/alarm -m 06:45` sets the alarm;
+`-t …/set/hostname -m x` is logged as refused and changes nothing.
+Set the alarm a minute ahead: Ringing turns on, Silence ends it.
+Restart Home Assistant: the entities come back without a clock
+restart (the birth resend). `POST /reload`: the device goes
+unavailable within a second and comes back. Pull the clock's power:
+unavailable after about 90 s (the will). A wrong password: `mqtt:
+connect refused: not authorized`, the status line says so, the
+back-off grows to 60 s. Clear the host on the page: `MQTT off`, the
+device unavailable. The page still fits: `cargo host-test -- --nocapture`
+prints the sizes.
+
+**Built 2026-11-07, on the host.** As planned, with these differences.
+The `tz` key is not on the bus and the thermometer offset is: the
+test that ties the discovery payload to `SET_KEYS` found both without
+an entity, and a `number` for the offset (−10 to 10, step 0.1, `mode`
+box, `cmd_tpl` `{{ '%.1f' % value }}` since Home Assistant sends a
+float) is useful for calibrating from the dashboard, while the
+timezone is the page's. The alarm's `cmd_tpl` was not needed: the form
+parser takes `HH:MM:SS` and checks the seconds, so `/api` does too.
+Nineteen entities, 4174 bytes at the worst hostname; `DISCOVERY_MAX`
+is 4608. The guarded-key flag `credentials: bool` became
+`form::Allow { network, broker }` with `NONE`, `PAGE` and `ALL`, since
+the page may set the broker but not the network. The settings page is
+5149 of 6016 at its worst (the broker host appears twice, in the field
+and the status line), so `RESPONSE_BUF` stays. The record is version
+10, 336 bytes, the scratch 512. `rust-mqtt` builds with `v5`, `bump`
+and `log` only, no `alloc`. The main stack went from 84.5 KB to
+69.6 KB: the task's future is about 15 KB (socket buffers 3 KB,
+bump 1 KB, state 1 KB, discovery 4.6 KB and the client), more than the
+estimate but with room. `serde_json` is a host-only dev-dependency
+(`[target.'cfg(not(target_os = "none"))'.dev-dependencies]`) so a
+check aimed at the chip does not try to build it. 86 host tests pass,
+clippy is clean on both crates; nothing has run on the panel yet.
+
+**Bench, 2026-11-07.** The user flashed the clocks and checked the
+device page in Home Assistant first (three clocks on the bus). Then the
+bench board (`test-clock`, the old one without a thermometer), with the
+serial monitor and a paho subscriber on the host: after the monitor's
+USB reset, Wi-Fi at 5 s, the broker at 7 s of uptime, the will
+(`offline`, the old session taken over) and `online` within the same
+second, the discovery payload 4112 bytes for a ten-letter hostname.
+The OTA to the committed build published `offline` through the
+goodbye at the reboot and was back `online` 7 s later; `/reload` the
+same. `set/color` changed the panel and the state and `/api` within a
+second; `set/hostname`, `set/tz` and a bad colour were logged and
+dropped. A birth message on `homeassistant/status` brought the
+discovery again within 2 s. An alarm set a minute ahead over the bus
+rang on the minute, the state said `ringing: true`, `cmd silence`
+ended it and the next state said false. `mqtt_*` on `/api` without the
+token is a `403`. A wrong password: `broker setting changed,
+disconnecting`, then `not authorized` (what Mosquitto says for a bad
+password) with the back-off 5, 10, 20 s, the JSON `connecting` and the
+page's line carrying the reason; the right password cut the wait
+short and reconnected. A cleared host published `offline` retained and
+logged `off`, the page said `MQTT off.`; the host restored, back
+`online` with discovery in 2 s. The heartbeat line reads
+`mqtt connected (1 connects, 7 published, 7 commands)`.
+
+Two findings, fixed in the same session: the task never subscribed
+to the `cmd` topic, so `play`, `silence` and `reload` over the bus did
+nothing until the second OTA (`SUBSCRIBE_MAXIMUM` is 3 now); and the
+state went out twice at every connect, because a settings change
+pending in the receiver from before the connect was published after
+the connect's own state, so the receiver is drained once the state is
+out. One more, not fixed: the root `build.rs` runs `git describe` only
+when `.git/HEAD` or the index changes, so an image built from a dirty
+tree right after a commit still says the clean hash (`f4d705f` for the
+build with the `cmd` fix).

@@ -18,6 +18,10 @@
 //! the fifth, optional: the ceiling on the panel's drive current, for a
 //! supply that cannot carry the top steps.
 //!
+//! `MQTT_HOST`, `MQTT_PORT`, `MQTT_USER` and `MQTT_PASSWORD` seed the
+//! Home Assistant broker the same way; a build without a host has MQTT
+//! off until the page turns it on.
+//!
 //! `build.rs` re-runs the build when any of them changes.
 
 /// Wi-Fi network name. Empty when the variable was not set at build
@@ -44,6 +48,35 @@ pub const WIFI_PASSWORD: &str = match option_env!("WIFI_PASSWORD") {
 /// the image file can read it out, the same standing as the Wi-Fi
 /// password.
 pub const API_TOKEN: &str = match option_env!("API_TOKEN") {
+    Some(s) => s,
+    None => "",
+};
+
+/// The MQTT broker the clock announces itself to for Home Assistant:
+/// an IPv4 literal or a DNS name, empty for no MQTT. A seed like the
+/// Wi-Fi credentials: the first saved record carries it from then on,
+/// and a host cleared on the page stays cleared (`Settings::seed`).
+pub const MQTT_HOST: &str = match option_env!("MQTT_HOST") {
+    Some(s) => s,
+    None => "",
+};
+
+/// The broker's port; 1883 is MQTT's plain port and the default.
+pub const MQTT_PORT: u16 = match option_env!("MQTT_PORT") {
+    Some(s) => match u16::from_str_radix(s, 10) {
+        Ok(p) if p > 0 => p,
+        _ => panic!("MQTT_PORT must be 1 to 65535"),
+    },
+    None => 1883,
+};
+
+/// The broker user and password; both empty for an anonymous broker.
+/// The password is compiled in as a string like the others.
+pub const MQTT_USER: &str = match option_env!("MQTT_USER") {
+    Some(s) => s,
+    None => "",
+};
+pub const MQTT_PASSWORD: &str = match option_env!("MQTT_PASSWORD") {
     Some(s) => s,
     None => "",
 };

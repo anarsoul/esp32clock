@@ -14,7 +14,7 @@ use embassy_time::{Duration, Instant, Timer};
 use log::{error, warn};
 
 use crate::carry::{self, Carried};
-use crate::{clock, display, scan, ui};
+use crate::{clock, display, mqtt, scan, ui};
 
 /// How often the hold for a ringing alarm looks at the flag again.
 const HOLD_POLL: Duration = Duration::from_secs(1);
@@ -65,8 +65,10 @@ pub async fn reset(reason: core::fmt::Arguments<'_>) -> ! {
 /// a self-heal, the whole of `POST /reload`, and the reboot into a new
 /// image, which has stopped the scan already (a second `stop` returns at
 /// once). Whatever the caller wants carried goes into the record first;
-/// the time is written here, and the restore adds the pause back.
+/// the time is written here, and the restore adds the pause back. The
+/// MQTT task says goodbye first, so Home Assistant sees the clock go.
 pub async fn reboot() -> ! {
+    mqtt::goodbye().await;
     scan::stop().await;
     clock::carry_time();
     // Let the last log line leave the serial port.
@@ -87,6 +89,7 @@ pub async fn switch_mode(boot_ap: bool) -> ! {
         "heal: resetting into {} mode, carry record started over",
         if boot_ap { "access point" } else { "station" }
     );
+    mqtt::goodbye().await;
     scan::stop().await;
     carry::freeze(Carried { ota_boots: carry::get().ota_boots, boot_ap, ..Carried::default() });
     Timer::after(clock::RESET_PAUSE).await;

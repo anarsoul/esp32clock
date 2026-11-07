@@ -4,7 +4,8 @@
 //! The hardware-independent half of the clock firmware: the settings and
 //! their flash record, the form and pages, the UI state machine, the
 //! panel map and the AiP33628 encoder, the melodies, the HTTP head
-//! parser, the OTA image checks and the carry record's codec.
+//! parser, the OTA image checks, the carry record's codec and the
+//! Home Assistant discovery payload and topics.
 //!
 //! Nothing here touches a peripheral, so the crate builds for the host
 //! and `cargo test -p esp32clock-core --target host-tuple` (aliased
@@ -23,6 +24,7 @@ pub mod config;
 pub mod form;
 pub mod http;
 pub mod melody;
+pub mod mqtt;
 pub mod ota;
 pub mod panel;
 pub mod sensors;

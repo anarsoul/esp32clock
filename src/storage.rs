@@ -103,12 +103,12 @@ type Map = MapStorage<u8, AsyncFlash, NoCache>;
 
 type MapError = sequential_storage::Error<FlashStorageError>;
 
-/// Scratch for the map: key, record, item header, rounded up (a 168-byte
-/// record is a 177-byte item); a stale record of another length fits
+/// Scratch for the map: key, record, item header, rounded up (a 336-byte
+/// record is a 345-byte item); a stale record of another length fits
 /// too. Word aligned so `esp-storage` reads into it directly instead of
 /// through a sector buffer on the stack.
 #[repr(C, align(4))]
-struct Scratch([u8; 256]);
+struct Scratch([u8; 512]);
 
 /// The settings map in the `nvs` partition.
 pub struct Store {
@@ -151,7 +151,7 @@ impl Store {
                 return None;
             }
         };
-        Some(Store { map: Map::new(AsyncFlash, config, NoCache::new_uncached()), scratch: Scratch([0; 256]) })
+        Some(Store { map: Map::new(AsyncFlash, config, NoCache::new_uncached()), scratch: Scratch([0; 512]) })
     }
 
     /// The stored settings, if there is a valid record. A map that cannot

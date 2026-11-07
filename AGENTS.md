@@ -39,6 +39,7 @@ cargo host-test                          # the core crate's tests on the host (a
 cargo clippy -p esp32clock-core --target host-tuple --tests
 WIFI_SSID='…' WIFI_PASSWORD='…' TZ_OFFSET_MINUTES=-420 API_TOKEN='…' cargo run --release
 MAX_CURRENT_STEP=8 cargo build --release   # optional: raise the drive-current ceiling (default 5)
+MQTT_HOST=10.1.1.5 MQTT_USER=clock MQTT_PASSWORD='…' cargo build --release   # optional: the Home Assistant broker (MQTT_PORT defaults to 1883)
 API_TOKEN='…' scripts/ota.sh <ip>      # later updates, over the LAN
 scripts/ota.sh                          # just the image file, for http://<ip>/update
 API_TOKEN='…' scripts/reload.sh <ip>   # software reset with the carry record, waits for the clock to come back
@@ -63,7 +64,10 @@ boot, the next save carries it, and from then on the record wins over
 a later build's constants (`settings::Settings::seed`). A token
 cleared with `POST /token` stays cleared: the record's flags byte
 (`token_cleared`, version 7) tells a cleared token from one never set,
-and only the latter is filled from the build. For a network debugging run set
+and only the latter is filled from the build. The MQTT broker
+(`MQTT_HOST`, `MQTT_PORT`, `MQTT_USER`, `MQTT_PASSWORD`) is a seed the
+same way, with bit 1 of the flags (`mqtt_cleared`) for a host cleared
+on the page. For a network debugging run set
 `ESP_LOG='info,embassy_net=debug,esp_radio=debug'` on the command line
 (it overrides the config, and esp-println compiles the filter in); the
 extra lines are DHCP state and driver events, not packets. Every log
@@ -83,13 +87,18 @@ temperature on the panel (`temp_show`: `off`, `c` or `f`, default
 `c`; with a reading in hand the UI shows ` 23C` with the degree mark
 for seconds 30 to 34 of every minute in clock mode, `ui::TEMP_SHOW_AT`
 and `TEMP_SHOW_SECS`), DHCP
-hostname, Wi-Fi network and API token are settings:
+hostname, Wi-Fi network, API token and MQTT broker (`mqtt_host`,
+`mqtt_port`, `mqtt_user`, `mqtt_password`; see "Home Assistant" below)
+are settings:
 saved in the `nvs` partition, editable from the buttons and from
 `http://<ip>/` (form) or `/api` (form-encoded keys, JSON back). The
 network keys `ssid` and `password` are taken on `/api` only with the
 `Bearer` token, refused as `403` on the key alone (never on whether the
 value would change, which would make a password oracle), and never on
-the settings form; a saved change resets the clock into the new network
+the settings form; the broker keys `mqtt_*` need the token on `/api`
+the same way (a broker of the attacker's choosing would be handed the
+stored password) but the settings form takes them (`form::Allow`:
+`PAGE`, `ALL`, `NONE`); a saved change resets the clock into the new network
 (`heal::switch_mode`, with the carry record started over), so a wrong
 one costs the LAN until the password is right again. On the access
 point every save resets into the station once a network is stored,
@@ -103,11 +112,15 @@ resets since power-up), `temp_c` and `temp_f` (the room in tenths, `null`
 with no thermometer fitted or before the first reading), `light` (0 dark
 to 100, `null` before the first reading), `rssi` (the station's signal
 in dBm from its last beacon, read every 10 s by `net::wifi_task` into
-an atomic, `null` while not connected and on the access point) and
-`last_heal` (Unix seconds or null); posting them is refused as an
-unknown key. The page shows the network and the signal under the
-firmware line (`Wi-Fi home, -62 dBm.`, or `not connected`, or `no
-network stored`), the room on the line after (`Room 23.4 °C (74.1 °F),
+an atomic, `null` while not connected and on the access point),
+`mqtt` (`off`, `connecting` or `connected`), `ringing` (whether the
+alarm rings right now) and `last_heal` (Unix seconds or null); posting
+them is refused as an unknown key. The settings keys carry
+`mqtt_password_set` instead of the password. The page shows the
+network and the signal under the firmware line (`Wi-Fi home, -62
+dBm.`, or `not connected`, or `no network stored`), the broker on the
+next (`MQTT connected 10.1.1.5:1883.`, `MQTT connecting …, last: not
+authorized.` or `MQTT off.`), the room on the line after (`Room 23.4 °C (74.1 °F),
 light 62 %`), and the minute heartbeat logs the filtered millivolts of
 both dividers for calibration. `skip_next` (page checkbox, key `skip`) is
 the one setting the record does not store: it skips one alarm and is cleared
@@ -219,6 +232,64 @@ the page, on the panel and in the serial log and never in the
 response, for a bench script (`scripts/pin.sh`). One PIN is one
 action, upload or token.
 
+## Home Assistant
+
+The clock announces itself to Home Assistant over MQTT (M12, built
+2026-11-07): one device named after the hostname, with the settings as
+entities and the readings as sensors, through MQTT discovery; nothing
+is typed into Home Assistant. The broker is the `mqtt_*` settings
+above; an empty host is MQTT off, and clearing it on the page clears
+the user and password with it. The client is `rust-mqtt` 0.6 (MQTT 5
+only, so the broker must speak MQTT 5: Mosquitto 1.6 and later,
+including Home Assistant's add-on, EMQX, NanoMQ), no TLS, QoS 0,
+clean session, 60 s keepalive. The pure half is `core/src/mqtt.rs`,
+the task `src/mqtt.rs`, spawned on the station only.
+
+The id is `clock-` and the last three bytes of the MAC in hex
+(`mqtt::DeviceId`), stable across hostname changes. Topics under
+`esp32clock/<id>/`: `status` (`online`/`offline`, retained; `offline`
+is also the will), `state` (the `/api` JSON byte for byte, retained,
+published after connect, on every settings change debounced 300 ms,
+on the ringing edges and every 60 s), `set/<key>` (the value as `/api`
+takes it; one subscription `set/+`) and `cmd` (`play`, `silence`,
+`reload`; its own subscription, which the first bench run found
+missing). The keys `set/` takes are `mqtt::SET_KEYS` (colour,
+brightness, alarm, armed, days, skip, melody, twelve_hour, temp_show,
+temp_offset); anything else (`hostname`, `tz`, the network, the token,
+the broker) is logged and dropped, so the bus is no way to move the
+clock elsewhere. The alarm parser takes `HH:MM:SS` as Home
+Assistant's `time` entity sends it. The discovery payload goes to
+`homeassistant/device/<id>/config`, not retained, at every connect, on
+a hostname change and when Home Assistant publishes `online` on
+`homeassistant/status` (after a random delay under 2 s, as its docs
+ask); every entity reads a key of the state JSON through `val_tpl`,
+and the host test parses the payload and checks each key against the
+JSON, each `set/` key against the allow list and each select option
+against the parser. Nineteen entities: selects for colour, brightness,
+melody and the panel temperature, a `time` for the alarm, switches for
+armed, skip and 12 hour, a text for the days, a number for the
+thermometer offset, sensors for temperature, light, signal, uptime and
+self-heals, a binary sensor for ringing, buttons for play, silence and
+reload.
+
+The task resolves the host (an IPv4 literal or DNS), connects with a
+5 s timeout each, and on any failure aborts, logs the reason once and
+backs off from 5 s doubling to 60 s; a change to the broker settings
+disconnects cleanly and starts over, a cleared host publishes
+`offline` and waits. `poll_header` is the one cancel-safe client
+future the loop selects on; a header is followed by `poll_body` to
+completion, and publishes happen between polls. Received packets land
+in a 1 KB `BumpBuffer`, reset after each event (the one `unsafe` in
+the module). Before a deliberate reset (`heal::reboot`, `heal::reset`,
+`heal::switch_mode`, the OTA reboot) `mqtt::goodbye` lets the task
+publish `offline` and send DISCONNECT, within 500 ms, so Home
+Assistant shows the clock unavailable at once rather than after the
+broker's 90 s keepalive timeout; a panic cannot, and the will covers
+it late. `cmd` `reload` says goodbye on its own connection and then
+reboots. The heartbeat carries an `mqtt:` line (state, connects,
+publishes, commands). Verify with `mosquitto_sub -v -t 'esp32clock/#'
+-t 'homeassistant/#'` on the host.
+
 Firmware updates: `POST /ota` with the application image as the body
 and an `Authorization` header: `Bearer <API_TOKEN>` from `scripts/ota.sh`,
 or `PIN <digits>` from the `/update` page. Opening the page makes the
@@ -264,14 +335,16 @@ module ends with its `#[cfg(test)] mod tests`.
 | `core/src/aip33628.rs` | frame format, bit-reversed current table, quad-nibble waveform encoder; pure `core` |
 | `core/src/panel.rs` | COM/SEG map, font, per-position colour as duty `Levels` (no RGB; the palette is written in levels), `Panel::render` → `ScanImage` |
 | `src/scan.rs` | cycle/transfer builder, double-buffered DMA scan task that builds the SPI2 quad + DMA bus itself (an async esp-hal driver is `!Send`), restart-gap statistics, `stop` on a blank frame before a deliberate reset or a flash write, `resume` after a failed one |
-| `src/display.rs` | UI loop: tick, button or settings change → `ui` → draw → publish; rings the alarm; shows the IP, or `AP` in place of the sweep on the access point; acts on the hold before the UI sees it; seeds and carries the skip flag and the time the alarm last rang |
+| `src/display.rs` | UI loop: tick, button or settings change → `ui` → draw → publish; rings the alarm and signals the ringing edges (`ringing_changed`) for the MQTT state; `silence` ends a ring as a press would; shows the IP, or `AP` in place of the sweep on the access point; acts on the hold before the UI sees it; seeds and carries the skip flag and the time the alarm last rang |
 | `core/src/ui.rs` | mode state machine, pure logic, one timer for the current mode; edits the settings it is handed; alarm due check and missed-alarm grace, both gated by the carried time the alarm last rang; consumes `skip_next`; `view` takes the room reading and answers the `Temp` face mid-minute in clock mode |
-| `core/src/settings.rs` | `Settings`, palette and brightness tables, `Hostname`, `Text`/`Secret` strings, `Credentials` and the token with their rules, the build-time `seed`, shared `Watch` with change signal, versioned append-only flash record |
+| `core/src/settings.rs` | `Settings`, palette and brightness tables, `Hostname`, `Text`/`Secret` strings, `Credentials`, the token and the MQTT `Broker` with their rules, the build-time `seed`, shared `Watch` with change signal, versioned append-only flash record |
 | `src/storage.rs` | the one flash handle (`with_flash`), nvs partition lookup, `sequential-storage` map over it, debounced persist task that compares records, not structs, and resets into station mode after a save that changed the credentials, or after any save on the access point with a network stored |
-| `src/heal.rs` | deliberate resets: `reboot` blanks the panel through `scan::stop`, carries the time and resets, for `/reload` and the OTA reboot; `reset`, the self-heal, waits out a ringing alarm and counts itself first; `switch_mode`, the reset between station and access point, which starts the carry record over and freezes it |
+| `src/heal.rs` | deliberate resets: `reboot` says the MQTT goodbye, blanks the panel through `scan::stop`, carries the time and resets, for `/reload` and the OTA reboot; `reset`, the self-heal, waits out a ringing alarm and counts itself first; `switch_mode`, the reset between station and access point, which starts the carry record over and freezes it |
 | `core/src/auth.rs` | the API token (a setting; constant-time compare) and the panel PIN with its TTL and lockout; `token`, `token_or_pin`, `issue_pin`, `pin_to_show`; `Refusal` with its HTTP status; pure rules with the clock and the random number passed in |
-| `core/src/form.rs` | key=value parsing, all-or-nothing `apply` on a copy, JSON, the HTML page with its error notice, its unsaved-changes mark (a script compares the form with the defaults it was served with) and the read-only `Status` lines, the update and token pages, each its own script over the shared `PIN_JS` helpers and `PIN_FIELD`, `JsonStr`/`HtmlStr` escaping for the SSID, `parse_token`; pure logic |
+| `core/src/form.rs` | key=value parsing, all-or-nothing `apply` on a copy with the `Allow` flags for the guarded keys, JSON, the HTML page with its error notice, its unsaved-changes mark (a script compares the form with the defaults it was served with) and the read-only `Status` lines, the update and token pages, each its own script over the shared `PIN_JS` helpers and `PIN_FIELD`, `JsonStr`/`HtmlStr` escaping for the SSID, `parse_token`; pure logic |
 | `core/src/http.rs` | `Method`, `Head`, `parse_head`; `RESPONSE_BUF` and `PAGE_MAX`, which the page tests assert against |
+| `core/src/mqtt.rs` | Home Assistant over MQTT, pure: `DeviceId` and its topics, `Link` (the state for the page), `Route` and `Command`, `SET_KEYS` and `apply_set` over `form::apply_one`, `write_discovery` (the device payload with every entity) and `DISCOVERY_MAX` |
+| `src/mqtt.rs` | the MQTT task: resolve, connect with the will, subscribe, discovery and state publishes, keepalive pings, the select loop over `poll_header`, the back-off, `goodbye` for the reset paths, `link()` and `Report` for the page and the heartbeat |
 | `src/http.rs` | HTTP/1.0 server, `LISTENERS` sockets each in its own task: `GET`/`POST` on `/` (the settings page, or the setup form on the access point) and `/api`, `POST /play`, `GET /update` and `GET /token` (each issues a PIN), `POST /ota` with the body streamed to `ota::install`, `POST /reload` and `POST /ap` with the token, `POST /token` with the token or the PIN, `POST /pin`, `POST /scan` on the access point, `GET /favicon.ico` (`src/favicon.ico` embedded, the one cacheable response); the settings, update and token pages are titled and headed `Clock: <hostname>`; a refused form redirects to `/?error=…`; per-listener state and counters for the heartbeat |
 | `core/src/buttons.rs` | `Button`, `Kind`, `Event` |
 | `src/buttons.rs` | debounced short/long press events, the two-button long press, and the 10 s two-button `Hold` |
@@ -388,8 +461,9 @@ module ends with its `#[cfg(test)] mod tests`.
   overflow is a 500, not a truncation. The headers are 88 bytes;
   `core::http::PAGE_MAX` (6016) is what a page may take, and the
   `form` tests build each page at its worst case and assert it
-  (2026-11-02: settings 4259 in its three fieldsets with the Play and
-  unsaved-changes script, the Wi-Fi line, a stored SSID of 32 `"` and
+  (2026-11-07: settings 5149 in its four fieldsets with the Play and
+  unsaved-changes script, the Wi-Fi and MQTT lines, a stored SSID of
+  32 `"`, a 64-byte broker host twice, a user of 32 `"` and
   the hostname in the title and heading; update 2476 and token 2043 since the split of 2026-11-02; setup with twelve 32-character networks 3039). `cargo host-test` after adding a field
   or label; the test prints the sizes with `-- --nocapture`. The setup
   page's network list stops at `form::NETWORK_LIST_BUDGET` (1900)
@@ -410,13 +484,18 @@ module ends with its `#[cfg(test)] mod tests`.
 - `form::apply` decodes each key into 16 bytes and each value into 64
   (`form::VALUE_MAX`, the password); longer input is reported as a bad
   key or value before parsing. The record is `settings::RECORD_LEN`
-  (171) bytes and the map scratch in `storage.rs` 256, which must hold
+  (336) bytes and the map scratch in `storage.rs` 512, which must hold
   the item (record plus 9 bytes, padded to a word).
+- The MQTT task's future holds its socket buffers (1 KB receive, 2 KB
+  send), the 1 KB `BumpBuffer`, the state JSON (1 KB) and the
+  discovery payload (`mqtt::DISCOVERY_MAX`, 4608; the worst case is
+  4174, printed by the `mqtt` test), about 15 KB of static RAM in all
+  (2026-11-07: the main stack went from 84.5 KB to 69.6 KB).
 - `settings::RECEIVERS` is the number of `Watch` receivers (display,
-  persist, hostname). Add one when a new task subscribes, or `receiver()`
+  persist, hostname, MQTT). Add one when a new task subscribes, or `receiver()`
   panics at boot.
-- `StackResources<10>` in `main.rs` covers DHCP, DNS, SNTP, the gateway
-  probe and the HTTP listeners with headroom (on the access point: the
+- `StackResources<11>` in `main.rs` covers DHCP, DNS, SNTP, the gateway
+  probe, the MQTT connection and the HTTP listeners with headroom (on the access point: the
   DHCP and DNS servers and the listeners); adding sockets means raising it.
 - `HOSTNAME_MAX` (24) stays under embassy-net's 32-byte DHCP option.
 - `ESP_RADIO_CONFIG_WIFI_MTU` (540, in `.cargo/config.toml`'s `[env]`,
@@ -439,21 +518,25 @@ module ends with its `#[cfg(test)] mod tests`.
 
 ## Verifying without a board
 
-`cargo host-test` runs the tests of `core/` on the host (81 on
-2026-11-02): the AiP33628 encoder against a behavioural model of the
+`cargo host-test` runs the tests of `core/` on the host (86 on
+2026-11-07): the AiP33628 encoder against a behavioural model of the
 chip (shift on CLK rise, latch on DIN rise while CLK high), the panel
 map, the palette and brightness tables, the hostname, password and
 token rules, the record round trip and every older version, the form
 parser and the page sizes against `PAGE_MAX`, the head parser, the
 appended-hash split, the carry codec, the calendar arithmetic, the
 melodies, the UI's alarm, grace and skip logic, the PIN and token
-header rules, and the NTC and LDR tables against their equations. `cargo clippy -p esp32clock-core --target host-tuple
+header rules, the NTC and LDR tables against their equations, and the
+MQTT topics, routes and discovery payload (parsed with `serde_json`, a
+host-only dev-dependency, and checked key by key against the `/api`
+JSON and the form parser). `cargo clippy -p esp32clock-core --target host-tuple
 --tests` lints the tests. `.cargo/config.toml` aims every cargo
 command at the chip, which is why the alias passes `--target
 host-tuple`; the `[unstable] build-std` line there is ignored by
 stable cargo. Not under test: `scan.rs`'s `build_cycle` (the M1 lit-time
 check needs it on the host), `dhcpd.rs` and `dnsd.rs` (their pure halves
-use embassy-net's address types), `storage.rs`'s map over the flash.
+use embassy-net's address types), `storage.rs`'s map over the flash,
+`mqtt.rs`'s session loop.
 `PLAN.md` records the checks of each milestone; new ones are tests.
 
 ## Conventions
@@ -478,7 +561,11 @@ use embassy-net's address types), `storage.rs`'s map over the flash.
   rollback keeps the settings) and `from_record` still reading every
   older version, `form::apply_one`, `write_json` and `write_page`,
   the `PLAN.md` entry, and the `settings` and `form` tests (the record
-  round trip, `apply_sets_every_key`, the page sizes). A field that
+  round trip, `apply_sets_every_key`, the page sizes). A setting Home
+  Assistant should see gets a component in `mqtt::write_discovery`
+  and, if it may be set from there, its key in `mqtt::SET_KEYS`; the
+  `mqtt` test ties the three together. A key only the token may set
+  goes behind `form::Allow`. A field that
   must not persist, like `skip_next`, is left out of the record on
   purpose. Read-only status goes in `form::Status`, built in
   `http::status`, so `form.rs` stays clockless.

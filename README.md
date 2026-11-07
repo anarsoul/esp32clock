@@ -14,6 +14,9 @@ What the clock does:
 - Room temperature and light level from the kit's NTC and LDR (optional),
   with the temperature shown on the panel once a minute.
 - Settings page at `http://<ip>/` and a form-encoded JSON API at `/api`.
+- Home Assistant integration over MQTT with discovery: the settings as
+  entities, the readings as sensors, no YAML (see
+  [Home Assistant](#home-assistant) below).
 - Firmware updates over the LAN (`/update` with a PIN shown on the panel,
   or a script with a token), two application slots with rollback.
 - Provisioning from the clock's own access point when no network is
@@ -290,9 +293,35 @@ The status line under the form shows the firmware version, the slot,
 the uptime, the signal and the room reading.
 
 The same keys are available at `/api`: `GET` answers JSON, `POST` with
-form-encoded keys applies all of them or none. A posted network or
-token needs `Authorization: Bearer <API_TOKEN>`. `scripts/configure-clock.sh`
+form-encoded keys applies all of them or none. A posted network, broker
+or token needs `Authorization: Bearer <API_TOKEN>`. `scripts/configure-clock.sh`
 is an example that sets a whole configuration in one request.
+
+### Home Assistant
+
+Fill in the "Home Assistant" fieldset on the page (or build with
+`MQTT_HOST`, `MQTT_USER` and `MQTT_PASSWORD`) with the address of an
+MQTT broker Home Assistant is on, and the clock appears under the MQTT
+integration as a device named after its hostname, with no YAML: the
+colour, brightness, alarm time, armed, skip, days, melody, 12 hour
+clock, panel temperature and thermometer offset as entities you can
+set, the room temperature, light, signal, uptime and self-heals as
+sensors, a binary sensor that is on while the alarm rings, and
+buttons to play the melody, silence a ring and reload the clock. The
+broker must speak MQTT 5 (Mosquitto 1.6 and later, which includes the
+Home Assistant add-on, does); the connection is plain, not TLS, so
+give the clock a broker user of its own. Everything is under
+`esp32clock/clock-xxxxxx/` (the last three bytes of the MAC):
+`state` is the `/api` JSON, `set/<key>` takes a value as `/api` does,
+and `cmd` takes `play`, `silence` or `reload`:
+
+```
+mosquitto_sub -v -t 'esp32clock/#'
+mosquitto_pub -t esp32clock/clock-a1b2c3/set/color -m cyan
+```
+
+Only the clock's own settings can be set this way; the network, the
+hostname, the token and the broker itself cannot.
 
 ## Development
 

@@ -36,9 +36,9 @@ use esp32clock_core::http::{Method, RESPONSE_BUF, parse_head};
 
 use crate::buzzer;
 use crate::config::HTTP_PORT;
-use crate::form::{self, FormError, HealStamp, Status};
+use crate::form::{self, Allow, FormError, HealStamp, Status};
 use crate::net::{self, Mode};
-use crate::{auth, clock, heal, ota, sensors, settings};
+use crate::{auth, clock, display, heal, mqtt, ota, sensors, settings};
 
 /// The tab icon: the panel as pixel art, a 32 px `12:34` and a 16 px
 /// `1:23` as PNG entries in one ICO, served at the path browsers ask
@@ -289,7 +289,7 @@ fn random() -> u32 {
 }
 
 /// The read-only status for the page and the JSON.
-fn status() -> Status {
+pub fn status() -> Status {
     let now = clock::unix_secs();
     let last_heal = heal::last_unix().map(|t| {
         let local = clock::local_time(t);
@@ -312,6 +312,8 @@ fn status() -> Status {
         temp_dc,
         light,
         rssi: net::rssi(),
+        mqtt: mqtt::link(),
+        ringing: display::ringing(),
     }
 }
 
@@ -353,7 +355,7 @@ fn respond(out: &mut Response, req: &Request<'_>, body: &[u8]) -> Result<Then, c
             // (`form::settle_password`).
             let current = settings::get();
             let mut trial = current;
-            let result = form::apply(&mut trial, body, false, true)
+            let result = form::apply(&mut trial, body, false, Allow::ALL)
                 .and_then(|()| form::settle_password(&mut trial, &current.wifi, &net::networks()));
             match result {
                 Ok(()) if trial.wifi.is_none() => {
@@ -380,9 +382,10 @@ fn respond(out: &mut Response, req: &Request<'_>, body: &[u8]) -> Result<Then, c
             // All or nothing: the form is applied to a copy and committed
             // only if every pair parsed, so a bad field (an alarm time the
             // browser sent empty, say) cannot leave the checkboxes, which
-            // `apply` resets first, half applied.
+            // `apply` resets first, half applied. The broker keys are
+            // the page's to set; the network keys are not.
             let mut trial = settings::get();
-            let result = form::apply(&mut trial, body, true, false);
+            let result = form::apply(&mut trial, body, true, Allow::PAGE);
             match result {
                 Ok(()) => {
                     settings::update(|s| *s = trial);
@@ -395,7 +398,7 @@ fn respond(out: &mut Response, req: &Request<'_>, body: &[u8]) -> Result<Then, c
             // Preview the sound chosen in the form without saving anything:
             // the form is applied to a scratch copy and only its melody used.
             let mut trial = settings::get();
-            if let Err(e) = form::apply(&mut trial, body, true, false) {
+            if let Err(e) = form::apply(&mut trial, body, true, Allow::PAGE) {
                 warn!("http: play form rejected: {e:?}");
             }
             buzzer::preview(trial.melody);
@@ -471,20 +474,20 @@ fn respond(out: &mut Response, req: &Request<'_>, body: &[u8]) -> Result<Then, c
         }
         (Method::Post, "/api") => {
             // Validate on a copy first so a bad pair changes nothing. The
-            // network keys need the token, except on the access point,
-            // whose own password is the gate; the rest do not.
-            let credentials = net::mode() == Mode::AccessPoint || auth::token(req.authorization).is_ok();
+            // network and broker keys need the token, except on the access
+            // point, whose own password is the gate; the rest do not.
+            let trusted = net::mode() == Mode::AccessPoint || auth::token(req.authorization).is_ok();
             let mut trial = settings::get();
-            match form::apply(&mut trial, body, false, credentials) {
+            match form::apply(&mut trial, body, false, if trusted { Allow::ALL } else { Allow::NONE }) {
                 Ok(()) => {
                     settings::update(|s| *s = trial);
                     status_line(out, "200 OK", "application/json")?;
                     form::write_json(out, &trial, &status())?;
                 }
                 Err(FormError::Forbidden) => {
-                    warn!("http: network change without the token refused");
+                    warn!("http: network or broker change without the token refused");
                     status_line(out, "403 Forbidden", "text/plain")?;
-                    out.write_str("token required for ssid and password: send Authorization: Bearer <API_TOKEN>\n")?;
+                    out.write_str("token required for ssid, password and mqtt_*: send Authorization: Bearer <API_TOKEN>\n")?;
                 }
                 Err(e) => {
                     status_line(out, "400 Bad Request", "text/plain")?;

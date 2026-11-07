@@ -32,7 +32,7 @@ use static_cell::StaticCell;
 use esp32clock::buzzer;
 use esp32clock::settings::Settings;
 use esp32clock::net::Mode;
-use esp32clock::{buttons, carry, clock, dhcpd, display, dnsd, heal, http, net, ota, scan, sensors, settings, storage};
+use esp32clock::{buttons, carry, clock, dhcpd, display, dnsd, heal, http, mqtt, net, ota, scan, sensors, settings, storage};
 
 // The app descriptor the esp-idf bootloader requires, with the git
 // version in it so an image file says what it is before it is flashed.
@@ -203,12 +203,12 @@ async fn main(spawner: Spawner) -> ! {
     let mac = interface.mac_address();
     let rng = Rng::new();
     let seed = (rng.random() as u64) << 32 | rng.random() as u64;
-    // Station: DHCP, DNS, SNTP, the gateway probe, the HTTP listeners,
-    // and headroom; no IPv4 configuration yet, the Wi-Fi task starts
-    // DHCP once the station is connected and the link has settled.
-    // Access point: the fixed address, the DHCP and DNS servers and the
-    // listeners.
-    static RESOURCES: StaticCell<StackResources<10>> = StaticCell::new();
+    // Station: DHCP, DNS, SNTP, the gateway probe, the MQTT connection,
+    // the HTTP listeners, and headroom; no IPv4 configuration yet, the
+    // Wi-Fi task starts DHCP once the station is connected and the link
+    // has settled. Access point: the fixed address, the DHCP and DNS
+    // servers and the listeners.
+    static RESOURCES: StaticCell<StackResources<11>> = StaticCell::new();
     let stack_config = if mode == Mode::AccessPoint { net::ap_stack_config() } else { embassy_net::Config::default() };
     let (stack, runner) = embassy_net::new(interface, stack_config, RESOURCES.init(StackResources::new()), seed);
 
@@ -244,6 +244,7 @@ async fn main(spawner: Spawner) -> ! {
         spawner.spawn(net::hostname_task(stack).expect("spawn hostname"));
         spawner.spawn(net::monitor_task(stack).expect("spawn monitor"));
         spawner.spawn(net::probe_task(stack).expect("spawn probe"));
+        spawner.spawn(mqtt::mqtt_task(stack, mqtt::DeviceId::from_mac(mac)).expect("spawn mqtt"));
     }
     for i in 0..http::LISTENERS {
         spawner.spawn(http::http_task(stack, i).expect("spawn http"));
@@ -256,7 +257,7 @@ async fn main(spawner: Spawner) -> ! {
         let (sent, failed, streak) = net::probe_stats();
         info!(
             "alive {} s, heap free {} bytes; scan restart gap avg {} us, max {} us over {} transfers; \
-             gateway probes {} sent, {} failed, {} failing now; self-heal resets {}; sensors {}",
+             gateway probes {} sent, {} failed, {} failing now; self-heal resets {}; sensors {}; mqtt {}",
             Instant::now().as_secs(),
             esp_alloc::HEAP.free(),
             g.sum_us / g.transfers.max(1) as u64,
@@ -266,7 +267,8 @@ async fn main(spawner: Spawner) -> ! {
             failed,
             streak,
             heal::count(),
-            sensors::Report
+            sensors::Report,
+            mqtt::Report
         );
         http::log_status();
     }
