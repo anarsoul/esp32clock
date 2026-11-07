@@ -36,7 +36,7 @@ use esp32clock_core::http::{Method, RESPONSE_BUF, parse_head};
 
 use crate::buzzer;
 use crate::config::HTTP_PORT;
-use crate::form::{self, Allow, FormError, HealStamp, Status};
+use crate::form::{self, Allow, FormError, HealStamp, LocalNow, Status};
 use crate::net::{self, Mode};
 use crate::{auth, clock, display, heal, mqtt, ota, sensors, settings};
 
@@ -44,6 +44,11 @@ use crate::{auth, clock, display, heal, mqtt, ota, sensors, settings};
 /// `1:23` as PNG entries in one ICO, served at the path browsers ask
 /// for by themselves.
 const FAVICON: &[u8] = include_bytes!("favicon.ico");
+
+/// `/tz.js`, the browser-zone script of the timezone field; it must fit
+/// the response buffer after its header.
+const TZ_JS: &[u8] = include_bytes!("tz.js");
+const _: () = assert!(TZ_JS.len() + 128 <= RESPONSE_BUF, "tz.js does not fit the response buffer");
 
 /// Connections served at once, each with its own buffers and task.
 pub const LISTENERS: usize = 3;
@@ -314,6 +319,10 @@ pub fn status() -> Status {
         rssi: net::rssi(),
         mqtt: mqtt::link(),
         ringing: display::ringing(),
+        local: now.map(|n| {
+            let t = clock::local_time(n);
+            LocalNow { weekday: t.weekday, hour: t.hour, minute: t.minute, offset_secs: t.offset_secs, dst: clock::period_at(n).1 }
+        }),
     }
 }
 
@@ -405,10 +414,15 @@ fn respond(out: &mut Response, req: &Request<'_>, body: &[u8]) -> Result<Then, c
             redirect_home(out, None)?;
         }
         (Method::Get, "/favicon.ico") => {
-            // The one response a browser may cache: the icon only
-            // changes with the firmware.
+            // The two responses a browser may cache, this and the script
+            // below: they only change with the firmware.
             out.write_str("HTTP/1.0 200 OK\r\nContent-Type: image/x-icon\r\nConnection: close\r\nCache-Control: max-age=86400\r\n\r\n")?;
             out.write_bytes(FAVICON)?;
+        }
+        (Method::Get, "/tz.js") => {
+            // The browser-zone script of both forms' timezone field.
+            out.write_str("HTTP/1.0 200 OK\r\nContent-Type: text/javascript\r\nConnection: close\r\nCache-Control: max-age=86400\r\n\r\n")?;
+            out.write_bytes(TZ_JS)?;
         }
         (Method::Get, "/update") => {
             // Opening the page puts a PIN on the panel; the page asks for it.

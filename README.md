@@ -8,7 +8,7 @@ board that takes the 8051's place in the DIP-16 footprint. Written in Rust with
 
 What the clock does:
 
-- Time over NTP, 12 or 24 hour, with a configurable timezone offset.
+- Time over NTP, 12 or 24 hour, in a timezone given as a POSIX TZ rule, so daylight saving is followed by the clock itself; one button on the page fills the rule in from the browser's own zone.
 - Alarm with a choice of melodies, per-weekday arming and a one-time skip.
 - Nine colours and three brightness steps, from the buttons or the web page.
 - Room temperature and light level from the kit's NTC and LDR (optional),
@@ -195,7 +195,7 @@ them can be changed later from the page and are stored in flash from
 then on.
 
 ```sh
-WIFI_SSID='home' WIFI_PASSWORD='…' TZ_OFFSET_MINUTES=-420 API_TOKEN='…' cargo run --release
+WIFI_SSID='home' WIFI_PASSWORD='…' TZ_RULE='<-07>7' API_TOKEN='…' cargo run --release
 ```
 
 `cargo run` builds, flashes over the module's USB with the two-slot
@@ -205,7 +205,8 @@ firmware version, the network and the address the clock got.
 | variable | meaning | default |
 | --- | --- | --- |
 | `WIFI_SSID`, `WIFI_PASSWORD` | network to join; may be left empty, see provisioning | empty |
-| `TZ_OFFSET_MINUTES` | local time offset from UTC in minutes | 0 |
+| `TZ_RULE` | the timezone as a POSIX TZ rule: `PST8PDT,M3.2.0,M11.1.0`, `CET-1CEST,M3.5.0,M10.5.0/3`, or `<-07>7` for a fixed UTC-7 | UTC |
+| `TZ_OFFSET_MINUTES` | the older variable, minutes east of UTC, stored as a fixed rule (`-420` is `<-07>7`); `TZ_RULE` wins if both are set | 0 |
 | `API_TOKEN` | bearer token for the scripts and the API's protected keys | none |
 | `MAX_CURRENT_STEP` | LED current ceiling, 1 to 15; 5 is the 50 % step | 5 |
 | `AP_PASSWORD` | the clock's own access point's password | `esp32clock` |
@@ -288,7 +289,7 @@ fetch and install it. The images are built with:
 | setting | value in the prebuilt images |
 | --- | --- |
 | network | none: the clock boots as an access point, see above |
-| timezone | `-420`, Vancouver (UTC-7, permanent since BC stopped changing clocks). The offset is fixed; set it on the settings page for your zone |
+| timezone | `<-07>7`, Vancouver (UTC-7, permanent since BC stopped changing clocks), no daylight saving. For another zone open the settings page and press "Use this browser's zone", or type a POSIX TZ rule |
 | API token | `esp32clock` |
 | everything else | the defaults: brightness cap 50 %, access point password `esp32clock` |
 
@@ -334,7 +335,9 @@ A clock with no address yet shows `no1P` instead.
 
 Any press ends a ringing alarm or the IP display.
 
-The page at `http://<ip>/` has every setting: timezone, 12/24 hour,
+The page at `http://<ip>/` has every setting: timezone (a POSIX TZ
+rule; the button beside it fills in the browser's own zone, and the
+status line shows the local time the rule gives), 12/24 hour,
 colour, brightness, alarm time, days and melody with a Play button,
 skip next alarm, temperature unit and offset, hostname, Wi-Fi network.
 The status line under the form shows the firmware version, the slot,

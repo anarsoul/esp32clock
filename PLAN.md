@@ -5102,3 +5102,190 @@ means what it says; the merged file stays on the release for
 `write-bin`, documented as clearing the settings. The `v0.1` tag was
 moved to the fixed commit minutes after the first push, and the
 release re-made.
+
+### Timezone rules: POSIX TZ strings and daylight saving — planned 2026-11-07
+
+**Goal.** The clock follows daylight saving by itself. The timezone
+setting becomes a POSIX TZ rule (`PST8PDT,M3.2.0,M11.1.0`,
+`CET-1CEST,M3.5.0,M10.5.0/3`, `<+0545>-5:45`), the form ESPHome and
+every libc take, evaluated on the chip from the NTP time; no broker,
+no Home Assistant automation, nothing on the LAN involved. The page
+sets it without the user knowing the notation: one button takes the
+browser's own zone and turns it into the rule. The user asked
+2026-11-07 after the question whether Home Assistant could push the
+offset over MQTT (it cannot without an automation on its side; its
+MQTT integration publishes nothing about itself but the birth
+message, and its API gives an IANA name the chip has no table for).
+
+**The rule, `core/src/tz.rs`.** `Tz<'a>`: the standard zone (name,
+offset in seconds east of UTC) and an optional daylight zone with its
+two transitions. `parse(&str) -> Option<Tz>` is a `const fn` over the
+bytes, so a bad rule in the build fails the build with a message, as
+a bad `TZ_OFFSET_MINUTES` does: a name of three or more letters, or
+`<…>` of three or more letters, digits, `+` and `-`; an offset
+`[+-]h[h][:mm[:ss]]`, positive west as POSIX has it (stored negated,
+east positive, as the rest of the clock counts); the daylight name,
+its offset or the default of one hour ahead; then `,start[/time],end
+[/time]` with `Mm.w.d` (month, week 1 to 5 where 5 is the last, day 0
+Sunday), `Jn` (1 to 365, no leap day) or `n` (0 to 365 with it), and
+a time `[+-]h[h][:mm[:ss]]` from −167 to 167 hours, default 02:00.
+Nothing else: no daylight zone without rules (the TZ-database
+default rules are not knowable here), no trailing junk, at most
+`TZ_MAX` (48) bytes. `Tz::period_at(unix) -> Period { offset_secs,
+dst, name }`: the civil year of the standard-time instant (days to
+year, month and day by Howard Hinnant's algorithm), both transitions
+of that year as Unix instants (the start is given in standard time,
+the end in daylight time), then daylight iff between them, or outside
+them when the end comes first in the year (the southern hemisphere).
+`Tz::std_offset_minutes()` for the record's old field. `fixed(minutes)
+-> Text<TZ_MAX>`, `const`, writes `<-07>7` or `<+0545>-5:45` for a
+plain offset, so the old setting and the old build variable still
+mean something. `clock::local_time(unix, offset_secs: i32)` replaces
+the minutes argument, and `LocalTime` gains `offset_secs`, which the
+alarm uses below.
+
+**The setting.** `Settings.tz: Text<TZ_MAX>` replaces
+`tz_offset_minutes`; `is_valid` parses it. The record goes to version
+11 with the rule appended (a length byte and 48 bytes, `RECORD_LEN`
+336 to 385; the 512-byte map scratch still holds it) and keeps writing
+the standard offset in minutes at bytes 7 and 8, so a rollback to an
+older image shows standard time; a record of version 10 or lower is
+read as `fixed(minutes)`. The build variable `TZ_RULE` seeds the rule;
+`TZ_OFFSET_MINUTES` still works and becomes `fixed(…)`, so the CI and
+the README's command stay right (`TZ_RULE` wins if both are set).
+`TZ` itself is not read: shells export it as an IANA name, which
+would break every build.
+
+**The form and the API.** The `tz` key takes the rule, or a plain
+integer of minutes east of UTC for the old scripts, which lands as
+`fixed(…)`; the JSON answers the rule as a string (a type change for
+a reader of `tz`, noted in the README; nothing on the clock reads it
+back). Two read-only keys: `utc_offset`, the minutes east of UTC in
+effect right now, and `dst`, whether daylight time is in effect, both
+`null` before the first time sync, computed in `http::status` so
+`form.rs` stays clockless; the status block gets a line `Local time
+Fri 14:32 PST, UTC−08:00.` for checking a rule. `set/tz` on the bus
+stays refused. The HTML value and the JSON string go through
+`HtmlStr` and `JsonStr`, since a quoted name has `<` and `>`.
+
+**The page.** In Other, `Timezone, POSIX rule` is a text field with
+the rule, `maxlength=48`, and beside it a button `Use this browser's
+zone` with a `<small>` that then says which zone that was
+(`America/Vancouver`). The button runs `posixTz(zone)` from
+`/tz.js`, a static script embedded like the favicon and sent with
+its `max-age`, so the page itself grows by the field and the tag only
+(the settings page is at 5149 of 6016). The script gets the browser's
+IANA zone from `Intl.DateTimeFormat().resolvedOptions().timeZone`,
+finds the UTC offset the zone has on 1 January and 1 July of this
+year through `formatToParts`; equal offsets are a fixed rule; otherwise
+it bisects each half-year to the minute for the instant the offset
+changes, and writes each transition as `Mm.w.d/time` in the local
+time in force before it, with week 5 when the day is the last of its
+kind in the month (so the EU's last Sunday stays right in a year
+where it is the fourth). The names are `Intl`'s short zone names when
+they are letters (`PST`, `CET`) and `<+hhmm>` otherwise; the daylight
+offset is written only when it is not one hour ahead. The result is
+put in the field and the unsaved-changes mark raised. It is a
+heuristic from one year's two transitions, which is what the rule
+notation is for; a zone with no daylight time or a new rule next year
+is one click again. The setup page on the access point gets the same
+field and button, since the phone doing the setup knows its zone.
+`scripts/tz-check.mjs` runs the same function under Node against a
+list of zones and their known rules, the one check of the script the
+host can do (`Intl` is the browser's and Node's alike).
+
+**The alarm across a transition.** Two cases the alarm minute logic
+gets wrong today. Spring forward skips an hour: an alarm at 02:30 is
+never "behind == 0" and does not ring. The fix: `Ui` remembers the
+last tick's local minute of the day, and the alarm is also due when
+that minute was before the alarm time and this one is at or past it
+(the crossing), within the same local day, so an alarm in the skipped
+hour rings at 03:00. Fall back repeats an hour: an alarm at 01:30
+would ring at 01:30 PDT and again at 01:30 PST, since the second is
+an hour later in Unix time. The fix: the time the alarm last rang is
+kept in local seconds (`unix + offset`), so the repeat compares equal
+and counts as handled; the 07:00 to 07:30 case (the user moves the
+alarm after it rang) still rings, since 07:30 is after 07:00 in local
+seconds too. The carry record's field is renamed `last_alarm_local`
+with the same codec and layout version; the first boot after this
+update reads the old Unix value as local, off by the offset for one
+boot, which matters only to the ten-minute boot grace on that boot.
+
+**Docs.** `AGENTS.md` (the settings list, the build command,
+`TZ_RULE`, the `tz` key, the two read-only keys, the route, the
+sizes, the test count), the README (features, variables table, the
+settings paragraph, the `tz` type change), and the `tz.js` check in
+`scripts/`.
+
+**Tests.** `tz`: the examples above parse to the expected offsets and
+rules, the rejects (`TZ`, `PST`, `PST8PDT`, `PST8PDT,M3.2.0`, `M13`,
+week 0 or 6, day 7, a 49-byte rule, trailing junk); `period_at` at
+the second before and the second of each 2026 transition for the US,
+the EU, Sydney, Lord Howe's half hour, Nuuk's negative time and the
+`J` and `n` forms; `fixed` round-trips through `parse`;
+`DEFAULT_TZ` parses. `settings`: the record round trip at version 11,
+a version 10 record read as the fixed rule, the standard offset at
+bytes 7 and 8. `form`: `tz` as a rule, as minutes and refused; the
+JSON `tz` string and the two read-only keys; the page sizes with a
+48-byte rule of `<` and `>`. `ui`: the skipped hour rings at 03:00,
+the repeated hour rings once, the moved alarm still rings.
+`scripts/tz-check.mjs` under Node for the browser half.
+
+**Verify on the bench.** Flash, open the page: the field shows
+`<-07>7` (the old record's minutes), the status line `Local time …
+UTC−07:00`; click the button, see `America/Vancouver` and
+`PST8PDT,M3.2.0,M11.1.0` in the field, save, see the same time (PDT
+until November, and Vancouver no longer changes). Then `tz=CET-
+1CEST,M3.5.0,M10.5.0/3` by `/api`: the panel moves nine hours, the
+line says `CET, UTC+01:00`, `dst` false (November); put the rule back
+by the button. The alarm cases are host tests only.
+
+**Built 2026-11-07, verified on the bench the same day** (test-clock at
+10.1.1.30, updated over the air three times by the PIN path, since the
+board's token is the release image's and not the bench one; the
+monitor's log supplied the digits). As planned, with these findings:
+
+- The version 10 record came up as `<-07>7` on the first boot, the
+  time carried, the image confirmed good; `/api` answers `"tz":"<-07>7",
+  "utc_offset":-420,"dst":false`. `tz=CET-1CEST,M3.5.0,M10.5.0/3` moved
+  the page's line to `Sun 00:20 CET, UTC+01:00`, the Pacific rule to
+  `Sat 15:20 PST, UTC-08:00`, Sydney's to `Sun 10:20 AEDT, UTC+11:00,
+  daylight time` (November is its summer), `America/Vancouver` is a
+  `400`, and `tz=-420` put `<-07>7` back.
+- The browser script, driven by headless Chromium through CDP against
+  the real page: the click filled `PDT7` for `America/Vancouver`, named
+  the zone and raised the unsaved mark. That answer took two fixes the
+  host check alone did not find. First, Chromium's time zone data has
+  Vancouver on PST in January 2026 and PDT from March with no return,
+  so bisecting for the second change of this year found a nonsense
+  instant (`M12.5.4/17`); the script now reads the rule from next year,
+  when a zone dropping daylight time is already fixed, and checks each
+  transition's candidate rules against the six years after. Second,
+  a midnight transition is `Saturday 24:00` in Chile and `Sunday 00:00`
+  elsewhere, and Nuuk's is `Sunday -1:00`; one year's data cannot tell
+  them apart, the later years can, which is what the candidates are
+  for. Names come from the first locale that has letters (en-US for
+  PST, en-GB for CET, en-AU for AEST and Lord Howe's LHST, en-CA for
+  NST, en-IN for IST, en-ZA for SAST); Moscow and Tokyo stay `<+03>`
+  and `<+09>`. `scripts/tz-check.mjs` holds seventeen zones.
+- A browser keeps `/tz.js` for a day (`max-age=86400`, like the
+  favicon), so the second bench run clicked with the old script after
+  the update. The pages load it as `/tz.js?v=<firmware version>`.
+- The script is 5.7 KB and goes out of one response buffer; a `const`
+  assert in `src/http.rs` keeps it under `RESPONSE_BUF` with its
+  header. It passed 6 KB once with its comments and was trimmed.
+- The alarm's "jumped over" rule was narrowed while the tests were
+  written: it applies only when the UTC offset changed between two
+  ticks, since a plain gap in the ticks (a time step) is what the
+  ten-minute boot grace is for, and an existing test rightly refuses
+  to ring an alarm an hour late.
+- Sizes: `RECORD_LEN` 385, the settings page 5525 of 6016 (the rule
+  field, the button, the local-time line and the versioned script
+  tag), the setup page 3177 with twelve networks and 2324 without the
+  list, the main stack 67.4 KB (from 69.6), 94 host tests (from 86).
+  The Node check and the Chromium run are not in `cargo host-test`;
+  the first is a command in `AGENTS.md`, the second a scratchpad
+  script after the pattern of 2026-11-02.
+- Not verified: the panel itself (the time moved nine hours in the
+  JSON, not watched on the LEDs), the alarm across a real transition
+  (host tests only), and the setup form's button on a phone.

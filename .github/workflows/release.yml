@@ -19,7 +19,7 @@ env:
   # What the prebuilt image is configured with; see ci.yml and the README.
   WIFI_SSID: ""
   WIFI_PASSWORD: ""
-  TZ_OFFSET_MINUTES: "-420"
+  TZ_RULE: "<-07>7" # Vancouver, UTC-7 all year
   API_TOKEN: esp32clock
   ESPFLASH_VERSION: v4.7.0
 
@@ -106,7 +106,7 @@ jobs:
 
             The images carry no network (the clock boots as its own access
             point, `clock-xxxx`, password `esp32clock`, setup form at
-            http://192.168.4.1/), the Vancouver timezone and the API token
+            http://192.168.4.1/), Vancouver time without daylight saving (`<-07>7`) and the API token
             `esp32clock`; see the README's "Prebuilt images".
 
   pages:

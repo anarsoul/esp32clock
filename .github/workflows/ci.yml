@@ -18,7 +18,7 @@ env:
   # point and the network is entered from the setup form.
   WIFI_SSID: ""
   WIFI_PASSWORD: ""
-  TZ_OFFSET_MINUTES: "-420"
+  TZ_RULE: "<-07>7" # Vancouver, UTC-7 all year
   API_TOKEN: esp32clock
   ESPFLASH_VERSION: v4.7.0
 

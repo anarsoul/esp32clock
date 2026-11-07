@@ -109,12 +109,17 @@ pub struct Ui {
     since: Instant,
     /// The PIN being shown.
     pin: u16,
-    /// Unix time the alarm last rang or was used up by the skip flag.
-    /// An alarm that came round after that is still due; one that came
-    /// round before it has been dealt with, so it fires once and the
-    /// boot-time grace does not fire it again. Carried across a software
-    /// reset by the display task.
+    /// Local wall-clock seconds (`LocalTime::local_secs`) when the alarm
+    /// last rang or was used up by the skip flag. An alarm that came
+    /// round after that is still due; one that came round before it has
+    /// been dealt with, so it fires once and the boot-time grace does not
+    /// fire it again. Local rather than Unix so the hour a fall-back
+    /// transition repeats does not ring it twice. Carried across a
+    /// software reset by the display task.
     pub last_alarm: Option<i64>,
+    /// The last tick's time: an alarm minute the local clock jumped over
+    /// between two ticks (a spring-forward transition) is due as well.
+    prev: Option<LocalTime>,
     /// A valid time has been seen since boot; the missed-alarm check is
     /// only made before that.
     had_time: bool,
@@ -131,7 +136,7 @@ impl Default for Ui {
 
 impl Ui {
     pub fn new() -> Self {
-        Ui { mode: Mode::Clock, since: Instant::now(), pin: 0, last_alarm: None, had_time: false, quiet_until: None }
+        Ui { mode: Mode::Clock, since: Instant::now(), pin: 0, last_alarm: None, prev: None, had_time: false, quiet_until: None }
     }
 
     /// Switch mode, timing it from `now`.
@@ -221,16 +226,23 @@ impl Ui {
             None => {
                 if let Some(t) = time {
                     let (behind, day) = minutes_since_alarm(settings, t);
-                    // When the alarm last came round, as Unix time.
-                    let came_round = t.unix - behind as i64 * 60 - t.second as i64;
+                    // When the alarm last came round, in local seconds.
+                    let came_round = t.local_secs() - behind as i64 * 60 - t.second as i64;
                     let armed = settings.alarm_armed && settings.alarm_on(day);
                     let handled = self.last_alarm.is_some_and(|at| at >= came_round);
+                    // The UTC offset changed since the last tick and the
+                    // alarm minute lay in the jump: a spring-forward
+                    // transition skipped it. A plain gap in the ticks (a
+                    // time step) is not this; the boot grace covers that.
+                    let jumped = self
+                        .prev
+                        .is_some_and(|p| p.offset_secs != t.offset_secs && p.local_secs() < came_round && came_round <= t.local_secs());
                     // On the alarm minute, once. On the first valid time
                     // after boot, also shortly after it: a power cut may
                     // have eaten the alarm.
-                    let due = armed && !handled && (behind == 0 || (!self.had_time && behind <= MISSED_ALARM_GRACE));
+                    let due = armed && !handled && (behind == 0 || jumped || (!self.had_time && behind <= MISSED_ALARM_GRACE));
                     if due {
-                        self.last_alarm = Some(t.unix);
+                        self.last_alarm = Some(t.local_secs());
                         if settings.skip_next {
                             // A skipped alarm is used up, not postponed.
                             settings.skip_next = false;
@@ -242,6 +254,7 @@ impl Ui {
             }
         }
         self.had_time |= time.is_some();
+        self.prev = time.or(self.prev);
     }
 
     pub fn ringing(&self) -> bool {
@@ -503,12 +516,12 @@ mod tests {
         assert_eq!(running.mode, Mode::Clock);
         // Carried: the alarm was handled at 07:00:30, so the grace stays quiet.
         let mut carried = Ui::new();
-        carried.last_alarm = Some(at(0, 7, 0, 30).unix);
+        carried.last_alarm = Some(at(0, 7, 0, 30).local_secs());
         carried.tick(&mut s, Some(at(0, 7, 5, 0)), ms(0));
         assert_eq!(carried.mode, Mode::Clock);
         // Carried from yesterday: today's alarm is new.
         let mut old = Ui::new();
-        old.last_alarm = Some(at(-1, 7, 0, 30).unix);
+        old.last_alarm = Some(at(-1, 7, 0, 30).local_secs());
         old.tick(&mut s, Some(at(0, 7, 5, 0)), ms(0));
         assert_eq!(old.mode, Mode::Ringing);
         // Across midnight: the alarm at 23:58 came round "yesterday" for a 00:03 boot.
@@ -522,6 +535,52 @@ mod tests {
     }
 
     #[test]
+    fn alarm_across_daylight_saving_transitions() {
+        // Spring forward: 01:59:59 PST is followed by 03:00:00 PDT, so an
+        // alarm at 02:30 is never on the clock; it rings at 03:00, once.
+        let mut ui = Ui::new();
+        let mut s = Settings { alarm_hour: 2, alarm_minute: 30, ..armed() };
+        let unix = MONDAY + 6 * 86_400 + 3600 + 59 * 60 + 59 + 8 * 3600; // Sunday 01:59:59 PST
+        ui.tick(&mut s, Some(local_time(unix - 3600, -8 * 3600)), ms(0));
+        ui.tick(&mut s, Some(local_time(unix, -8 * 3600)), ms(1000));
+        assert_eq!(ui.mode, Mode::Clock);
+        let after = local_time(unix + 1, -7 * 3600);
+        assert_eq!((after.hour, after.minute, after.second), (3, 0, 0));
+        ui.tick(&mut s, Some(after), ms(2000));
+        assert_eq!(ui.mode, Mode::Ringing, "the skipped alarm rings when the clock lands past it");
+        ui.handle(&mut s, press(Button::Top, Kind::Short), ms(3000));
+        assert_eq!(ui.mode, Mode::Clock);
+        ui.tick(&mut s, Some(local_time(unix + 2, -7 * 3600)), ms(4000));
+        ui.tick(&mut s, Some(local_time(unix + 3, -7 * 3600)), ms(5000));
+        assert_eq!(ui.mode, Mode::Clock, "once");
+        // Fall back: 01:30 PDT, then 01:30 PST an hour later.
+        let mut ui = Ui::new();
+        let mut s = Settings { alarm_hour: 1, alarm_minute: 30, ..armed() };
+        let unix = MONDAY + 6 * 86_400 + 3600 + 30 * 60 + 7 * 3600; // Sunday 01:30:00 PDT
+        ui.tick(&mut s, Some(local_time(unix - 1, -7 * 3600)), ms(0));
+        ui.tick(&mut s, Some(local_time(unix, -7 * 3600)), ms(1000));
+        assert_eq!(ui.mode, Mode::Ringing);
+        ui.handle(&mut s, press(Button::Top, Kind::Short), ms(2000));
+        let again = local_time(unix + 3600, -8 * 3600);
+        assert_eq!((again.hour, again.minute, again.second), (1, 30, 0));
+        ui.tick(&mut s, Some(local_time(unix + 3599, -8 * 3600)), ms(3000));
+        ui.tick(&mut s, Some(again), ms(4000));
+        assert_eq!(ui.mode, Mode::Clock, "the repeated hour does not ring it again");
+        // Moving the alarm later after it rang still rings it: 07:30 is
+        // after 07:00 in local seconds too.
+        let mut ui = Ui::new();
+        let mut s = armed();
+        ui.tick(&mut s, Some(at(0, 6, 59, 59)), ms(0));
+        ui.tick(&mut s, Some(at(0, 7, 0, 0)), ms(1000));
+        assert_eq!(ui.mode, Mode::Ringing);
+        ui.handle(&mut s, press(Button::Top, Kind::Short), ms(2000));
+        s.alarm_minute = 30;
+        ui.tick(&mut s, Some(at(0, 7, 29, 59)), ms(3000));
+        ui.tick(&mut s, Some(at(0, 7, 30, 0)), ms(4000));
+        assert_eq!(ui.mode, Mode::Ringing);
+    }
+
+    #[test]
     fn skip_next_uses_up_the_alarm() {
         let mut ui = Ui::new();
         let mut s = Settings { skip_next: true, ..armed() };
@@ -530,7 +589,7 @@ mod tests {
         ui.tick(&mut s, Some(at(0, 7, 0, 0)), ms(1000));
         assert_eq!(ui.mode, Mode::Clock);
         assert!(!s.skip_next, "the flag is consumed");
-        assert_eq!(ui.last_alarm, Some(at(0, 7, 0, 0).unix), "and the alarm counts as handled");
+        assert_eq!(ui.last_alarm, Some(at(0, 7, 0, 0).local_secs()), "and the alarm counts as handled");
         ui.tick(&mut s, Some(at(0, 7, 0, 30)), ms(31_000));
         assert_eq!(ui.mode, Mode::Clock);
         ui.tick(&mut s, Some(at(1, 7, 0, 0)), ms(100_000));

@@ -165,10 +165,10 @@ pub async fn display_task(stack: Stack<'static>) -> ! {
         settings::update(|s| s.skip_next = true);
         info!("display: skip-next alarm carried over the reset");
     }
-    let mut carried_alarm = carried.last_alarm_unix;
-    ui.last_alarm = carried.last_alarm_unix;
-    if let Some(at) = carried.last_alarm_unix {
-        info!("display: alarm last handled at unix {at}, carried over the reset");
+    let mut carried_alarm = carried.last_alarm_local;
+    ui.last_alarm = carried.last_alarm_local;
+    if let Some(at) = carried.last_alarm_local {
+        info!("display: alarm last handled at local second {at}, carried over the reset");
     }
 
     loop {
@@ -191,7 +191,7 @@ pub async fn display_task(stack: Stack<'static>) -> ! {
         let last_alarm = if ui.ringing() { None } else { ui.last_alarm };
         if last_alarm != carried_alarm {
             carried_alarm = last_alarm;
-            carry::update(|c| c.last_alarm_unix = last_alarm);
+            carry::update(|c| c.last_alarm_local = last_alarm);
         }
 
         // The buzzer loops the melody on its own; tell it only on the edges.

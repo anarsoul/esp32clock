@@ -25,7 +25,7 @@ use core::cell::Cell;
 use critical_section::Mutex;
 use embassy_time::{Duration, Instant};
 
-use crate::{carry, settings};
+use crate::{carry, settings, tz};
 
 pub use esp32clock_core::clock::LocalTime;
 
@@ -82,10 +82,20 @@ pub fn unix_secs() -> Option<i64> {
     Some(unix_micros()?.div_euclid(1_000_000))
 }
 
+/// The offset east of UTC in seconds and whether daylight time is in
+/// force at `unix_s`, under the settings' timezone rule. The rule always
+/// parses (`Settings::is_valid`); UTC if it somehow does not.
+pub fn period_at(unix_s: i64) -> (i32, bool) {
+    let s = settings::get();
+    let rule = tz::parse(s.tz.as_str()).unwrap_or(tz::UTC);
+    let p = rule.period_at(unix_s);
+    (p.offset_secs, p.dst)
+}
+
 /// Local time of day for a Unix time in seconds, in the timezone from the
 /// settings.
 pub fn local_time(unix_s: i64) -> LocalTime {
-    esp32clock_core::clock::local_time(unix_s, settings::get().tz_offset_minutes)
+    esp32clock_core::clock::local_time(unix_s, period_at(unix_s).0)
 }
 
 /// Local time of day, if synced, in the timezone from the settings.

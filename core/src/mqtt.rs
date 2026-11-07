@@ -458,6 +458,7 @@ mod tests {
             rssi: Some(-60),
             mqtt: Link::Connected,
             ringing: false,
+            local: None,
         }
     }
 

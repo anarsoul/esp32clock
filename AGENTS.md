@@ -37,7 +37,9 @@ cargo build --release
 cargo clippy --release
 cargo host-test                          # the core crate's tests on the host (alias in .cargo/config.toml)
 cargo clippy -p esp32clock-core --target host-tuple --tests
-WIFI_SSID='…' WIFI_PASSWORD='…' TZ_OFFSET_MINUTES=-420 API_TOKEN='…' cargo run --release
+WIFI_SSID='…' WIFI_PASSWORD='…' TZ_RULE='<-07>7' API_TOKEN='…' cargo run --release
+TZ_OFFSET_MINUTES=-420 cargo build --release   # the older variable: minutes east of UTC, stored as the fixed rule <-07>7
+node scripts/tz-check.mjs                 # the page's browser-zone script (src/tz.js) against zones with known rules
 MAX_CURRENT_STEP=8 cargo build --release   # optional: raise the drive-current ceiling (default 5)
 MQTT_HOST=10.1.1.5 MQTT_USER=clock MQTT_PASSWORD='…' cargo build --release   # optional: the Home Assistant broker (MQTT_PORT defaults to 1883)
 API_TOKEN='…' scripts/ota.sh <ip>      # later updates, over the LAN
@@ -97,7 +99,7 @@ Credentials, the default timezone and the API token are read at build
 time by `core/src/config.rs`; `core/build.rs` reruns that crate when
 they change, and the root `build.rs` exports `git describe --always
 --dirty` as `FIRMWARE_VERSION`, which
-goes into the app descriptor, the boot line, the page and `/api`. The timezone, 12/24 hour, colour, brightness, alarm, alarm days,
+goes into the app descriptor, the boot line, the page and `/api`. The timezone (`tz`: a POSIX TZ rule such as `PST8PDT,M3.2.0,M11.1.0`, parsed by `core/src/tz.rs` and evaluated on the chip from the NTP time, so daylight saving needs nothing from the network; the key also takes minutes east of UTC, stored as the fixed rule `<-07>7`; the default is `TZ_RULE` from the build, checked by a `const` assert so a bad rule fails the build, else `TZ_OFFSET_MINUTES` as a fixed rule, the CI's `<-07>7` being Vancouver without daylight saving; the page's `Use this browser's zone` button fills it in through `/tz.js`, see `src/tz.js`), 12/24 hour, colour, brightness, alarm, alarm days,
 alarm melody, thermometer offset (`temp_offset`, tenths of a degree
 Celsius added to the NTC's reading, ±10.0, for the warm air at the
 sensor's spot in the case; blue-clock measured 0.7 high), the
@@ -131,15 +133,12 @@ with no thermometer fitted or before the first reading), `light` (0 dark
 to 100, `null` before the first reading), `rssi` (the station's signal
 in dBm from its last beacon, read every 10 s by `net::wifi_task` into
 an atomic, `null` while not connected and on the access point),
-`mqtt` (`off`, `connecting` or `connected`), `ringing` (whether the
-alarm rings right now) and `last_heal` (Unix seconds or null); posting
-them is refused as an unknown key. The settings keys carry
+`utc_offset` and `dst` (the minutes east of UTC and whether daylight time is in force right now under the rule, `null` before the first time sync), `mqtt` (`off`, `connecting` or `connected`), `ringing` (whether the alarm rings right now) and `last_heal` (Unix seconds or null); posting them is refused as an unknown key. The settings keys carry
 `mqtt_password_set` instead of the password. The page shows the
 network and the signal under the firmware line (`Wi-Fi home, -62
 dBm.`, or `not connected`, or `no network stored`), the broker on the
 next (`MQTT connected 10.1.1.5:1883.`, `MQTT connecting …, last: not
-authorized.` or `MQTT off.`), the room on the line after (`Room 23.4 °C (74.1 °F),
-light 62 %`), and the minute heartbeat logs the filtered millivolts of
+authorized.` or `MQTT off.`), the room on the line after (`Room 23.4 °C (74.1 °F), light 62 %`), the local time the rule gives on the next (`Local time Sat 15:20 PST, UTC-08:00.`, with `, daylight time` appended when it is in force, for checking a rule), and the minute heartbeat logs the filtered millivolts of
 both dividers for calibration. `skip_next` (page checkbox, key `skip`) is
 the one setting the record does not store: it skips one alarm and is cleared
 by it or by a power cut; a software reset (self-heal, panic) carries it over
@@ -354,7 +353,7 @@ module ends with its `#[cfg(test)] mod tests`.
 | `core/src/panel.rs` | COM/SEG map, font, per-position colour as duty `Levels` (no RGB; the palette is written in levels), `Panel::render` → `ScanImage` |
 | `src/scan.rs` | cycle/transfer builder, double-buffered DMA scan task that builds the SPI2 quad + DMA bus itself (an async esp-hal driver is `!Send`), restart-gap statistics, `stop` on a blank frame before a deliberate reset or a flash write, `resume` after a failed one |
 | `src/display.rs` | UI loop: tick, button or settings change → `ui` → draw → publish; rings the alarm and signals the ringing edges (`ringing_changed`) for the MQTT state; `silence` ends a ring as a press would; shows the IP, or `AP` in place of the sweep on the access point; acts on the hold before the UI sees it; seeds and carries the skip flag and the time the alarm last rang |
-| `core/src/ui.rs` | mode state machine, pure logic, one timer for the current mode; edits the settings it is handed; alarm due check and missed-alarm grace, both gated by the carried time the alarm last rang; consumes `skip_next`; `view` takes the room reading and answers the `Temp` face mid-minute in clock mode |
+| `core/src/ui.rs` | mode state machine, pure logic, one timer for the current mode; edits the settings it is handed; alarm due check and missed-alarm grace, both gated by the carried local second the alarm last rang (local rather than Unix, so the hour a fall-back transition repeats rings once; an alarm minute a spring-forward transition skips rings when the clock lands past it); consumes `skip_next`; `view` takes the room reading and answers the `Temp` face mid-minute in clock mode |
 | `core/src/settings.rs` | `Settings`, palette and brightness tables, `Hostname`, `Text`/`Secret` strings, `Credentials`, the token and the MQTT `Broker` with their rules, the build-time `seed`, shared `Watch` with change signal, versioned append-only flash record |
 | `src/storage.rs` | the one flash handle (`with_flash`), nvs partition lookup, `sequential-storage` map over it, debounced persist task that compares records, not structs, and resets into station mode after a save that changed the credentials, or after any save on the access point with a network stored |
 | `src/heal.rs` | deliberate resets: `reboot` says the MQTT goodbye, blanks the panel through `scan::stop`, carries the time and resets, for `/reload` and the OTA reboot; `reset`, the self-heal, waits out a ringing alarm and counts itself first; `switch_mode`, the reset between station and access point, which starts the carry record over and freezes it |
@@ -363,17 +362,19 @@ module ends with its `#[cfg(test)] mod tests`.
 | `core/src/http.rs` | `Method`, `Head`, `parse_head`; `RESPONSE_BUF` and `PAGE_MAX`, which the page tests assert against |
 | `core/src/mqtt.rs` | Home Assistant over MQTT, pure: `DeviceId` and its topics, `Link` (the state for the page), `Route` and `Command`, `SET_KEYS` and `apply_set` over `form::apply_one`, `write_discovery` (the device payload with every entity) and `DISCOVERY_MAX` |
 | `src/mqtt.rs` | the MQTT task: resolve, connect with the will, subscribe, discovery and state publishes, keepalive pings, the select loop over `poll_header`, the back-off, `goodbye` for the reset paths, `link()` and `Report` for the page and the heartbeat |
-| `src/http.rs` | HTTP/1.0 server, `LISTENERS` sockets each in its own task: `GET`/`POST` on `/` (the settings page, or the setup form on the access point) and `/api`, `POST /play`, `GET /update` and `GET /token` (each issues a PIN), `POST /ota` with the body streamed to `ota::install`, `POST /reload` and `POST /ap` with the token, `POST /token` with the token or the PIN, `POST /pin`, `POST /scan` on the access point, `GET /favicon.ico` (`src/favicon.ico` embedded, the one cacheable response); the settings, update and token pages are titled and headed `Clock: <hostname>`; a refused form redirects to `/?error=…`; per-listener state and counters for the heartbeat |
+| `src/http.rs` | HTTP/1.0 server, `LISTENERS` sockets each in its own task: `GET`/`POST` on `/` (the settings page, or the setup form on the access point) and `/api`, `POST /play`, `GET /update` and `GET /token` (each issues a PIN), `POST /ota` with the body streamed to `ota::install`, `POST /reload` and `POST /ap` with the token, `POST /token` with the token or the PIN, `POST /pin`, `POST /scan` on the access point, `GET /favicon.ico` and `GET /tz.js` (`src/favicon.ico` and `src/tz.js` embedded, the two cacheable responses; the page loads the script as `/tz.js?v=<version>` so an update is not served the cached one); the settings, update and token pages are titled and headed `Clock: <hostname>`; a refused form redirects to `/?error=…`; per-listener state and counters for the heartbeat |
 | `core/src/buttons.rs` | `Button`, `Kind`, `Event` |
 | `src/buttons.rs` | debounced short/long press events, the two-button long press, and the 10 s two-button `Hold` |
 | `core/src/melody.rs` | alarm tunes as pitch and length data with tempo; `RANDOM` and the pure `pick` that turns it into a tune; pure |
 | `core/src/carry.rs` | `Carried`, `MARK` with its layout version, `encode`/`decode` |
-| `src/carry.rs` | RTC-RAM record used only after a software reset (`CoreSw`/`Cpu0Sw`; anything else zeroes it at boot): self-heal count and time, the skip flag, the time the alarm last rang, the Unix time last written, boots of an unconfirmed OTA image, the access-point flag for the next boot; the mark carries a layout version; `freeze` for a mode switch |
+| `src/carry.rs` | RTC-RAM record used only after a software reset (`CoreSw`/`Cpu0Sw`; anything else zeroes it at boot): self-heal count and time, the skip flag, the local second the alarm last rang, the Unix time last written, boots of an unconfirmed OTA image, the access-point flag for the next boot; the mark carries a layout version; `freeze` for a mode switch |
 | `src/buzzer.rs` | LEDC PWM on an open-drain pin; plays a melody on command, looped or once, stops within a note |
 | `core/src/sensors.rs` | the NTC table (10 kΩ, B 3950, under the adapter's 10 kΩ pull-up from 3V3) and `temperature_dc` by interpolation, `fahrenheit_tenths`, `ldr_ohms` and `light_pct` (the logarithm of the LDR's resistance, 1 kΩ is 100 and 50 kΩ is 0), `face` (the panel's four characters for a temperature), `Tenths`; pure |
 | `src/sensors.rs` | `sensor_task`: the async `Adc<ADC1>` with `AdcCalCurve` (the scheme that reads straight on the C3) on GPIO0 (NTC) and GPIO1 (LDR), 8 samples a second each into a 10 s exponential average, published as millivolts in two atomics; `room()` for `http::status`, `Report` for the heartbeat |
-| `core/src/clock.rs` | `LocalTime`, `weekday_of_days`, `local_time(unix, tz_minutes)` |
-| `src/clock.rs` | Unix time = uptime + NTP offset; `local_time` with the settings' timezone; `carry_time`/`restore_carried` move the time across a software reset as plain Unix time, written every second by the display tick; `RESET_PAUSE` for every deliberate reset |
+| `core/src/tz.rs` | POSIX TZ rules: `parse` (`const`, so a build-time rule is checked by the compiler), `Tz::period_at(unix)` (the offset, the daylight flag and the name in force), `fixed(minutes)` for the old setting, the calendar arithmetic; `TZ_MAX` 48 |
+| `src/tz.js` | the page's `Use this browser's zone` button, served as `/tz.js`: the browser's IANA zone as a POSIX rule from next year's two offset changes (so a zone dropping daylight time this year, as Vancouver did in 2026, comes out fixed), each transition's rule checked against the six years after (a midnight change is Saturday 24:00 in Chile and Sunday 00:00 elsewhere), names from the first locale that has letters; `scripts/tz-check.mjs` runs it under Node |
+| `core/src/clock.rs` | `LocalTime` (with the `offset_secs` it was computed with and `local_secs`), `weekday_of_days`, `local_time(unix, offset_secs)` |
+| `src/clock.rs` | Unix time = uptime + NTP offset; `period_at` and `local_time` under the settings' rule; `carry_time`/`restore_carried` move the time across a software reset as plain Unix time, written every second by the display tick; `RESET_PAUSE` for every deliberate reset |
 | `core/src/ota.rs` | image header and descriptor offsets, `Slot` names, `hash_chunk` for the appended SHA-256, `version_from` |
 | `src/ota.rs` | firmware upload: slot lookup and the boot-time rollback, sector writer with read-back, activate, reboot; `VERSION` from `build.rs` |
 | `src/net.rs` | Wi-Fi station on the stored credentials with all-channel scan and transmit-power ceiling, minute RSSI line, connect failures logged with their meaning (`wrong password?`, `no such network in range`) and a budget that ends in `heal::reset`; DHCP switched on 500 ms after each connect and off at disconnect; link and address monitor, gateway ping probe with the self-heal trigger, SNTP, DHCP renew on hostname change; the boot's `Mode`, the access-point task (AP+STA, scans on request into the network list) and its static stack config |
@@ -479,16 +480,12 @@ module ends with its `#[cfg(test)] mod tests`.
   overflow is a 500, not a truncation. The headers are 88 bytes;
   `core::http::PAGE_MAX` (6016) is what a page may take, and the
   `form` tests build each page at its worst case and assert it
-  (2026-11-07: settings 5149 in its four fieldsets with the Play and
-  unsaved-changes script, the Wi-Fi and MQTT lines, a stored SSID of
-  32 `"`, a 64-byte broker host twice, a user of 32 `"` and
-  the hostname in the title and heading; update 2476 and token 2043 since the split of 2026-11-02; setup with twelve 32-character networks 3039). `cargo host-test` after adding a field
+  (2026-11-07: settings 5525 in its four fieldsets with the Play and unsaved-changes script, the Wi-Fi, MQTT and local-time lines, a stored SSID of 32 `"`, a 48-byte timezone rule of `<` (four bytes each through `HtmlStr`), a 64-byte broker host twice, a user of 32 `"`, the hostname in the title and heading and the version in the script tag; update 2476 and token 2043 since the split of 2026-11-02; setup with twelve 32-character networks 3177). `cargo host-test` after adding a field
   or label; the test prints the sizes with `-- --nocapture`. The setup
   page's network list stops at `form::NETWORK_LIST_BUDGET` (1900)
   bytes, strongest first, with a "N more not shown" line, because a
   listed SSID of 32 `"` is 417 bytes of `<option>` through `HtmlStr`
-  (twice per network) and five of them would pass the buffer; the rest
-  of the page at its worst is 2006, and `provision_page_budget_is_covered`
+  (twice per network) and five of them would pass the buffer; the rest of the page at its worst is 2324, and `provision_page_budget_is_covered`
   locks the sum under `PAGE_MAX`; the budget was set when the page
   had 3968 and stays, since twelve networks is plenty.
 - `http::RX_BUF` (4096) is the TCP receive window; 1 KB made an upload
@@ -497,12 +494,10 @@ module ends with its `#[cfg(test)] mod tests`.
 - An OTA image must fit a slot (`partitions.csv`, 0x1E0000 = 1920 KB);
   the release image is about 650 KB. Static RAM: `ota.rs` holds 11 KB
   of buffers, and what the statics leave of DRAM is the main stack,
-  about 82 KB now (`Settings` is 171 bytes of record and sits in several
-  task futures); check `.stack` in `llvm-readelf -S` after adding one.
+  67.4 KB on 2026-11-07 (`Settings` is a 385-byte record and sits in several task futures: the 49-byte timezone rule cost 2.2 KB of stack); check `.stack` in `llvm-readelf -S` after adding one. `src/tz.js` (5.7 KB) is sent from one response buffer and a `const` assert in `src/http.rs` keeps it under `RESPONSE_BUF` with its header.
 - `form::apply` decodes each key into 16 bytes and each value into 64
   (`form::VALUE_MAX`, the password); longer input is reported as a bad
-  key or value before parsing. The record is `settings::RECORD_LEN`
-  (336) bytes and the map scratch in `storage.rs` 512, which must hold
+  key or value before parsing. The record is `settings::RECORD_LEN` (385) bytes and the map scratch in `storage.rs` 512, which must hold
   the item (record plus 9 bytes, padded to a word).
 - The MQTT task's future holds its socket buffers (1 KB receive, 2 KB
   send), the 1 KB `BumpBuffer`, the state JSON (1 KB) and the
@@ -536,21 +531,17 @@ module ends with its `#[cfg(test)] mod tests`.
 
 ## Verifying without a board
 
-`cargo host-test` runs the tests of `core/` on the host (86 on
-2026-11-07): the AiP33628 encoder against a behavioural model of the
+`cargo host-test` runs the tests of `core/` on the host (94 on 2026-11-07): the AiP33628 encoder against a behavioural model of the
 chip (shift on CLK rise, latch on DIN rise while CLK high), the panel
 map, the palette and brightness tables, the hostname, password and
 token rules, the record round trip and every older version, the form
 parser and the page sizes against `PAGE_MAX`, the head parser, the
-appended-hash split, the carry codec, the calendar arithmetic, the
-melodies, the UI's alarm, grace and skip logic, the PIN and token
+appended-hash split, the carry codec, the calendar arithmetic, the POSIX TZ parser with its rejects and the 2026 transitions of both hemispheres, the melodies, the UI's alarm, grace, skip and daylight-saving logic, the PIN and token
 header rules, the NTC and LDR tables against their equations, and the
 MQTT topics, routes and discovery payload (parsed with `serde_json`, a
 host-only dev-dependency, and checked key by key against the `/api`
 JSON and the form parser). `cargo clippy -p esp32clock-core --target host-tuple
---tests` lints the tests. `.cargo/config.toml` aims every cargo
-command at the chip, which is why the alias passes `--target
-host-tuple`; the `[unstable] build-std` line there is ignored by
+--tests` lints the tests. `node scripts/tz-check.mjs` checks the browser half of the timezone field, `src/tz.js`, against zones with known rules under Node, whose `Intl` is a browser's. `.cargo/config.toml` aims every cargo command at the chip, which is why the alias passes `--target host-tuple`; the `[unstable] build-std` line there is ignored by
 stable cargo. Not under test: `scan.rs`'s `build_cycle` (the M1 lit-time
 check needs it on the host), `dhcpd.rs` and `dnsd.rs` (their pure halves
 use embassy-net's address types), `storage.rs`'s map over the flash,

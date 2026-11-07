@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 // Copyright (c) 2026 Vasily Khoruzhick
 
-//! Calendar arithmetic for the wall clock: a Unix time and a timezone
-//! offset to the local time of day and the weekday. The clock itself,
-//! uptime plus the NTP offset, is in the firmware.
+//! Calendar arithmetic for the wall clock: a Unix time and a UTC offset
+//! to the local time of day and the weekday. The offset in force comes
+//! from the timezone rule (`tz::Tz::period_at`); the clock itself, uptime
+//! plus the NTP offset, is in the firmware.
 
 const SECS_PER_DAY: i64 = 86_400;
 
@@ -17,6 +18,16 @@ pub struct LocalTime {
     pub second: u8,
     /// 0 is Monday, 6 is Sunday.
     pub weekday: u8,
+    /// The offset east of UTC this was computed with, in seconds; the
+    /// alarm keeps its last ring in local seconds with it.
+    pub offset_secs: i32,
+}
+
+impl LocalTime {
+    /// The local wall-clock time as seconds: Unix time plus the offset.
+    pub fn local_secs(&self) -> i64 {
+        self.unix + self.offset_secs as i64
+    }
 }
 
 /// Day of the week of a local day count since 1970-01-01, which was a
@@ -25,9 +36,9 @@ pub fn weekday_of_days(days: i64) -> u8 {
     (days + 3).rem_euclid(7) as u8
 }
 
-/// Local time of day for a Unix time in seconds, `tz_minutes` east of UTC.
-pub fn local_time(unix_s: i64, tz_minutes: i16) -> LocalTime {
-    let local = unix_s + tz_minutes as i64 * 60;
+/// Local time of day for a Unix time in seconds, `offset_secs` east of UTC.
+pub fn local_time(unix_s: i64, offset_secs: i32) -> LocalTime {
+    let local = unix_s + offset_secs as i64;
     let local_s = local.rem_euclid(SECS_PER_DAY);
     LocalTime {
         unix: unix_s,
@@ -35,6 +46,7 @@ pub fn local_time(unix_s: i64, tz_minutes: i16) -> LocalTime {
         minute: (local_s % 3600 / 60) as u8,
         second: (local_s % 60) as u8,
         weekday: weekday_of_days(local.div_euclid(SECS_PER_DAY)),
+        offset_secs,
     }
 }
 
@@ -57,15 +69,18 @@ mod tests {
         let t = local_time(86_399, 0);
         assert_eq!((t.hour, t.minute, t.second, t.weekday), (23, 59, 59, 3));
         // Seven hours west: the epoch second is the evening before.
-        let t = local_time(0, -420);
+        let t = local_time(0, -420 * 60);
         assert_eq!((t.hour, t.minute, t.second, t.weekday), (17, 0, 0, 2));
+        assert_eq!(t.local_secs(), -420 * 60);
         // Fourteen hours east across midnight.
-        let t = local_time(10 * 3600, 840);
+        let t = local_time(10 * 3600, 840 * 60);
         assert_eq!((t.hour, t.weekday), (0, 4));
         // A real date: 2026-10-29 12:34:56 UTC is a Thursday.
         let t = local_time(1_793_277_296, 0);
         assert_eq!((t.hour, t.minute, t.second, t.weekday), (12, 34, 56, 3));
-        assert_eq!(local_time(1_793_277_296, -420).hour, 5);
+        assert_eq!(local_time(1_793_277_296, -420 * 60).hour, 5);
+        // Nepal's 45 minutes.
+        assert_eq!(local_time(1_793_277_296, 5 * 3600 + 45 * 60).minute, 19);
         // Negative Unix times do not wrap the fields.
         let t = local_time(-1, 0);
         assert_eq!((t.hour, t.minute, t.second, t.weekday), (23, 59, 59, 2));

@@ -15,10 +15,11 @@ use embassy_sync::watch::{Receiver, Watch};
 
 use crate::config::{
     API_TOKEN, DEFAULT_ALARM, DEFAULT_BRIGHTNESS, DEFAULT_COLOR, DEFAULT_HOSTNAME, DEFAULT_TWELVE_HOUR,
-    DEFAULT_TZ_OFFSET_MINUTES, MAX_CURRENT_STEP, MQTT_HOST, MQTT_PASSWORD, MQTT_PORT, MQTT_USER, WIFI_PASSWORD, WIFI_SSID,
+    DEFAULT_TZ_OFFSET_MINUTES, DEFAULT_TZ_RULE, MAX_CURRENT_STEP, MQTT_HOST, MQTT_PASSWORD, MQTT_PORT, MQTT_USER, WIFI_PASSWORD, WIFI_SSID,
 };
 use crate::melody;
 use crate::panel::{Levels, MAX_LEVEL};
+use crate::tz::{self, TZ_MAX};
 
 /// A channel fully lit.
 const F: u8 = MAX_LEVEL;
@@ -162,6 +163,12 @@ impl<const N: usize> Text<N> {
             i += 1;
         }
         Text { len: src.len() as u8, bytes }
+    }
+
+    /// ASCII bytes a `const fn` built, `len` of them; `tz::fixed` writes
+    /// a rule this way. The caller keeps the bytes ASCII.
+    pub(crate) const fn from_ascii(bytes: [u8; N], len: u8) -> Self {
+        Text { len, bytes }
     }
 
     /// From a stored length and field; `None` if the length is past the
@@ -411,8 +418,9 @@ pub struct Settings {
     pub alarm_armed: bool,
     /// 12 hour time with the AM mark instead of 24 hour time.
     pub twelve_hour: bool,
-    /// Minutes east of UTC.
-    pub tz_offset_minutes: i16,
+    /// The timezone as a POSIX TZ rule (`tz::parse`), evaluated by the
+    /// clock for daylight saving. Always parses: `is_valid` checks it.
+    pub tz: Text<TZ_MAX>,
     /// Tenths of a degree Celsius added to the thermometer's reading:
     /// the sensor sits in the case's warm air, a little above the room.
     pub temp_offset_dc: i16,
@@ -445,7 +453,7 @@ pub struct Settings {
 }
 
 /// Bytes in a stored record.
-pub const RECORD_LEN: usize = 336;
+pub const RECORD_LEN: usize = 385;
 
 /// The thermometer offset's bound, tenths of a degree either way.
 pub const TEMP_OFFSET_LIMIT_DC: i16 = 100;
@@ -454,7 +462,7 @@ pub const TEMP_OFFSET_LIMIT_DC: i16 = 100;
 /// the new fields and teach `from_record` the old one, or the user's
 /// settings are lost; never reorder, since an older image reads a newer
 /// record by its prefix.
-const RECORD_VERSION: u8 = 10;
+const RECORD_VERSION: u8 = 11;
 
 /// Where the hostname sits in a version 3 record.
 const RECORD_HOSTNAME_LEN: usize = 9;
@@ -502,7 +510,24 @@ const RECORD_BROKER_USER_LEN: usize = RECORD_BROKER_PORT + 2;
 const RECORD_BROKER_USER: usize = RECORD_BROKER_USER_LEN + 1;
 const RECORD_BROKER_PASSWORD_LEN: usize = RECORD_BROKER_USER + BROKER_USER_MAX;
 const RECORD_BROKER_PASSWORD: usize = RECORD_BROKER_PASSWORD_LEN + 1;
-const _: () = assert!(RECORD_BROKER_PASSWORD + BROKER_PASSWORD_MAX == RECORD_LEN, "RECORD_LEN does not match the layout");
+
+/// Where the timezone rule sits in a version 11 record: a length byte and
+/// its field. Bytes 7 and 8 still carry its standard offset in minutes,
+/// so an older image shows standard time after a rollback.
+const RECORD_TZ_LEN: usize = RECORD_BROKER_PASSWORD + BROKER_PASSWORD_MAX;
+const RECORD_TZ: usize = RECORD_TZ_LEN + 1;
+const _: () = assert!(RECORD_TZ + TZ_MAX == RECORD_LEN, "RECORD_LEN does not match the layout");
+
+/// The timezone at boot until the user sets it: `TZ_RULE` from the build,
+/// checked here so a bad rule fails the build, or else `TZ_OFFSET_MINUTES`
+/// as a fixed rule (`<-07>7` for the CI's Vancouver), or UTC.
+pub const DEFAULT_TZ: Text<TZ_MAX> = match DEFAULT_TZ_RULE {
+    Some(rule) => {
+        assert!(tz::parse(rule).is_some(), "TZ_RULE is not a POSIX TZ rule, like PST8PDT,M3.2.0,M11.1.0");
+        Text::literal(rule)
+    }
+    None => tz::fixed(DEFAULT_TZ_OFFSET_MINUTES),
+};
 
 /// Day names, Monday first, for the page and the API.
 pub const DAY_NAMES: [&str; 7] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
@@ -530,7 +555,7 @@ impl Settings {
         alarm_minute: DEFAULT_ALARM.1,
         alarm_armed: false,
         twelve_hour: DEFAULT_TWELVE_HOUR,
-        tz_offset_minutes: DEFAULT_TZ_OFFSET_MINUTES,
+        tz: DEFAULT_TZ,
         temp_offset_dc: 0,
         temp_show: TempShow::Celsius,
         hostname: Hostname::DEFAULT,
@@ -581,7 +606,7 @@ impl Settings {
             && self.brightness < BRIGHTNESS_STEPS.len()
             && self.alarm_hour < 24
             && self.alarm_minute < 60
-            && (-TZ_LIMIT_MINUTES..=TZ_LIMIT_MINUTES).contains(&self.tz_offset_minutes)
+            && tz::parse(self.tz.as_str()).is_some()
             && (-TEMP_OFFSET_LIMIT_DC..=TEMP_OFFSET_LIMIT_DC).contains(&self.temp_offset_dc)
             && self.alarm_days != 0
             && self.alarm_days & !DAYS_ALL == 0
@@ -597,14 +622,14 @@ impl Settings {
     }
 
     /// The flash record: version, colour, brightness, alarm hour, alarm
-    /// minute, armed, twelve-hour, timezone offset as little-endian i16,
-    /// hostname length, hostname padded to 24 bytes, alarm days, melody
+    /// minute, armed, twelve-hour, the rule's standard offset in minutes as
+    /// little-endian i16, hostname length, hostname padded to 24 bytes, alarm days, melody
     /// (`0xff` for random), then the SSID, the password and the token,
     /// each a length byte and a padded field, then the flags byte, the
     /// thermometer offset, the temperature-on-the-panel byte, and the
-    /// broker: host, port, user and password.
+    /// broker: host, port, user and password; then the timezone rule.
     pub fn to_record(&self) -> [u8; RECORD_LEN] {
-        let tz = self.tz_offset_minutes.to_le_bytes();
+        let tz = tz::parse(self.tz.as_str()).unwrap_or(tz::UTC).std_offset_minutes().to_le_bytes();
         let mut r = [0u8; RECORD_LEN];
         r[..9].copy_from_slice(&[
             RECORD_VERSION,
@@ -637,6 +662,8 @@ impl Settings {
         r[RECORD_BROKER_USER..RECORD_BROKER_USER + BROKER_USER_MAX].copy_from_slice(&self.mqtt.user.bytes);
         r[RECORD_BROKER_PASSWORD_LEN] = self.mqtt.password.0.len;
         r[RECORD_BROKER_PASSWORD..RECORD_BROKER_PASSWORD + BROKER_PASSWORD_MAX].copy_from_slice(&self.mqtt.password.0.bytes);
+        r[RECORD_TZ_LEN] = self.tz.len;
+        r[RECORD_TZ..RECORD_TZ + TZ_MAX].copy_from_slice(&self.tz.bytes);
         r
     }
 
@@ -648,7 +675,10 @@ impl Settings {
     /// the token, so no flags, version 7 after the flags, so no
     /// thermometer offset, version 8 after the offset, so the
     /// temperature on the panel at its default, and version 9 after
-    /// that byte, so no broker. Versions are append-only, so a record
+    /// that byte, so no broker, and version 10 after the broker, so the
+    /// timezone is the fixed offset of bytes 7 and 8 (every version up to
+    /// 10 stored minutes there; version 11 appends the rule and keeps the
+    /// minutes as its standard offset). Versions are append-only, so a record
     /// from a newer image is read by the prefix this one knows, and a
     /// colour, brightness or melody index past this image's table (an
     /// entry a newer image added, or a higher current ceiling) lands on
@@ -667,7 +697,11 @@ impl Settings {
         let version = r[0];
         if version >= 2 {
             s.twelve_hour = *r.get(6)? != 0;
-            s.tz_offset_minutes = i16::from_le_bytes([*r.get(7)?, *r.get(8)?]);
+            let minutes = i16::from_le_bytes([*r.get(7)?, *r.get(8)?]);
+            if !(-TZ_LIMIT_MINUTES..=TZ_LIMIT_MINUTES).contains(&minutes) {
+                return None;
+            }
+            s.tz = tz::fixed(minutes);
         }
         if version >= 3 {
             let len = *r.get(RECORD_HOSTNAME_LEN)? as usize;
@@ -715,6 +749,10 @@ impl Settings {
                     r.get(RECORD_BROKER_PASSWORD..RECORD_BROKER_PASSWORD + BROKER_PASSWORD_MAX)?,
                 )?),
             };
+        }
+        if version >= 11 {
+            s.tz = Text::from_record(*r.get(RECORD_TZ_LEN)?, r.get(RECORD_TZ..RECORD_TZ + TZ_MAX)?)?;
+            tz::parse(s.tz.as_str())?;
         }
         s.color = s.color.min(PALETTE.len() - 1);
         // A record saved by a build with a higher ceiling may name a step
@@ -784,7 +822,7 @@ mod tests {
             alarm_minute: 59,
             alarm_armed: true,
             twelve_hour: true,
-            tz_offset_minutes: -420,
+            tz: Text::new("AEST-10AEDT,M10.1.0/2:00:00,M4.1.0/3:00:00").unwrap(),
             temp_offset_dc: -TEMP_OFFSET_LIMIT_DC,
             temp_show: TempShow::Fahrenheit,
             hostname: Hostname::new(&"h".repeat(HOSTNAME_MAX)).unwrap(),
@@ -891,6 +929,7 @@ mod tests {
             7 => RECORD_TEMP_OFFSET,
             8 => RECORD_TEMP_SHOW,
             9 => RECORD_BROKER_HOST_LEN,
+            10 => RECORD_TZ_LEN,
             _ => RECORD_LEN,
         }
     }
@@ -906,7 +945,10 @@ mod tests {
             let d = Settings::DEFAULT;
             assert_eq!((got.color, got.brightness, got.alarm_hour, got.alarm_minute, got.alarm_armed), (s.color, s.brightness, 23, 59, true));
             assert_eq!(got.twelve_hour, if version >= 2 { s.twelve_hour } else { d.twelve_hour }, "v{version}");
-            assert_eq!(got.tz_offset_minutes, if version >= 2 { s.tz_offset_minutes } else { d.tz_offset_minutes });
+            // Up to version 10 the timezone was minutes; the record keeps
+            // the rule's standard offset there, so an old image reads 600.
+            let fixed = tz::fixed(600);
+            assert_eq!(got.tz, if version >= 2 { fixed } else { d.tz }, "v{version} timezone");
             assert_eq!(got.hostname, if version >= 3 { s.hostname } else { d.hostname });
             assert_eq!(got.alarm_days, if version >= 4 { s.alarm_days } else { d.alarm_days });
             assert_eq!(got.melody, if version >= 5 { s.melody } else { d.melody });
@@ -915,7 +957,7 @@ mod tests {
             assert!(!got.token_cleared, "v{version} has no flags");
             assert_eq!(got.temp_offset_dc, if version >= 8 { s.temp_offset_dc } else { 0 }, "v{version} thermometer offset");
             assert_eq!(got.temp_show, if version >= 9 { s.temp_show } else { d.temp_show }, "v{version} temperature on the panel");
-            assert_eq!(got.mqtt, Broker::NONE, "v{version} has no broker");
+            assert_eq!(got.mqtt, if version >= 10 { s.mqtt } else { Broker::NONE }, "v{version} broker");
             assert!(!got.mqtt_cleared);
         }
     }
@@ -958,7 +1000,18 @@ mod tests {
         assert!(with(&|r| r[2] = BRIGHTNESS_CHOICES.len() as u8).is_none(), "brightness past the whole list");
         assert!(with(&|r| r[RECORD_ALARM_DAYS] = 0).is_none(), "no alarm day");
         assert!(with(&|r| r[RECORD_ALARM_DAYS] = 0x80).is_none(), "an eighth day");
-        assert!(with(&|r| r[7..9].copy_from_slice(&(TZ_LIMIT_MINUTES + 1).to_le_bytes())).is_none(), "timezone past the limit");
+        assert!(with(&|r| r[RECORD_TZ] = b',').is_none(), "a rule that does not parse");
+        assert!(with(&|r| r[RECORD_TZ_LEN] = TZ_MAX as u8 + 1).is_none(), "a rule past its field");
+        // Bytes 7 and 8 are informational in a version 11 record, but a
+        // version 10 record is read from them and checked.
+        let old = |m: i16| {
+            let mut r = full().to_record();
+            r[0] = 10;
+            r[7..9].copy_from_slice(&m.to_le_bytes());
+            Settings::from_record(&r)
+        };
+        assert_eq!(old(-420).map(|s| s.tz), Some(tz::fixed(-420)), "a version 10 record's minutes");
+        assert!(old(TZ_LIMIT_MINUTES + 1).is_none(), "timezone past the limit");
         // Indexes a newer image may have added land on the last entry.
         assert_eq!(with(&|r| r[1] = 200).map(|s| s.color), Some(PALETTE.len() - 1));
         assert_eq!(with(&|r| r[RECORD_MELODY] = 200).map(|s| s.melody), Some(melody::MELODIES.len() - 1));
@@ -1071,9 +1124,9 @@ mod tests {
     fn is_valid_at_the_edges() {
         let ok = full();
         assert!(ok.is_valid());
-        let tz = |m| Settings { tz_offset_minutes: m, ..ok };
-        assert!(tz(TZ_LIMIT_MINUTES).is_valid() && tz(-TZ_LIMIT_MINUTES).is_valid());
-        assert!(!tz(TZ_LIMIT_MINUTES + 1).is_valid() && !tz(-TZ_LIMIT_MINUTES - 1).is_valid());
+        assert!(Settings { tz: tz::fixed(TZ_LIMIT_MINUTES), ..ok }.is_valid());
+        assert!(!Settings { tz: Text::new("PST").unwrap(), ..ok }.is_valid(), "a rule that does not parse");
+        assert!(Settings::DEFAULT.is_valid(), "the build's default rule parses");
         assert!(!Settings { color: PALETTE.len(), ..ok }.is_valid());
         assert!(!Settings { brightness: BRIGHTNESS_STEPS.len(), ..ok }.is_valid());
         assert!(Settings { melody: melody::RANDOM, ..ok }.is_valid());

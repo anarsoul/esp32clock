@@ -29,4 +29,5 @@ pub mod ota;
 pub mod panel;
 pub mod sensors;
 pub mod settings;
+pub mod tz;
 pub mod ui;

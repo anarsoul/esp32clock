@@ -7,8 +7,13 @@
 //! firmware is compiled, so nothing secret lives in the tree:
 //!
 //! ```text
-//! WIFI_SSID=home WIFI_PASSWORD=secret TZ_OFFSET_MINUTES=-420 cargo run --release
+//! WIFI_SSID=home WIFI_PASSWORD=secret TZ_RULE='PST8PDT,M3.2.0,M11.1.0' cargo run --release
 //! ```
+//!
+//! `TZ_RULE` is a POSIX TZ rule (`tz::parse`); `TZ_OFFSET_MINUTES`, the
+//! older variable, still works as a fixed offset (`-420` is `<-07>7`,
+//! Vancouver without daylight saving, which is what the CI builds). The
+//! shell's own `TZ` is not read: it holds an IANA name.
 //!
 //! `API_TOKEN` is the fourth: what a script must carry for a firmware
 //! update, a reset, the Wi-Fi credentials or a new token; a build
@@ -111,8 +116,12 @@ pub const AP_LEASE_SECS: u32 = 3600;
 /// cut clears the count and keeps the new image.
 pub const OTA_BOOT_LIMIT: u32 = 3;
 
-/// Minutes east of UTC at boot until the user sets it. No daylight saving
-/// handling.
+/// The timezone rule at boot until the user sets it, if the build gave
+/// one; `settings::DEFAULT_TZ` checks it and falls back to the minutes.
+pub const DEFAULT_TZ_RULE: Option<&str> = option_env!("TZ_RULE");
+
+/// Minutes east of UTC at boot, as a fixed rule, when `TZ_RULE` is not
+/// set; 0 when neither is.
 pub const DEFAULT_TZ_OFFSET_MINUTES: i16 = match option_env!("TZ_OFFSET_MINUTES") {
     Some(s) => parse_i32(s) as i16,
     None => 0,

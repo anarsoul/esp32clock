@@ -15,6 +15,7 @@ use crate::settings::{
     TEMP_OFFSET_LIMIT_DC, TOKEN_MAX, TZ_LIMIT_MINUTES, TempShow, Text, valid_broker_host, valid_broker_password,
     valid_broker_user, valid_password, valid_token,
 };
+use crate::tz::{self, TZ_MAX};
 
 /// Longest form value, decoded: the password.
 pub const VALUE_MAX: usize = PASSWORD_MAX;
@@ -53,6 +54,24 @@ pub struct Status {
     pub mqtt: Link,
     /// Whether the alarm is ringing right now.
     pub ringing: bool,
+    /// The local time right now under the settings' rule: `None` before
+    /// the first time sync.
+    pub local: Option<LocalNow>,
+}
+
+/// The local time of the moment the page was built, for checking a
+/// timezone rule; converted by the caller so this module stays free of
+/// the clock. The zone's name is read from the rule with `dst`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct LocalNow {
+    /// 0 is Monday, 6 is Sunday.
+    pub weekday: u8,
+    pub hour: u8,
+    pub minute: u8,
+    /// Seconds east of UTC in force.
+    pub offset_secs: i32,
+    /// Whether daylight time is in force.
+    pub dst: bool,
 }
 
 /// The time of a self-heal, converted by the caller so this module stays
@@ -321,13 +340,16 @@ pub fn apply_one(s: &mut Settings, key: &str, value: &str, allow: Allow) -> Resu
         "armed" => s.alarm_armed = truthy(value),
         "twelve_hour" => s.twelve_hour = truthy(value),
         "skip" => s.skip_next = truthy(value),
-        "tz" => {
-            let tz: i16 = value.parse().map_err(|_| FormError::BadValue)?;
-            if !(-TZ_LIMIT_MINUTES..=TZ_LIMIT_MINUTES).contains(&tz) {
-                return Err(FormError::BadValue);
+        // A POSIX TZ rule, or minutes east of UTC as the key took until
+        // 2026-11-07, which become a fixed rule.
+        "tz" => match value.parse::<i16>() {
+            Ok(minutes) if (-TZ_LIMIT_MINUTES..=TZ_LIMIT_MINUTES).contains(&minutes) => s.tz = tz::fixed(minutes),
+            Ok(_) => return Err(FormError::BadValue),
+            Err(_) => {
+                tz::parse(value).ok_or(FormError::BadValue)?;
+                s.tz = Text::new(value).ok_or(FormError::BadValue)?;
             }
-            s.tz_offset_minutes = tz;
-        }
+        },
         "temp_offset" => {
             let dc = parse_tenths(value).ok_or(FormError::BadValue)?;
             if !(-TEMP_OFFSET_LIMIT_DC..=TEMP_OFFSET_LIMIT_DC).contains(&dc) {
@@ -483,12 +505,37 @@ impl<T: core::fmt::Display> core::fmt::Display for OrNull<T> {
     }
 }
 
+/// The timezone field of both forms: the rule, and a button that fills
+/// it from the browser's own zone through `/tz.js` (`src/tz.js`), which
+/// then says which zone that was in the `<small>` after it. `TZ_SCRIPT`
+/// loads the script after the form, so the three elements exist.
+fn write_tz_field(out: &mut impl core::fmt::Write, s: &Settings) -> core::fmt::Result {
+    write!(
+        out,
+        "<label>Timezone, POSIX rule <input type=text name=tz id=z maxlength={} value=\"{}\"></label>\
+<button type=button id=b>Use this browser's zone</button> <small id=zn></small>",
+        TZ_MAX,
+        HtmlStr(s.tz.as_str())
+    )
+}
+
+/// Loads the browser-zone script; after the form, so `z`, `b` and `zn`
+/// exist when it runs. The firmware version in the query makes a browser
+/// that cached the script for a day (`/tz.js` is cacheable, like the
+/// favicon) fetch the new one after an update.
+fn write_tz_script(out: &mut impl core::fmt::Write, st: &Status) -> core::fmt::Result {
+    write!(out, "<script src=\"/tz.js?v={}\"></script>", HtmlStr(st.version))
+}
+
 /// The settings as JSON (the SSID, then whether a password and a token
 /// are set, never their values), followed by the read-only status keys
 /// `version`, `slot`, `mode`, `uptime` (seconds), `heals`, `temp_c` and
 /// `temp_f` (tenths, or null with no thermometer), `light` (0 to 100,
 /// or null before the first reading), `rssi` (dBm, or null while not
-/// connected) and `last_heal` (Unix seconds or null).
+/// connected), `utc_offset` and `dst` (the minutes east of UTC and
+/// whether daylight time is in force right now under the `tz` rule,
+/// null before the first time sync) and `last_heal` (Unix seconds or
+/// null).
 pub fn write_json(out: &mut impl core::fmt::Write, s: &Settings, st: &Status) -> core::fmt::Result {
     write!(
         out,
@@ -502,13 +549,14 @@ pub fn write_json(out: &mut impl core::fmt::Write, s: &Settings, st: &Status) ->
     write_days(out, s.alarm_days)?;
     write!(
         out,
-        "\",\"skip\":{},\"melody\":\"{}\",\"twelve_hour\":{},\"tz\":{},\"temp_offset\":{},\"temp_show\":\"{}\",\"hostname\":\"{}\",\"ssid\":\"{}\",\"password_set\":{},\"token_set\":{},\
+        "\",\"skip\":{},\"melody\":\"{}\",\"twelve_hour\":{},\"tz\":\"{}\",\"temp_offset\":{},\"temp_show\":\"{}\",\"hostname\":\"{}\",\"ssid\":\"{}\",\"password_set\":{},\"token_set\":{},\
 \"mqtt_host\":\"{}\",\"mqtt_port\":{},\"mqtt_user\":\"{}\",\"mqtt_password_set\":{},\"mqtt\":\"{}\",\"ringing\":{},\
-\"version\":\"{}\",\"slot\":\"{}\",\"mode\":\"{}\",\"uptime\":{},\"heals\":{},\"temp_c\":{},\"temp_f\":{},\"light\":{},\"rssi\":{},\"last_heal\":",
+\"version\":\"{}\",\"slot\":\"{}\",\"mode\":\"{}\",\"uptime\":{},\"heals\":{},\"temp_c\":{},\"temp_f\":{},\"light\":{},\"rssi\":{},\
+\"utc_offset\":{},\"dst\":{},\"last_heal\":",
         s.skip_next,
         melody::name(s.melody),
         s.twelve_hour,
-        s.tz_offset_minutes,
+        JsonStr(s.tz.as_str()),
         Tenths(s.temp_offset_dc),
         s.temp_show.name(),
         s.hostname.as_str(),
@@ -530,6 +578,8 @@ pub fn write_json(out: &mut impl core::fmt::Write, s: &Settings, st: &Status) ->
         OrNull(st.temp_dc.map(|dc| Tenths(fahrenheit_tenths(dc)))),
         OrNull(st.light),
         OrNull(st.rssi),
+        OrNull(st.local.map(|l| l.offset_secs / 60)),
+        OrNull(st.local.map(|l| l.dst)),
     )?;
     match st.last_heal {
         Some(h) => writeln!(out, "{}}}", h.unix_secs),
@@ -546,6 +596,7 @@ fn write_status(out: &mut impl core::fmt::Write, s: &Settings, st: &Status) -> c
     write_wifi_line(out, s.wifi.ssid.as_str(), st)?;
     write_mqtt_line(out, s, st)?;
     write_room_line(out, st)?;
+    write_local_line(out, s, st)?;
     write!(out, "<p><small>Up {}. Self-heal resets since power-up: {}", Span(st.uptime_secs as i64), st.heals)?;
     if let Some(h) = st.last_heal {
         write!(out, ", last {} {:02}:{:02}", WEEKDAY_LABELS[h.weekday as usize % 7], h.hour, h.minute)?;
@@ -587,6 +638,31 @@ fn write_room_line(out: &mut impl core::fmt::Write, st: &Status) -> core::fmt::R
         Some(dc) => write!(out, "<p><small>Room {} °C ({} °F), light {light} %.</small></p>", Tenths(dc), Tenths(fahrenheit_tenths(dc))),
         None => write!(out, "<p><small>Room: no thermometer, light {light} %.</small></p>"),
     }
+}
+
+/// The local time under the rule, with the zone's name and the offset in
+/// force, for checking a rule: `Local time Fri 14:32 PST, UTC-08:00.`
+fn write_local_line(out: &mut impl core::fmt::Write, s: &Settings, st: &Status) -> core::fmt::Result {
+    let Some(l) = st.local else {
+        return out.write_str("<p><small>Local time: not synced yet.</small></p>");
+    };
+    let rule = tz::parse(s.tz.as_str()).unwrap_or(tz::UTC);
+    let name = match rule.dst {
+        Some(d) if l.dst => d.zone.name,
+        _ => rule.std.name,
+    };
+    let (sign, abs) = if l.offset_secs < 0 { ('-', -l.offset_secs) } else { ('+', l.offset_secs) };
+    write!(
+        out,
+        "<p><small>Local time {} {:02}:{:02} {}, UTC{sign}{:02}:{:02}{}.</small></p>",
+        WEEKDAY_LABELS[l.weekday as usize % 7],
+        l.hour,
+        l.minute,
+        HtmlStr(name),
+        abs / 3600,
+        abs % 3600 / 60,
+        if l.dst { ", daylight time" } else { "" }
+    )
 }
 
 /// The firmware and its slot; `link` adds the way to the update page,
@@ -771,13 +847,18 @@ pub fn write_page(
     for (i, pct) in BRIGHTNESS_STEPS.iter().enumerate() {
         write!(out, "<option value={pct}{}>{pct} %</option>", if i == s.brightness { " selected" } else { "" })?;
     }
-    writeln!(
+    write!(
         out,
         "</select></label><label>Temperature on the panel <select name=temp_show>{}</select></label>\
 <label><input type=checkbox name=twelve_hour{}> 12 hour clock</label></fieldset>\
-<fieldset><legend>Other</legend>\
-<label>Timezone, minutes east of UTC <input type=number name=tz min=-{lim} max={lim} step=15 value={}></label>\
-<label>Thermometer offset, °C <input type=number name=temp_offset min=-{tlim} max={tlim} step=0.1 value={}></label>\
+<fieldset><legend>Other</legend>",
+        TempShowOptions(s.temp_show),
+        if s.twelve_hour { " checked" } else { "" },
+    )?;
+    write_tz_field(out, s)?;
+    writeln!(
+        out,
+        "<label>Thermometer offset, °C <input type=number name=temp_offset min=-{tlim} max={tlim} step=0.1 value={}></label>\
 <label>Hostname, for the DHCP server <input type=text name=hostname maxlength={hmax} pattern=\"[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?\" value=\"{}\"></label></fieldset>\
 <fieldset><legend>Home Assistant</legend>\
 <label>MQTT broker, empty for none <input type=text name=mqtt_host maxlength={bmax} pattern=\"[A-Za-z0-9.-]*\" value=\"{}\"></label>\
@@ -790,21 +871,18 @@ document.getElementById('p').onclick=function(e){{e.preventDefault();\
 fetch('/play',{{method:'POST',redirect:'manual',headers:{{'Content-Type':'application/x-www-form-urlencoded'}},body:'melody='+m.value}})}};\
 f.oninput=function(){{var d=false;for(var e of f.elements)if(e.name&&(e.type=='checkbox'?e.checked!=e.defaultChecked:\
 e.options?!e.options[e.selectedIndex].defaultSelected:e.value!=e.defaultValue))d=true;u.hidden=!d}}</script>",
-        TempShowOptions(s.temp_show),
-        if s.twelve_hour { " checked" } else { "" },
-        s.tz_offset_minutes,
         Tenths(s.temp_offset_dc),
         s.hostname.as_str(),
         s.mqtt.host.as_str(),
         s.mqtt.port,
         HtmlStr(s.mqtt.user.as_str()),
-        lim = TZ_LIMIT_MINUTES,
         tlim = Tenths(TEMP_OFFSET_LIMIT_DC),
         hmax = HOSTNAME_MAX,
         bmax = BROKER_HOST_MAX,
         umax = BROKER_USER_MAX,
         pmax = BROKER_PASSWORD_MAX,
     )?;
+    write_tz_script(out, st)?;
     write_status(out, s, st)?;
     out.write_str(
         "<p><small>Scriptable: <code>GET /api</code>, <code>POST /api</code> with the same fields.</small></p></body></html>",
@@ -890,21 +968,23 @@ pub fn write_provision_page(
         out,
         "<option value=\"\"{}>Other, typed below</option></select></label>\
 <label id=o>Other network name <input type=text name=ssid id=i maxlength={smax} value=\"{}\"></label>\
-<label>Password, {} <input type=password name=password minlength={pmin} maxlength={pmax} autocomplete=off></label>\
-<label>Timezone, minutes east of UTC <input type=number name=tz min=-{lim} max={lim} step=15 value={}></label>\
-<label>Hostname, for the DHCP server <input type=text name=hostname maxlength={hmax} pattern=\"[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?\" value=\"{}\"></label>\
-<button>Save and join</button> <button formaction=/scan formnovalidate>Rescan</button></form>",
+<label>Password, {} <input type=password name=password minlength={pmin} maxlength={pmax} autocomplete=off></label>",
         if listed { "" } else { " selected" },
         HtmlStr(if listed { "" } else { stored }),
         if stored.is_empty() { "empty for an open network" } else { "empty to keep the stored one" },
-        s.tz_offset_minutes,
-        s.hostname.as_str(),
         smax = SSID_MAX,
         pmin = PASSWORD_MIN,
         pmax = PASSWORD_MAX,
-        lim = TZ_LIMIT_MINUTES,
+    )?;
+    write_tz_field(out, s)?;
+    write!(
+        out,
+        "<label>Hostname, for the DHCP server <input type=text name=hostname maxlength={hmax} pattern=\"[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?\" value=\"{}\"></label>\
+<button>Save and join</button> <button formaction=/scan formnovalidate>Rescan</button></form>",
+        s.hostname.as_str(),
         hmax = HOSTNAME_MAX,
     )?;
+    write_tz_script(out, st)?;
     if networks.is_empty() {
         out.write_str("<p><small>No networks seen yet; rescan, or type the name.</small></p>")?;
     } else if shown < networks.len() {
@@ -991,6 +1071,7 @@ mod tests {
             rssi: Some(-100),
             mqtt: Link::Connecting { last_error: Some("connection refused by the broker") },
             ringing: true,
+            local: Some(LocalNow { weekday: 4, hour: 14, minute: 32, offset_secs: -8 * 3600, dst: false }),
         }
     }
 
@@ -1049,7 +1130,7 @@ mod tests {
         assert_eq!((s.alarm_hour, s.alarm_minute), (6, 30));
         assert!(s.alarm_armed && s.skip_next && s.twelve_hour);
         assert_eq!(s.alarm_days, DAYS_WEEKEND);
-        assert_eq!(s.tz_offset_minutes, -420);
+        assert_eq!(s.tz, tz::fixed(-420), "minutes become a fixed rule");
         assert_eq!(s.temp_offset_dc, -7);
         assert_eq!(s.temp_show, TempShow::Fahrenheit);
         assert_eq!(s.hostname.as_str(), "bedroom-clock");
@@ -1080,7 +1161,13 @@ mod tests {
         // An empty body, stray separators and a key without a value.
         apply(&mut s, b"", false, Allow::NONE).unwrap();
         apply(&mut s, b"&&tz=15&", false, Allow::NONE).unwrap();
-        assert_eq!(s.tz_offset_minutes, 15);
+        assert_eq!(s.tz, tz::fixed(15));
+        // A rule, as the page posts it and with a quoted name.
+        apply(&mut s, b"tz=PST8PDT%2CM3.2.0%2CM11.1.0", false, Allow::NONE).unwrap();
+        assert_eq!(s.tz.as_str(), "PST8PDT,M3.2.0,M11.1.0");
+        apply(&mut s, b"tz=%3C%2B0545%3E-5%3A45", false, Allow::NONE).unwrap();
+        assert_eq!(s.tz.as_str(), "<+0545>-5:45");
+        assert!(s.is_valid());
         assert_eq!(apply(&mut s, b"armed", false, Allow::NONE), Ok(()));
         assert!(!s.alarm_armed);
     }
@@ -1096,6 +1183,10 @@ mod tests {
         assert_eq!(try_body(b"color=pink"), Err(FormError::BadValue));
         assert_eq!(try_body(b"brightness=33"), Err(FormError::BadValue));
         assert_eq!(try_body(b"brightness=10"), Ok(()));
+        assert_eq!(try_body(b"tz=America%2FVancouver"), Err(FormError::BadValue));
+        assert_eq!(try_body(b"tz=PST"), Err(FormError::BadValue));
+        assert_eq!(try_body(b"tz=900"), Err(FormError::BadValue), "minutes past the limit");
+        assert_eq!(try_body(b"tz="), Err(FormError::BadValue));
         assert_eq!(try_body(b"alarm=24:00"), Err(FormError::BadValue));
         assert_eq!(try_body(b"alarm=23:60"), Err(FormError::BadValue));
         assert_eq!(try_body(b"alarm=7"), Err(FormError::BadValue));
@@ -1273,15 +1364,19 @@ mod tests {
         write_json(&mut with, &s, &status(true)).unwrap();
         assert!(with.contains(r#""mqtt_host":"broker.lan","mqtt_port":1883,"mqtt_user":"cl\"ock","mqtt_password_set":true"#), "{with}");
         assert!(!with.contains("secret"));
-        assert!(out.contains(r#""temp_c":-20.0,"temp_f":-4.0,"light":100,"rssi":-100,"last_heal""#), "{out}");
+        assert!(out.contains(r#""temp_c":-20.0,"temp_f":-4.0,"light":100,"rssi":-100,"utc_offset":-480,"dst":false,"last_heal""#), "{out}");
+        s.tz = Text::new("<+0545>-5:45").unwrap();
+        let mut rule = String::new();
+        write_json(&mut rule, &s, &status(true)).unwrap();
+        assert!(rule.contains(r#""twelve_hour":false,"tz":"<+0545>-5:45","temp_offset""#), "{rule}");
         assert!(out.contains(r#""temp_offset":0.0,"temp_show":"c","hostname""#), "{out}");
         assert!(out.contains(r#""last_heal":1800000000}"#));
         assert!(out.ends_with("}\n"));
         let mut none = String::new();
         let mut unread = status(false);
-        (unread.temp_dc, unread.light, unread.rssi) = (None, None, None);
+        (unread.temp_dc, unread.light, unread.rssi, unread.local) = (None, None, None, None);
         write_json(&mut none, &Settings::DEFAULT, &unread).unwrap();
-        assert!(none.contains(r#""temp_c":null,"temp_f":null,"light":null,"rssi":null"#), "{none}");
+        assert!(none.contains(r#""temp_c":null,"temp_f":null,"light":null,"rssi":null,"utc_offset":null,"dst":null"#), "{none}");
         assert!(none.contains(r#""password_set":false,"token_set":false"#));
         assert!(none.ends_with(r#""last_heal":null}"#.to_string().as_str() ) || none.ends_with("null}\n"));
     }
@@ -1302,7 +1397,7 @@ mod tests {
         s.alarm_armed = true;
         s.skip_next = true;
         s.twelve_hour = true;
-        s.tz_offset_minutes = -TZ_LIMIT_MINUTES;
+        s.tz = Text::new(&"<".repeat(TZ_MAX)).unwrap(); // escaped into the field, four bytes each
         s.melody = melody::RANDOM;
         s.wifi.ssid = Text::new(&"\"".repeat(SSID_MAX)).unwrap(); // escaped into the Wi-Fi line
         s.mqtt.host = Text::new(&"h".repeat(BROKER_HOST_MAX)).unwrap(); // twice: the field and the status line
@@ -1314,6 +1409,19 @@ mod tests {
         assert!(out.len() <= PAGE_MAX, "{} bytes", out.len());
         assert!(out.ends_with("</html>"));
         assert!(out.contains(&format!("Wi-Fi <b>{}</b>, -100 dBm.", "&quot;".repeat(SSID_MAX))), "{out}");
+    }
+
+    #[test]
+    fn pages_load_the_zone_script_with_the_version() {
+        let tag = "<script src=\"/tz.js?v=v0.1.0-123-gabcdef0-dirty-and-long\"></script>";
+        let mut out = String::new();
+        write_page(&mut out, &Settings::DEFAULT, &status(true), None).unwrap();
+        assert!(out.contains(tag) && out.contains("<input type=text name=tz id=z maxlength=48 value=\""), "{out}");
+        assert!(out.find("</form>").unwrap() < out.find(tag).unwrap(), "the script comes after the form");
+        let mut setup = String::new();
+        write_provision_page(&mut setup, &Settings::DEFAULT, &status(false), &[], None).unwrap();
+        assert!(setup.contains(tag) && setup.contains("id=b>Use this browser's zone</button>"), "{setup}");
+        assert!(setup.find("</form>").unwrap() < setup.find(tag).unwrap());
     }
 
     #[test]
@@ -1405,7 +1513,7 @@ mod tests {
         let mut s = Settings::DEFAULT;
         s.hostname = Hostname::new(&"h".repeat(HOSTNAME_MAX)).unwrap();
         s.wifi.ssid = Text::new(&"\"".repeat(SSID_MAX)).unwrap(); // not listed: escaped into the field
-        s.tz_offset_minutes = -TZ_LIMIT_MINUTES;
+        s.tz = Text::new(&"<".repeat(TZ_MAX)).unwrap(); // escaped into the field, four bytes each
         // More networks than the budget holds, none of them the stored one,
         // so the "more not shown" line is there and the field is full.
         let n = Network { ssid: Text::new(&format!("x{}", "\"".repeat(SSID_MAX - 1))).unwrap(), rssi: -100, open: true };

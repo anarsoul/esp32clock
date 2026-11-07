@@ -29,9 +29,11 @@ pub struct Carried {
     pub last_heal_unix: Option<i64>,
     /// The skip-next-alarm flag.
     pub skip_next: bool,
-    /// Unix time the alarm last rang and ended, or was used up by the skip
-    /// flag; `ui::Ui::last_alarm` as the display task carries it.
-    pub last_alarm_unix: Option<i64>,
+    /// Local wall-clock seconds (`clock::LocalTime::local_secs`) when the
+    /// alarm last rang and ended, or was used up by the skip flag;
+    /// `ui::Ui::last_alarm` as the display task carries it. Unix time
+    /// until 2026-11-07, with the same codec.
+    pub last_alarm_local: Option<i64>,
     /// Unix microseconds when the record was last written, from the
     /// display tick every second and from a deliberate reset just before
     /// it fires. See `clock::restore_carried`.
@@ -53,7 +55,7 @@ pub fn decode(v: [u32; WORDS]) -> Carried {
         heals: v[1],
         last_heal_unix: (v[2] != 0).then_some(v[2] as i64),
         skip_next: v[3] != 0,
-        last_alarm_unix: (v[4] != 0).then_some(v[4] as i64),
+        last_alarm_local: (v[4] != 0).then_some(v[4] as i64),
         unix_us: {
             let us = (v[5] as u64 | (v[6] as u64) << 32) as i64;
             (us != 0).then_some(us)
@@ -70,7 +72,7 @@ pub fn encode(c: &Carried) -> [u32; WORDS] {
         c.heals,
         c.last_heal_unix.unwrap_or(0) as u32,
         c.skip_next as u32,
-        c.last_alarm_unix.unwrap_or(0) as u32,
+        c.last_alarm_local.unwrap_or(0) as u32,
         c.unix_us.unwrap_or(0) as u64 as u32,
         (c.unix_us.unwrap_or(0) as u64 >> 32) as u32,
         c.ota_boots,
@@ -89,7 +91,7 @@ mod tests {
             heals: 7,
             last_heal_unix: Some(1_761_000_000),
             skip_next: true,
-            last_alarm_unix: Some(1_761_000_060),
+            last_alarm_local: Some(1_761_000_060),
             unix_us: Some(1_761_000_123_456_789),
             ota_boots: 2,
             boot_ap: true,
@@ -103,9 +105,9 @@ mod tests {
 
     #[test]
     fn zero_means_none_and_seconds_fit_until_2106() {
-        let c = Carried { last_heal_unix: Some(u32::MAX as i64), last_alarm_unix: Some(1), unix_us: None, ..Carried::default() };
+        let c = Carried { last_heal_unix: Some(u32::MAX as i64), last_alarm_local: Some(1), unix_us: None, ..Carried::default() };
         assert_eq!(decode(encode(&c)), c);
-        let none = Carried { last_heal_unix: Some(0), last_alarm_unix: Some(0), unix_us: Some(0), ..Carried::default() };
+        let none = Carried { last_heal_unix: Some(0), last_alarm_local: Some(0), unix_us: Some(0), ..Carried::default() };
         assert_eq!(decode(encode(&none)), Carried::default(), "a zero time reads back as none");
     }
 
