@@ -1,0 +1,72 @@
+# Build, lint and test on every push and pull request, and publish the
+# OTA image as a workflow artifact. The image is built with no network
+# (the clock boots as an access point), Vancouver time and the
+# API token `esp32clock`; the README's "Prebuilt image" section says how
+# to use it and what to change after the first boot.
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  # What the prebuilt image is configured with (core/src/config.rs reads
+  # these at build time). WIFI_SSID empty: the clock starts as an access
+  # point and the network is entered from the setup form.
+  WIFI_SSID: ""
+  WIFI_PASSWORD: ""
+  TZ_OFFSET_MINUTES: "-420"
+  API_TOKEN: esp32clock
+  ESPFLASH_VERSION: v4.7.0
+
+jobs:
+  host:
+    name: Host tests and lints
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Test the core crate on the host
+        run: cargo host-test
+      - name: Clippy on the core crate and its tests
+        run: cargo clippy -p esp32clock-core --target host-tuple --tests -- -D warnings
+
+  firmware:
+    name: Firmware and OTA image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # build.rs puts `git describe` into the firmware version
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: riscv32imc-unknown-none-elf
+          components: rust-src, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install espflash
+        run: |
+          curl -sSfL -o espflash.zip \
+            "https://github.com/esp-rs/espflash/releases/download/${ESPFLASH_VERSION}/espflash-x86_64-unknown-linux-gnu.zip"
+          unzip -q espflash.zip espflash -d "$HOME/.local/bin"
+          chmod +x "$HOME/.local/bin/espflash"
+          espflash --version
+      - name: Build
+        run: cargo build --release
+      - name: Clippy
+        run: cargo clippy --release -- -D warnings
+      - name: Make the OTA image
+        run: |
+          espflash save-image --chip esp32c3 --partition-table partitions.csv \
+            target/riscv32imc-unknown-none-elf/release/esp32clock esp32clock-ota.bin
+          ls -l esp32clock-ota.bin
+      - uses: actions/upload-artifact@v4
+        with:
+          name: esp32clock-ota-${{ github.sha }}
+          path: esp32clock-ota.bin
+          if-no-files-found: error
