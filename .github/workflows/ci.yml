@@ -27,7 +27,7 @@ jobs:
     name: Host tests and lints
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -41,7 +41,7 @@ jobs:
     name: Firmware and OTA image
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0 # build.rs puts `git describe` into the firmware version
       - uses: dtolnay/rust-toolchain@stable
@@ -67,7 +67,7 @@ jobs:
           espflash save-image --chip esp32c3 --partition-table partitions.csv \
             target/riscv32imc-unknown-none-elf/release/esp32clock esp32clock-ota.bin
           ls -l esp32clock-ota.bin
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: esp32clock-ota-${{ github.sha }}
           path: esp32clock-ota.bin
