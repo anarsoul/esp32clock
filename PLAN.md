@@ -5008,3 +5008,79 @@ out. One more, not fixed: the root `build.rs` runs `git describe` only
 when `.git/HEAD` or the index changes, so an image built from a dirty
 tree right after a commit still says the clean hash (`f4d705f` for the
 build with the `cmd` fix).
+
+### Web flasher and releases — planned 2026-11-07
+
+**Goal.** A clock is flashed the first time from a browser, with no
+toolchain: a page on GitHub Pages with an ESP Web Tools install button
+(Web Serial, Chrome or Edge) that offers the firmware of any GitHub
+release, newest first. Tagging `v*` builds the release, attaches the
+images and publishes the page; `v0.1` is the first.
+
+**Reference.** The user's `esp32-bthidbridge`: `docs/index.html` with
+`<esp-web-install-button manifest=…>` from unpkg's `esp-web-tools`, a
+`release.yml` on `v*` tags that builds, creates the release with
+`softprops/action-gh-release`, writes the manifest with `jq` and
+deploys `docs/` to the `gh-pages` branch with
+`peaceiris/actions-gh-pages`; Pages serves that branch. The same
+shape here, with two differences: one merged image instead of three
+parts, and every release kept on the page.
+
+**The image.** `espflash save-image --merge --skip-padding -s 4mb`
+with the partition table gives one file to flash at offset 0: the
+bootloader at 0, the table at 0x8000, `otadata` erased (so `ota_0`
+boots, where the app is at 0x20000), 971 KB for the current firmware.
+`nvs` is not in the file, so a reflash keeps the settings, and ESP Web
+Tools' erase prompt (`new_install_prompt_erase`) is the way to start
+over. `new_install_improv_wait_time` is 0: the clock has no Improv
+serial, and the default makes the dialog wait 10 s for it. Built with
+the CI's prebuilt settings: no network (the clock boots as its access
+point `clock-xxxx`, password `esp32clock`, the setup form at
+`http://192.168.4.1/`), Vancouver time, API token `esp32clock`.
+
+**Releases.** `.github/workflows/release.yml`, on `push` of tags
+`v*`, `permissions: contents: write`. Job `build`: the firmware,
+clippy and the host tests as in `ci.yml` (a tag never publishes a
+build the CI would have failed), then two images, `esp32clock-ota-
+<tag>.bin` (`save-image`, for `/update`) and `esp32clock-<tag>.bin`
+(merged, for the flasher), as one artifact. Job `release`: the two
+files on the GitHub release the tag names, with a body pointing at
+the flasher and `/update`. Job `pages`: `docs/<tag>/manifest.json`
+(name, the version from the tag, the erase prompt, no Improv wait,
+one `ESP32-C3` build with the merged image at offset 0) next to a
+copy of both images, the same again under `docs/latest/`, and
+`docs/` deployed to `gh-pages` with `keep_files: true`, so earlier
+tags stay on the site. The version in the firmware comes from `git
+describe`, which sees annotated tags only (`build.rs` runs it
+without `--tags`), so a release tag is `git tag -a`. Pages is
+enabled once the branch exists (`gh api -X POST …/pages` with the
+branch, or the repository settings) and serves
+`https://anarsoul.github.io/esp32clock/`.
+
+**The page.** `docs/index.html`, the one file in the repository
+under `docs/`: the clock in a paragraph, what the browser needs
+(Chrome or Edge on a desktop, the clock on USB; if the C3 does not
+enter its bootloader on its own, hold BOOT while plugging it in), a
+select of releases filled from the GitHub API
+(`/repos/anarsoul/esp32clock/releases`, public, CORS allowed, 60
+requests an hour unauthenticated), newest first and the newest
+selected, which sets the button's `manifest` to `<tag>/manifest.json`;
+when the API cannot be reached the select shows "latest" and the
+button uses `latest/manifest.json`. Below the button: what the image
+is configured with (the README's table), the first boot through the
+access point, the token note, and that later updates are the
+`esp32clock-ota-<tag>.bin` of the release through `/update`. Links to
+the repository and the releases. The script from unpkg as in the
+reference, so both projects' pages age the same way.
+
+**Docs.** The README's "Prebuilt image" section becomes "Prebuilt
+images": the flasher first, the release files second, the Actions
+artifact of every push third. `AGENTS.md`'s build section names the
+release workflow, the tag rule and `docs/`.
+
+**Verify.** Push, tag `v0.1`, watch the run: a release with two
+files, a `gh-pages` branch with `v0.1/` and `latest/`, Pages enabled
+and the manifest reachable. The flasher itself needs a browser with
+Web Serial, which the session has not; the merged image is verified
+on the bench by `espflash write-bin 0x0` of the file downloaded from
+the page: the board boots `v0.1` on `ota_0` with its settings kept.

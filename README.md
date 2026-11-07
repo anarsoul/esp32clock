@@ -226,24 +226,37 @@ new image goes to the other slot; a failed write leaves the running
 one in place, and a new image that cannot reach the network within
 three boots is rolled back.
 
-### Prebuilt image
+### Prebuilt images
 
-Every push is built on GitHub Actions (`.github/workflows/ci.yml`) and
-the OTA image is attached to the run as an artifact: open the Actions
-tab, pick the latest run on `master`, download `esp32clock-ota-<commit>`
-and unzip it to get `esp32clock-ota.bin`. GitHub asks for a login to
-download artifacts and keeps them for 90 days. The image is built with:
+The easiest first flash needs no toolchain: open
+<https://anarsoul.github.io/esp32clock/> in Chrome or Edge with the
+clock on USB, pick a release and press Install. The page is ESP Web
+Tools over Web Serial; it offers to erase the clock first (which
+clears saved settings) and flashes `esp32clock-<tag>.bin`, the whole
+flash from offset 0 (bootloader, partition table, app). The same file
+is on the [releases page](https://github.com/anarsoul/esp32clock/releases)
+for `espflash write-bin 0x0 esp32clock-<tag>.bin`, next to
+`esp32clock-ota-<tag>.bin`, the update image for `/update` and
+`scripts/ota.sh`. A release is made by pushing an annotated tag `v*`
+(`.github/workflows/release.yml`).
 
-| setting | value in the prebuilt image |
+Between releases, every push is built on GitHub Actions
+(`.github/workflows/ci.yml`) and the OTA image is attached to the run
+as an artifact: open the Actions tab, pick the latest run on `master`,
+download `esp32clock-ota-<commit>` and unzip it to get
+`esp32clock-ota.bin`. GitHub asks for a login to download artifacts
+and keeps them for 90 days. The images are built with:
+
+| setting | value in the prebuilt images |
 | --- | --- |
 | network | none: the clock boots as an access point, see above |
 | timezone | `-420`, Vancouver (UTC-7, permanent since BC stopped changing clocks). The offset is fixed; set it on the settings page for your zone |
 | API token | `esp32clock` |
 | everything else | the defaults: brightness cap 50 %, access point password `esp32clock` |
 
-It is an update image, so a clock has to have been flashed once over
-USB first (`cargo run` above). Install it from `http://<ip>/update`
-with the PIN, or from the shell:
+The OTA image is an update image, for a clock that has been flashed
+once over USB (the web installer or `cargo run` above). Install it
+from `http://<ip>/update` with the PIN, or from the shell:
 
 ```sh
 API_TOKEN=esp32clock scripts/ota.sh <ip> esp32clock-ota.bin
@@ -259,7 +272,7 @@ curl -X POST -H 'Authorization: Bearer esp32clock' -d 'token=<new token>' http:/
 ```
 
 A token stored this way survives later updates with the prebuilt
-image: the build's token only seeds a clock that has none. From then
+images: the build's token only seeds a clock that has none. From then
 on `scripts/ota.sh` wants the new token in `API_TOKEN`.
 
 ## Using the clock
@@ -343,7 +356,9 @@ cargo command at the chip, which is why the alias passes a host
 target.
 
 The CI workflow runs the same four commands, with clippy warnings as
-errors, and builds the prebuilt image described above.
+errors, and builds the prebuilt image described above; the release
+workflow does the same for a tag and publishes the images and the web
+installer (`docs/index.html`, served from the `gh-pages` branch).
 
 `AGENTS.md` is the detailed guide to the code: the module layout, the
 hardware facts that bite, the timing rules of the scan path and the

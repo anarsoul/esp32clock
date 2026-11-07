@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>esp32clock web installer</title>
+  <script type="module" src="https://unpkg.com/esp-web-tools/dist/web/install-button.js?module"></script>
+  <style>
+    body { font-family: sans-serif; max-width: 640px; margin: 3em auto; padding: 0 1.5em; color: #222; line-height: 1.5; }
+    h1 { font-size: 1.6em; margin-bottom: 0.2em; }
+    h2 { font-size: 1.1em; margin-top: 2em; border-bottom: 1px solid #ddd; padding-bottom: 0.3em; }
+    .subtitle { color: #555; margin-top: 0; }
+    table { border-collapse: collapse; width: 100%; font-size: 0.9em; }
+    th, td { text-align: left; padding: 0.4em 0.6em; border-bottom: 1px solid #eee; vertical-align: top; }
+    code { background: #f4f4f4; padding: 0.1em 0.3em; border-radius: 3px; }
+    label { display: block; margin: 1em 0 0.5em; }
+    select { font-size: 1em; padding: 0.3em; }
+    esp-web-install-button { display: block; margin: 1em 0 1.5em; }
+    .note { font-size: 0.9em; color: #555; }
+  </style>
+</head>
+<body>
+  <h1>esp32clock web installer</h1>
+  <p class="subtitle">
+    Open firmware for the HU-058 LED clock kits with an ESP32-C3 in the 8051's socket:
+    NTP time, alarms, colours, a settings page, Home Assistant over MQTT.
+    &mdash; <a href="https://github.com/anarsoul/esp32clock">GitHub</a>
+    &middot; <a href="https://github.com/anarsoul/esp32clock/releases">Releases</a>
+  </p>
+
+  <h2>Install</h2>
+  <p>
+    Plug the clock's ESP32-C3 into this computer over USB and press <strong>Install</strong>.
+    This needs Chrome or Edge on a desktop (Web Serial); Firefox, Safari and phones cannot do it.
+    If the installer cannot connect, hold the <strong>BOOT</strong> button on the module while
+    plugging it in, then try again.
+  </p>
+  <label for="release">Firmware release
+    <select id="release"><option value="latest">latest</option></select>
+  </label>
+  <esp-web-install-button id="install" manifest="latest/manifest.json"></esp-web-install-button>
+  <p class="note">
+    The installer offers to erase the clock first. Erasing clears the saved settings and the stored
+    network; without it the settings survive. A clock already on your network can be updated from
+    <code>http://&lt;ip&gt;/update</code> with the release's <code>esp32clock-ota-*.bin</code> instead,
+    with no USB.
+  </p>
+
+  <h2>What the image is configured with</h2>
+  <table>
+    <tr><th>setting</th><th>in the image</th></tr>
+    <tr><td>network</td><td>none: the clock boots as an access point, see below</td></tr>
+    <tr><td>timezone</td><td>UTC&minus;7 (Vancouver). Set yours on the settings page</td></tr>
+    <tr><td>API token</td><td><code>esp32clock</code>; change it on <code>http://&lt;ip&gt;/token</code> once the clock is on your network</td></tr>
+    <tr><td>everything else</td><td>the defaults: brightness cap 50 %, access point password <code>esp32clock</code></td></tr>
+  </table>
+
+  <h2>First boot</h2>
+  <ol>
+    <li>The panel shows <code>AP</code>: the clock is a Wi-Fi access point named <code>clock-xxxx</code>, password <code>esp32clock</code>.</li>
+    <li>Join it from a phone; the setup form opens by itself, or at <code>http://192.168.4.1/</code>.</li>
+    <li>Pick your network, type its password, set the timezone and a hostname, save. The clock joins the network and shows the time.</li>
+    <li>Both buttons held 10 s put the clock back into its access point.</li>
+  </ol>
+
+  <script>
+    var select = document.getElementById('release'), button = document.getElementById('install');
+    select.addEventListener('change', function () {
+      button.setAttribute('manifest', this.value + '/manifest.json');
+    });
+    // The releases, newest first; the page falls back to "latest" when
+    // GitHub cannot be asked (offline, or past the API's rate limit).
+    fetch('https://api.github.com/repos/anarsoul/esp32clock/releases')
+      .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+      .then(function (releases) {
+        var tags = releases.filter(function (r) { return !r.draft && !r.prerelease; }).map(function (r) { return r.tag_name; });
+        if (!tags.length) return;
+        select.innerHTML = '';
+        tags.forEach(function (tag, i) {
+          var o = document.createElement('option');
+          o.value = tag;
+          o.textContent = i === 0 ? tag + ' (latest)' : tag;
+          select.appendChild(o);
+        });
+        select.value = tags[0];
+        button.setAttribute('manifest', tags[0] + '/manifest.json');
+      })
+      .catch(function () {});
+  </script>
+</body>
+</html>

@@ -47,6 +47,20 @@ scripts/pin.sh <ip> <serial-log>        # POST /pin, then the four digits read b
 AP_PASSWORD='…' cargo build --release   # optional: the clock's own access point's password (default esp32clock)
 ```
 
+Releases: an annotated tag `v*` (`git tag -a`; `build.rs` runs `git
+describe` without `--tags`, so a lightweight tag would not reach the
+version) runs `.github/workflows/release.yml`, which builds with the
+CI's prebuilt settings, tests, and attaches `esp32clock-ota-<tag>.bin`
+(the `/update` image) and `esp32clock-<tag>.bin` (`save-image
+--merge`: the whole flash from 0, `nvs` left out so settings survive)
+to the GitHub release, then deploys `docs/` to the `gh-pages` branch
+with the release under `<tag>/` (a manifest for ESP Web Tools and the
+images) and `latest/`, keeping earlier tags. `docs/index.html` is the
+web installer at `https://anarsoul.github.io/esp32clock/`: it lists
+the releases from the GitHub API, newest first, and points the install
+button at the chosen tag's manifest; without the API it uses `latest/`.
+Nothing in `docs/` but the page is in the repository.
+
 `cargo run` flashes with espflash and opens the monitor; `.cargo/config.toml`
 sets the runner and `ESP_LOG=info`. The runner passes `partitions.csv`
 (two app slots, `ota_0` and `ota_1`, plus `otadata`) and erases

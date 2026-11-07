@@ -1,0 +1,140 @@
+# A release from a `v*` tag: the firmware with the prebuilt settings
+# (the same as ci.yml), the OTA image for `/update` and the merged image
+# for the web flasher, attached to the GitHub release; then the flasher
+# page in docs/ with the release's manifest and images deployed to the
+# gh-pages branch, keeping earlier releases, which the page offers in a
+# list. The firmware version comes from `git describe`, which sees
+# annotated tags only, so a release tag is made with `git tag -a`.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  # What the prebuilt image is configured with; see ci.yml and the README.
+  WIFI_SSID: ""
+  WIFI_PASSWORD: ""
+  TZ_OFFSET_MINUTES: "-420"
+  API_TOKEN: esp32clock
+  ESPFLASH_VERSION: v4.7.0
+
+jobs:
+  build:
+    name: Firmware and images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # build.rs puts `git describe` into the firmware version
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: riscv32imc-unknown-none-elf
+          components: rust-src, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install espflash
+        run: |
+          curl -sSfL -o espflash.zip \
+            "https://github.com/esp-rs/espflash/releases/download/${ESPFLASH_VERSION}/espflash-x86_64-unknown-linux-gnu.zip"
+          mkdir -p "$HOME/.local/bin"
+          unzip -q espflash.zip espflash -d "$HOME/.local/bin"
+          chmod +x "$HOME/.local/bin/espflash"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/espflash" --version
+      # A tag never publishes a build the CI would have failed.
+      - name: Test the core crate on the host
+        run: cargo host-test
+      - name: Build
+        run: cargo build --release
+      - name: Clippy
+        run: cargo clippy --release -- -D warnings
+      - name: Make the images
+        run: |
+          mkdir -p images
+          ELF=target/riscv32imc-unknown-none-elf/release/esp32clock
+          # The application image, for /update and scripts/ota.sh.
+          espflash save-image --chip esp32c3 --partition-table partitions.csv \
+            "$ELF" "images/esp32clock-ota-${GITHUB_REF_NAME}.bin"
+          # Everything from offset 0 for a first flash: bootloader,
+          # partition table, erased otadata (so ota_0 boots) and the app;
+          # nvs is not in it, so the settings survive a reflash.
+          espflash save-image --chip esp32c3 --partition-table partitions.csv \
+            --merge --skip-padding --flash-size 4mb \
+            "$ELF" "images/esp32clock-${GITHUB_REF_NAME}.bin"
+          ls -l images
+      - uses: actions/upload-artifact@v6
+        with:
+          name: images
+          path: images/
+          if-no-files-found: error
+
+  release:
+    name: GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v6
+        with:
+          name: images
+          path: images
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: images/*
+          body: |
+            Flash a clock from the browser at https://anarsoul.github.io/esp32clock/
+            (Chrome or Edge, the clock on USB), or with espflash:
+
+                espflash write-bin 0x0 esp32clock-${{ github.ref_name }}.bin
+
+            Update a running clock from `http://<ip>/update` with
+            `esp32clock-ota-${{ github.ref_name }}.bin`, or with
+            `API_TOKEN=… scripts/ota.sh <ip> esp32clock-ota-${{ github.ref_name }}.bin`.
+
+            The images carry no network (the clock boots as its own access
+            point, `clock-xxxx`, password `esp32clock`, setup form at
+            http://192.168.4.1/), the Vancouver timezone and the API token
+            `esp32clock`; see the README's "Prebuilt images".
+
+  pages:
+    name: Flasher page
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v6
+        with:
+          name: images
+          path: images
+      - name: Stage the release for the page
+        run: |
+          TAG="$GITHUB_REF_NAME"
+          manifest() {
+            jq -n --arg version "${TAG#v}" --arg path "$1" '{
+              name: "esp32clock",
+              version: $version,
+              new_install_prompt_erase: true,
+              new_install_improv_wait_time: 0,
+              builds: [{chipFamily: "ESP32-C3", parts: [{path: $path, offset: 0}]}]
+            }'
+          }
+          # The release under its tag, as the page's list offers it.
+          mkdir -p "docs/$TAG"
+          cp images/*.bin "docs/$TAG/"
+          manifest "esp32clock-$TAG.bin" > "docs/$TAG/manifest.json"
+          # The same under fixed names as the fallback when the page
+          # cannot ask GitHub for the list; keep_files below leaves earlier
+          # tags in place, and these names are overwritten each release.
+          mkdir -p docs/latest
+          cp "images/esp32clock-$TAG.bin" docs/latest/esp32clock.bin
+          cp "images/esp32clock-ota-$TAG.bin" docs/latest/esp32clock-ota.bin
+          manifest "esp32clock.bin" > docs/latest/manifest.json
+          cat "docs/$TAG/manifest.json"
+      - uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./docs
+          keep_files: true
