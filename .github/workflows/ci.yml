@@ -53,9 +53,11 @@ jobs:
         run: |
           curl -sSfL -o espflash.zip \
             "https://github.com/esp-rs/espflash/releases/download/${ESPFLASH_VERSION}/espflash-x86_64-unknown-linux-gnu.zip"
+          mkdir -p "$HOME/.local/bin"
           unzip -q espflash.zip espflash -d "$HOME/.local/bin"
           chmod +x "$HOME/.local/bin/espflash"
-          espflash --version
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/espflash" --version
       - name: Build
         run: cargo build --release
       - name: Clippy
