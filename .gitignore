@@ -30,3 +30,14 @@ target/
 
 # Local credentials for the build (WIFI_SSID, OTA_TOKEN, ...)
 .env
+
+# KiCad working files under adapter/: backups, lock files, per-user
+# layout state, the autorouter export and the panelizer log
+*-backups/
+*.lck
+*.kicad_prl
+*.bak
+temp-freerouting.dsn
+panelizer.log
+fp-info-cache
+_autosave-*
