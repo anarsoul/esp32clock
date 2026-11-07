@@ -107,7 +107,8 @@ jobs:
             The images carry no network (the clock boots as its own access
             point, `clock-xxxx`, password `esp32clock`, setup form at
             http://192.168.4.1/), Vancouver time without daylight saving (`<-07>7`) and the API token
-            `esp32clock`; see the README's "Prebuilt images".
+            `esp32clock`; see the README's "Prebuilt images". What changed
+            is in CHANGELOG.md.
 
   pages:
     name: Flasher page

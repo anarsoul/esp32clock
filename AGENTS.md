@@ -49,7 +49,7 @@ scripts/pin.sh <ip> <serial-log>        # POST /pin, then the four digits read b
 AP_PASSWORD='…' cargo build --release   # optional: the clock's own access point's password (default esp32clock)
 ```
 
-Releases: an annotated tag `v*` (`git tag -a`; `build.rs` runs `git
+Releases: `CHANGELOG.md` gets the version's section first (the release body points at it), then an annotated tag `v*` (`git tag -a`; `build.rs` runs `git
 describe` without `--tags`, so a lightweight tag would not reach the
 version) runs `.github/workflows/release.yml`, which builds with the
 CI's prebuilt settings, tests, and attaches `esp32clock-ota-<tag>.bin`
