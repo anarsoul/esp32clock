@@ -117,13 +117,17 @@ pub enum FormError {
     /// A network key (`ssid`, `password`) or a broker key (`mqtt_*`)
     /// from a request that may not set it (`Allow`).
     Forbidden,
+    /// The settings page moved the broker to another host without
+    /// typing the password again: the stored one is not handed on.
+    BrokerPassword,
 }
 
 /// Which guarded keys a request may set. The network keys need the
 /// token on `/api`, or the access point's own page; the broker keys
 /// need the token on `/api` too, since pointing the clock at another
 /// broker would hand that broker the stored password, but the settings
-/// page takes them, as it takes the hostname and the alarm.
+/// page takes them, as it takes the hostname and the alarm, under the
+/// rule that a new host needs the password typed again (`apply`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Allow {
     pub network: bool,
@@ -133,7 +137,7 @@ pub struct Allow {
 impl Allow {
     /// `/api` without the token, and a command over MQTT.
     pub const NONE: Allow = Allow { network: false, broker: false };
-    /// The settings page.
+    /// The settings page: the broker, but a new host needs its password.
     pub const PAGE: Allow = Allow { network: false, broker: true };
     /// `/api` with the token, and the setup form on the access point.
     pub const ALL: Allow = Allow { network: true, broker: true };
@@ -394,13 +398,20 @@ pub fn parse_tenths(value: &str) -> Option<i16> {
 /// earlier pairs stay applied, so the caller works on a copy. A
 /// non-empty `ssid_pick` (the setup form's list) wins over `ssid` (its
 /// typed field) whatever their order, since a browser may send a stale
-/// typed name along with the pick.
+/// typed name along with the pick. A request the token did not vouch
+/// for (`Allow::PAGE`) that moves the broker to another host without a
+/// non-empty `mqtt_password` keeps nothing: it is refused as
+/// `BrokerPassword`, so the stored password never goes to a host the
+/// page named; the same host keeps it on an empty field, and an empty
+/// host clears it.
 pub fn apply(s: &mut Settings, body: &[u8], checkboxes_absent_off: bool, allow: Allow) -> Result<(), FormError> {
     if checkboxes_absent_off {
         s.alarm_armed = false;
         s.twelve_hour = false;
         s.skip_next = false;
     }
+    let before = s.mqtt;
+    let mut password_typed = false;
     let mut pick = None;
     for (key, value) in Pairs(body) {
         let mut kbuf = [0u8; 16];
@@ -413,9 +424,16 @@ pub fn apply(s: &mut Settings, body: &[u8], checkboxes_absent_off: bool, allow: 
         if key == "ssid_pick" && !value.is_empty() {
             pick = Some(s.wifi.ssid);
         }
+        if key == "mqtt_password" && !value.is_empty() {
+            password_typed = true;
+        }
     }
     if let Some(ssid) = pick {
         s.wifi.ssid = ssid;
+    }
+    let moved = s.mqtt.host != before.host && !s.mqtt.host.is_empty();
+    if allow == Allow::PAGE && moved && !password_typed && !before.password.0.is_empty() {
+        return Err(FormError::BrokerPassword);
     }
     Ok(())
 }
@@ -815,6 +833,7 @@ pub fn write_page(
         Some(FormError::BadValue) => out.write_str("<p class=err>Nothing was saved: a field had a bad value.</p>")?,
         Some(FormError::UnknownKey) => out.write_str("<p class=err>Nothing was saved: an unknown field was sent.</p>")?,
         Some(FormError::Forbidden) => out.write_str("<p class=err>Nothing was saved: the network is set with the token.</p>")?,
+        Some(FormError::BrokerPassword) => out.write_str("<p class=err>Nothing was saved: a new broker needs its password typed again.</p>")?,
     }
     write!(
         out,
@@ -864,7 +883,7 @@ pub fn write_page(
 <label>MQTT broker, empty for none <input type=text name=mqtt_host maxlength={bmax} pattern=\"[A-Za-z0-9.-]*\" value=\"{}\"></label>\
 <label>Port <input type=number name=mqtt_port min=1 max=65535 value={}></label>\
 <label>User <input type=text name=mqtt_user maxlength={umax} autocomplete=off value=\"{}\"></label>\
-<label>Password, empty keeps the stored one <input type=password name=mqtt_password maxlength={pmax} autocomplete=new-password></label></fieldset>\
+<label>Password, empty keeps the stored one for the same broker <input type=password name=mqtt_password maxlength={pmax} autocomplete=new-password></label></fieldset>\
 <button>Save</button> <b id=u hidden>Changes not saved yet.</b></form>\
 <script>var m=document.getElementById('m'),f=document.forms[0],u=document.getElementById('u');\
 document.getElementById('p').onclick=function(e){{e.preventDefault();\
@@ -946,7 +965,7 @@ pub fn write_provision_page(
         None => out.write_str("<p>The clock has no network to join, or was asked to wait for one. Give it yours and it restarts into it.</p>")?,
         Some(FormError::BadValue) => out.write_str("<p class=err>Nothing was saved: a field had a bad value, no network was named, or a secured network was given no password.</p>")?,
         Some(FormError::UnknownKey) => out.write_str("<p class=err>Nothing was saved: an unknown field was sent.</p>")?,
-        Some(FormError::Forbidden) => out.write_str("<p class=err>Nothing was saved.</p>")?,
+        Some(FormError::Forbidden) | Some(FormError::BrokerPassword) => out.write_str("<p class=err>Nothing was saved.</p>")?,
     }
     let stored = s.wifi.ssid.as_str();
     out.write_str("<form method=post action=/><label>Network <select name=ssid_pick id=n>")?;
@@ -1149,6 +1168,7 @@ mod tests {
         assert_eq!(s.mqtt.port, 1884, "the port stays");
         apply(&mut s, b"mqtt_host=broker.lan", false, Allow::PAGE).unwrap();
         assert!(!s.mqtt_cleared);
+        assert!(s.mqtt.password.0.is_empty(), "a host set after a clear has no password to hand on");
         // The alarm as Home Assistant's time entity sends it.
         apply(&mut s, b"alarm=07%3A45%3A00", false, Allow::NONE).unwrap();
         assert_eq!((s.alarm_hour, s.alarm_minute), (7, 45));
@@ -1230,6 +1250,29 @@ mod tests {
             assert!(apply(&mut s, body, false, Allow::ALL).is_ok());
         }
         assert_eq!(page(b"ssid=x").err(), Some(FormError::Forbidden), "the page still may not set the network");
+        // A new host from the page must come with its password typed:
+        // the stored one is for the broker it was typed for.
+        let mut with = Settings::DEFAULT;
+        apply(&mut with, b"mqtt_host=10.1.1.5&mqtt_user=clock&mqtt_password=secret", false, Allow::PAGE).unwrap();
+        let moved = |body: &[u8], allow| {
+            let mut s = with;
+            apply(&mut s, body, false, allow).map(|()| s)
+        };
+        assert_eq!(moved(b"mqtt_host=attacker.lan&mqtt_password=", Allow::PAGE).err(), Some(FormError::BrokerPassword));
+        assert_eq!(moved(b"mqtt_password=&mqtt_host=attacker.lan", Allow::PAGE).err(), Some(FormError::BrokerPassword), "whatever the order");
+        assert_eq!(moved(b"mqtt_host=attacker.lan", Allow::PAGE).err(), Some(FormError::BrokerPassword), "or without the field");
+        let typed = moved(b"mqtt_host=other.lan&mqtt_password=new", Allow::PAGE).unwrap();
+        assert_eq!((typed.mqtt.host.as_str(), typed.mqtt.password.0.as_str()), ("other.lan", "new"));
+        let same = moved(b"mqtt_host=10.1.1.5&mqtt_port=1884&mqtt_user=other&mqtt_password=", Allow::PAGE).unwrap();
+        assert_eq!((same.mqtt.port, same.mqtt.user.as_str(), same.mqtt.password.0.as_str()), (1884, "other", "secret"), "the same host keeps it");
+        let cleared = moved(b"mqtt_host=&mqtt_password=", Allow::PAGE).unwrap();
+        assert!(cleared.mqtt.is_none() && cleared.mqtt.password.0.is_empty(), "an empty host clears it");
+        let token = moved(b"mqtt_host=other.lan&mqtt_password=", Allow::ALL).unwrap();
+        assert_eq!((token.mqtt.host.as_str(), token.mqtt.password.0.as_str()), ("other.lan", "secret"), "the token may move it");
+        let mut s = with;
+        s.mqtt.password = Secret(Text::EMPTY);
+        apply(&mut s, b"mqtt_host=other.lan&mqtt_password=", false, Allow::PAGE).unwrap();
+        assert_eq!(s.mqtt.host.as_str(), "other.lan", "nothing stored, nothing to protect");
         assert_eq!(page(b"mqtt_host=a+b").err(), Some(FormError::BadValue));
         assert_eq!(page(b"mqtt_host=a%3A1883").err(), Some(FormError::BadValue));
         assert_eq!(page(b"mqtt_port=0").err(), Some(FormError::BadValue));

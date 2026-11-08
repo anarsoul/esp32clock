@@ -266,6 +266,7 @@ fn redirect_home(out: &mut Response, error: Option<FormError>) -> core::fmt::Res
         Some(FormError::BadValue) => "?error=value",
         Some(FormError::UnknownKey) => "?error=key",
         Some(FormError::Forbidden) => "?error=token",
+        Some(FormError::BrokerPassword) => "?error=broker",
     };
     write!(out, "HTTP/1.0 303 See Other\r\nLocation: /{suffix}\r\nConnection: close\r\n\r\n")
 }
@@ -276,6 +277,7 @@ fn error_from_query(query: &str) -> Option<FormError> {
         Some("value") => Some(FormError::BadValue),
         Some("key") => Some(FormError::UnknownKey),
         Some("token") => Some(FormError::Forbidden),
+        Some("broker") => Some(FormError::BrokerPassword),
         _ => None,
     }
 }
@@ -405,9 +407,10 @@ fn respond(out: &mut Response, req: &Request<'_>, body: &[u8]) -> Result<Then, c
         }
         (Method::Post, "/play") => {
             // Preview the sound chosen in the form without saving anything:
-            // the form is applied to a scratch copy and only its melody used.
+            // the form is applied to a scratch copy and only its melody used,
+            // so the page's broker rule need not hold (`Allow::ALL`).
             let mut trial = settings::get();
-            if let Err(e) = form::apply(&mut trial, body, true, Allow::PAGE) {
+            if let Err(e) = form::apply(&mut trial, body, true, Allow::ALL) {
                 warn!("http: play form rejected: {e:?}");
             }
             buzzer::preview(trial.melody);
