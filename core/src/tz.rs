@@ -260,12 +260,22 @@ impl Tz<'_> {
         let Some(d) = self.dst else {
             return Period { offset_secs: self.std.offset_secs, dst: false, name: self.std.name };
         };
+        // The latest transition at or before the instant decides. A
+        // transition time may be negative or past 24:00 (to 167 hours),
+        // which puts the event of one year's rule in the year next to
+        // it, so the neighbouring years' events are candidates too; the
+        // southern hemisphere, whose daylight time spans the new year,
+        // needs nothing special this way.
         let year = civil_from_days((unix + self.std.offset_secs as i64).div_euclid(SECS_PER_DAY)).0;
-        let start = transition_unix(year, d.start, self.std.offset_secs);
-        let end = transition_unix(year, d.end, d.zone.offset_secs);
-        // Daylight time between the two; when the end comes first in the
-        // year (the southern hemisphere) it spans the new year instead.
-        let in_dst = if start <= end { unix >= start && unix < end } else { unix < end || unix >= start };
+        let mut latest: Option<(i64, bool)> = None;
+        for y in year - 1..=year + 1 {
+            for (at, dst) in [(transition_unix(y, d.start, self.std.offset_secs), true), (transition_unix(y, d.end, d.zone.offset_secs), false)] {
+                if at <= unix && latest.is_none_or(|(l, _)| at > l) {
+                    latest = Some((at, dst));
+                }
+            }
+        }
+        let in_dst = latest.is_some_and(|(_, dst)| dst);
         if in_dst {
             Period { offset_secs: d.zone.offset_secs, dst: true, name: d.zone.name }
         } else {
@@ -386,6 +396,29 @@ pub const fn fixed(minutes: i16) -> Text<TZ_MAX> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transition_displaced_across_new_year() {
+        // Daylight time from 23:00 on December 31 (`J1/-1`) to 02:00 on
+        // June 29: the start belongs to the next year's rule, and the
+        // instant's own year has no transition at midnight.
+        let tz = parse("STD0DST,J1/-1,J180/2").unwrap();
+        let new_year_2027 = days_from_civil(2027, 1, 1) * SECS_PER_DAY;
+        assert!(!tz.period_at(new_year_2027 - 3601).dst, "22:59:59 on December 31 is standard time");
+        assert!(tz.period_at(new_year_2027 - 3600).dst, "23:00 on December 31 starts daylight time");
+        assert!(tz.period_at(new_year_2027 - 1).dst, "23:59:59 stays in it");
+        assert!(tz.period_at(new_year_2027).dst, "and so does midnight");
+        assert!(tz.period_at(new_year_2027 + 1).dst);
+        let june_29 = days_from_civil(2027, 6, 29) * SECS_PER_DAY;
+        assert!(tz.period_at(june_29 + 2 * 3600 - 3600 - 1).dst, "01:59:59 daylight time");
+        assert!(!tz.period_at(june_29 + 2 * 3600 - 3600).dst, "02:00 daylight time is the end (the end is given in daylight time)");
+        // A positive time past the year's end: the end at 25:00 of
+        // December 31 is 01:00 daylight time on January 1, 00:00 UTC.
+        let tz = parse("STD0DST,M3.2.0,J365/25").unwrap();
+        assert!(tz.period_at(new_year_2027 - 1).dst, "23:59:59 UTC on December 31 is still daylight time");
+        assert!(!tz.period_at(new_year_2027).dst, "00:00 UTC on January 1 ends it");
+        assert!(!tz.period_at(new_year_2027 + 3600).dst);
+    }
 
     const US: &str = "PST8PDT,M3.2.0,M11.1.0";
     const EU: &str = "CET-1CEST,M3.5.0,M10.5.0/3";
