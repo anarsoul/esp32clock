@@ -3,7 +3,8 @@
 Firmware for the HU-058 / HU-058D LED clock panel driven by an ESP32-C3,
 written in Rust with esp-hal and Embassy on esp-rtos. The display's two
 AiP33628 drivers are fed by SPI2 in quad mode used as a four-wire pattern
-generator with DMA; see `PLAN.md` for the full design and its history.
+generator, on one DMA segmented transfer the hardware loops for ever;
+see `PLAN.md` for the full design and its history.
 The repo is a two-member workspace: the firmware is the root package,
 and `core/` (`esp32clock-core`) is the hardware-independent half, a
 `no_std` library the firmware re-exports and the host runs the tests
@@ -364,7 +365,8 @@ module ends with its `#[cfg(test)] mod tests`.
 | `core/src/lib.rs` | `#![cfg_attr(not(test), no_std)]`; the module list; nothing else |
 | `core/src/aip33628.rs` | frame format, bit-reversed current table, quad-nibble waveform encoder; pure `core` |
 | `core/src/panel.rs` | COM/SEG map, font, per-position colour as duty `Levels` (no RGB; the palette is written in levels), `Panel::render` → `ScanImage` |
-| `src/scan.rs` | cycle/transfer builder, double-buffered DMA scan task that builds the SPI2 quad + DMA bus itself (an async esp-hal driver is `!Send`), restart-gap statistics, `stop` on a blank frame before a flash write and `resume` after a failed one, `halt` before a deliberate reset (the stop latched: `resume` is void after it, so an upload failing under the reset's pause cannot restart the scan) |
+| `src/scan.rs` | cycle/transfer (one lap) builder; the scan task, which builds the SPI2 quad + DMA bus itself (an async esp-hal driver is `!Send`), runs one plain dark transfer so esp-hal programs the registers, starts the ring and from then on only acts on `stop` (the ring ends on its blanking frame within two laps, before a flash write), `resume` after a failed upload and `halt` before a deliberate reset (the stop latched: `resume` is void after it, so an upload failing under the reset's pause cannot restart the scan); `publish` forwards to the ring; `Report` for the heartbeat |
+| `src/ring.rs` | the scan as one SPI2 DMA-controlled configurable segmented transfer (TRM 27.5.8.5) on a one-segment descriptor ring: `Ring`, a `DmaTxBuffer` of a conf descriptor (bitmap with magic 0xA and the USER word) and eleven data descriptors of two cycles each, the last pointing at the first, whose `prepare` switches the mode on in the window esp-hal leaves between programming the registers and setting `usr`; `request_stop` clears `usr_conf_nxt` in the conf USER word; `publish` builds into the spare buffer and repoints the data descriptors (`point_at`), holding the buffer it left for two laps before it is written again; `position` for the heartbeat. The one module with register access, through esp-hal's `regs()` |
 | `src/display.rs` | UI loop: tick, button or settings change → `ui` → draw → publish; rings the alarm and signals the ringing edges (`ringing_changed`) for the MQTT state; `silence` ends a ring as a press would; shows the IP, or `AP` in place of the sweep on the access point; acts on the hold before the UI sees it; seeds and carries the skip flag and the time the alarm last rang |
 | `core/src/ui.rs` | mode state machine, pure logic, one timer for the current mode; edits the settings it is handed; alarm due check and missed-alarm grace, both gated by the carried local second the alarm last rang (local rather than Unix, so the hour a fall-back transition repeats rings once; an alarm minute a spring-forward transition skips rings when the clock lands past it); consumes `skip_next`; `view` takes the room reading and answers the `Temp` face mid-minute in clock mode |
 | `core/src/settings.rs` | `Settings`, palette and brightness tables, `Hostname`, `Text`/`Secret` strings, `Credentials`, the token and the MQTT `Broker` with their rules, the build-time `seed`, shared `Watch` with change signal, versioned append-only flash record |
@@ -405,7 +407,10 @@ module ends with its `#[cfg(test)] mod tests`.
 - **Display wires (GPIO6–9)** are SPI2 SIO0–3. The SPI builder resets the
   pull of a bare pin it takes, but leaves a `Flex` alone (it arrives as a
   frozen signal), so `main.rs` sets the idle pull-downs on `Flex` pins and
-  the scan task builds the bus from those. No PAC access.
+  the scan task builds the bus from those. No PAC access for the pins;
+  `ring.rs` is the one module that touches registers, SPI2's
+  segmented-mode bits and the DMA's current descriptor, through esp-hal's
+  `regs()`.
 - **Buttons:** GPIO4 is the upper button, GPIO3 the lower. No board
   pull-ups; the internal ones are used.
 - **Sensors (GPIO0, GPIO1):** the adapter's 10 kΩ pull-ups from 3V3
@@ -468,25 +473,47 @@ module ends with its `#[cfg(test)] mod tests`.
 
 ## Timing rules in the scan path
 
-- The scan task runs on an interrupt executor so Wi-Fi threads cannot delay
-  it. Nothing slow may run between one DMA transfer ending and the next
-  starting: no logging, no building. Transfers are double buffered; the
-  publisher builds in thread mode.
+- The CPU is not in the scan loop. The transfer is one segment of SPI2's
+  configurable segmented transfer on a descriptor ring (`ring.rs`), and
+  the hardware runs lap after lap by itself; the gap between laps is the
+  CONF state, a fixed 0.6 µs after the blanking frame with the lines idle
+  (bench and scope, 2026-11-08). Until then the scan task restarted every
+  transfer: 10 to 19 µs each time, and up to 1 ms whenever a critical
+  section held the done interrupt off (esp-sync's `RawMutex` masks every
+  interrupt on this chip: the Wi-Fi blob's lock, the heap lock on every
+  frame buffer, esp-println's lock while a monitor drains the USB FIFO),
+  which no priority could fix; the history is in PLAN.md under 2026-11-07
+  and 2026-11-08. The scan task keeps its interrupt executor, but nothing
+  time-critical runs on it now.
 - A frame must fit in one sub-frame unit (`UNIT_BYTES >= FRAME_BYTES`, a
   compile-time assert). Raising `SPI_HZ` or lowering `UNIT_US` changes the
   refresh rate; 20 MHz / 5 µs / three planes gives 7.1 kHz, which is what
   the shimmer tests settled on. Fewer planes shorten the cycle; more planes
   make it visibly shimmer.
-- The cycle ends with a blanking frame so the gap between transfers is
-  dark. Keep it.
+- The lap ends with a blanking frame so the CONF state between laps is
+  dark. Keep it. A data descriptor holds whole cycles (two, 2800 bytes;
+  the last 2847 with the blanking frame; `CHUNK_SIZE` is 4092, asserted),
+  so an image swap, which repoints the descriptors one aligned store at
+  a time, changes the image at a cycle boundary within one lap.
+- A published buffer may still be read for the rest of the lap in flight,
+  so `ring::publish` waits `HOLD` (two laps and a bit) after a swap before
+  it builds into the buffer it left. One publisher, the display task.
+- `stop` takes up to two laps, about 6 ms: the cleared `usr_conf_nxt` in
+  the conf buffer is applied at the next CONF state and that lap is the
+  last. The ring's data stays the live image, so `resume` shows what was
+  showing.
 - `Instant - Duration` panics when uptime is shorter than the duration. Use
   `Option<Instant>` for "last time X happened".
-- Never reset the chip while a transfer is in flight: the row the drivers
+- Never reset the chip while a lap is in flight: the row the drivers
   last latched stays lit at full current until the firmware is back. A
   deliberate reset goes through `heal::reset`, which waits for
-  `scan::halt` (the transfer ends on its blanking frame, and the stop
+  `scan::halt` (the ring ends on its blanking frame, and the stop
   is latched against an upload's `resume`) first. The panic
   path in `custom_halt` cannot do this and is the one exception.
+- The heartbeat's `scan` field is images published, stops (and stops that
+  had to cancel the transfer, which the bench never showed), running or
+  halted, and the index of the descriptor the DMA is reading (0 the conf
+  descriptor, 1 to 11 the data), which must differ between heartbeats.
 
 ## Sizes that bite
 
@@ -509,7 +536,8 @@ module ends with its `#[cfg(test)] mod tests`.
 - An OTA image must fit a slot (`partitions.csv`, 0x1E0000 = 1920 KB);
   the release image is about 650 KB. Static RAM: `ota.rs` holds 11 KB
   of buffers, and what the statics leave of DRAM is the main stack,
-  67.1 KB on 2026-11-07 (`Settings` is a 385-byte record and sits in several task futures: the 49-byte timezone rule cost 2.2 KB of stack); check `.stack` in `llvm-readelf -S` after adding one, and compare with a build of `HEAD` in a worktree when in doubt: one `Response` per listener loop, since a second one in another arm of the same loop was not overlapped by the compiler and cost 6 KB per listener until it was hoisted (2026-11-07). `src/tz.js` (5.8 KB) is sent from one response buffer and a `const` assert in `src/http.rs` keeps it under `RESPONSE_BUF` with its header; it was trimmed to comments of a line each to fit.
+  66.9 KB on 2026-11-08 (67.1 on 2026-11-07; the ring's descriptors and
+  conf words are 160 bytes, the gap statistics and buffer channels went) (`Settings` is a 385-byte record and sits in several task futures: the 49-byte timezone rule cost 2.2 KB of stack); check `.stack` in `llvm-readelf -S` after adding one, and compare with a build of `HEAD` in a worktree when in doubt: one `Response` per listener loop, since a second one in another arm of the same loop was not overlapped by the compiler and cost 6 KB per listener until it was hoisted (2026-11-07). `src/tz.js` (5.8 KB) is sent from one response buffer and a `const` assert in `src/http.rs` keeps it under `RESPONSE_BUF` with its header; it was trimmed to comments of a line each to fit.
 - `form::apply` decodes each key into 16 bytes and each value into 64
   (`form::VALUE_MAX`, the password); longer input is reported as a bad
   key or value before parsing. The record is `settings::RECORD_LEN` (385) bytes and the map scratch in `storage.rs` 512, which must hold
@@ -557,8 +585,10 @@ MQTT topics, routes and discovery payload (parsed with `serde_json`, a
 host-only dev-dependency, and checked key by key against the `/api`
 JSON and the form parser). `cargo clippy -p esp32clock-core --target host-tuple
 --tests` lints the tests. `node scripts/tz-check.mjs` checks the browser half of the timezone field, `src/tz.js`, against zones with known rules under Node, whose `Intl` is a browser's, and against Casablanca, which must throw. `.cargo/config.toml` aims every cargo command at the chip, which is why the alias passes `--target host-tuple`; the `[unstable] build-std` line there is ignored by
-stable cargo. Not under test: `scan.rs`'s `build_cycle` (the M1 lit-time
-check needs it on the host), `dhcpd.rs` and `dnsd.rs` (their pure halves
+stable cargo. Not under test: `scan.rs`'s
+`build_cycle` (the M1 lit-time check needs it on the host), `ring.rs`
+(descriptors and registers; its layout is `const`-asserted), `dhcpd.rs`
+and `dnsd.rs` (their pure halves
 use embassy-net's address types), `storage.rs`'s map over the flash,
 `mqtt.rs`'s session loop.
 `PLAN.md` records the checks of each milestone; new ones are tests.

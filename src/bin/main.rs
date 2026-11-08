@@ -128,10 +128,9 @@ async fn main(spawner: Spawner) -> ! {
         display_wire(peripherals.GPIO6), // CLK_1,  driver 2
     ];
 
-    // Two transfer buffers: one in flight, one being filled.
+    // Two transfer buffers: the one the ring points at, one being filled.
     let buf = dma_tx_buffer!(scan::TRANSFER_BYTES).expect("dma buffer");
     let spare = dma_tx_buffer!(scan::TRANSFER_BYTES).expect("dma spare buffer");
-    scan::init_spare(spare);
 
     // Saved settings, so the first frame already has the user's colour.
     // Without a usable nvs partition they live in RAM for this boot.
@@ -212,15 +211,16 @@ async fn main(spawner: Spawner) -> ! {
     let stack_config = if mode == Mode::AccessPoint { net::ap_stack_config() } else { embassy_net::Config::default() };
     let (stack, runner) = embassy_net::new(interface, stack_config, RESOURCES.init(StackResources::new()), seed);
 
-    // The scan task restarts the DMA transfer the moment one ends. In the
-    // thread-mode executor a Wi-Fi task can hold it off for hundreds of
-    // microseconds, which is a dark blink on the panel. An interrupt-mode
-    // executor cannot be preempted by threads, so the gap stays at a few
-    // microseconds whatever Wi-Fi is doing.
+    // The scan task owns the SPI and DMA hardware and acts on stop and
+    // resume; the hardware runs the scan itself (scan.rs, ring.rs). It
+    // keeps its interrupt-mode executor from the days it restarted every
+    // transfer, when thread-mode Wi-Fi work could hold the restart off:
+    // nothing time-critical runs on it now, and nothing is gained by
+    // moving it.
     static SCAN_EXECUTOR: StaticCell<InterruptExecutor<1>> = StaticCell::new();
     let scan_executor = SCAN_EXECUTOR.init(InterruptExecutor::new(peripherals.FROM_CPU_INTR1));
     let scan_spawner = scan_executor.start(Priority::Priority2);
-    let hw = scan::ScanHardware { spi: peripherals.SPI2, dma: peripherals.DMA_CH0, wires, buf };
+    let hw = scan::ScanHardware { spi: peripherals.SPI2, dma: peripherals.DMA_CH0, wires, buf, spare };
     scan_spawner.spawn(scan::scan_task(hw).expect("spawn scan"));
     spawner.spawn(display::display_task(stack).expect("spawn display"));
     spawner.spawn(buttons::button_task(button_top, button_bottom).expect("spawn buttons"));
@@ -253,16 +253,13 @@ async fn main(spawner: Spawner) -> ! {
     info!("running");
     loop {
         Timer::after(Duration::from_secs(60)).await;
-        let g = scan::take_gap_stats();
         let (sent, failed, streak) = net::probe_stats();
         info!(
-            "alive {} s, heap free {} bytes; scan restart gap avg {} us, max {} us over {} transfers; \
+            "alive {} s, heap free {} bytes; scan {}; \
              gateway probes {} sent, {} failed, {} failing now; self-heal resets {}; sensors {}; mqtt {}",
             Instant::now().as_secs(),
             esp_alloc::HEAP.free(),
-            g.sum_us / g.transfers.max(1) as u64,
-            g.max_us,
-            g.transfers,
+            scan::Report,
             sent,
             failed,
             streak,

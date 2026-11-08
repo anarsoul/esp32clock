@@ -16,15 +16,19 @@
 //! nothing here, which is what makes that free.
 //!
 //! The transfer ends with an all-off frame so that the gap between one
-//! transfer ending and the next starting is dark rather than leaving the
-//! last COM pair lit for longer than the other three.
+//! lap and the next is dark rather than leaving the last COM pair lit
+//! for longer than the other three.
+//!
+//! The transfer is not restarted by the CPU: it is one segment of SPI2's
+//! segmented-transfer mode on a descriptor ring (`ring.rs`), which the
+//! hardware runs for ever. This module builds the waveform, owns the
+//! task that starts and stops the ring, and keeps the stop, resume and
+//! halt entry points the upload and reset paths use.
 
-use core::cell::Cell;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::fmt;
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-use critical_section::Mutex;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_sync::channel::Channel;
 use embassy_sync::signal::Signal;
 use embassy_time::{Instant, Timer};
 use esp_hal::dma::DmaTxBuf;
@@ -33,38 +37,9 @@ use esp_hal::peripherals::{DMA_CH0, SPI2};
 use esp_hal::spi::Mode;
 use esp_hal::spi::master::{Address, Command, Config as SpiConfig, DataMode, Spi};
 use esp_hal::time::Rate;
-use log::{error, info};
+use log::{error, info, warn};
 
-/// Dark time between one DMA transfer ending and the next starting,
-/// accumulated by the scan task and read by whoever wants to report it.
-#[derive(Clone, Copy, Default, Debug)]
-pub struct GapStats {
-    pub transfers: u32,
-    pub sum_us: u64,
-    pub max_us: u64,
-}
-
-static GAP: Mutex<Cell<GapStats>> = Mutex::new(Cell::new(GapStats {
-    transfers: 0,
-    sum_us: 0,
-    max_us: 0,
-}));
-
-/// Read and reset the gap statistics.
-pub fn take_gap_stats() -> GapStats {
-    critical_section::with(|cs| GAP.borrow(cs).replace(GapStats::default()))
-}
-
-fn record_gap(us: u64) {
-    critical_section::with(|cs| {
-        let cell = GAP.borrow(cs);
-        let mut g = cell.get();
-        g.transfers += 1;
-        g.sum_us += us;
-        g.max_us = g.max_us.max(us);
-        cell.set(g);
-    });
-}
+use crate::ring::{self, Ring};
 
 use crate::aip33628::{FRAME_BYTES, encode_pair};
 use crate::panel::{COM_SEQ, PLANES, SLOTS, ScanImage};
@@ -103,6 +78,10 @@ pub const CYCLE_US: usize = SLOTS * UNIT_US * SLOT_UNITS;
 
 /// Bytes per DMA transfer: the cycles plus the trailing blanking frame.
 pub const TRANSFER_BYTES: usize = CYCLES_PER_TRANSFER * CYCLE_BYTES + FRAME_BYTES;
+
+/// Nanoseconds one transfer, a lap of the ring, takes on the wire: two
+/// nibbles per byte, one per SPI clock. 3 084 700 ns at 20 MHz.
+pub const TRANSFER_NS: u64 = TRANSFER_BYTES as u64 * 2 * 1_000_000_000 / SPI_HZ as u64;
 
 // A frame has to fit inside the shortest region, with its latch at the same
 // offset in every region so that lit time equals region length.
@@ -150,17 +129,13 @@ pub fn build_transfer(img: &ScanImage, out: &mut [u8]) {
     encode_pair(0, 0, COM_SEQ[SLOTS - 1], img.is_step, blank.try_into().unwrap());
 }
 
-/// Buffers not in flight, ready to be filled. One of the two lives here
-/// while the other is being transferred.
-static FREE: Channel<CriticalSectionRawMutex, DmaTxBuf, 1> = Channel::new();
-
-/// A filled buffer waiting for the scan task to swap it in.
-static READY: Channel<CriticalSectionRawMutex, DmaTxBuf, 1> = Channel::new();
-
-/// Set to end the scan at the next transfer boundary.
+/// Set to end the scan; the task stops the ring at the next lap boundary.
 static STOP: AtomicBool = AtomicBool::new(false);
 
-/// Set by the scan task once it has stopped, cleared when it resumes.
+/// Wakes the scan task to act on `STOP`.
+static STOP_REQ: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+/// Set by the scan task once the ring has ended, cleared when it restarts.
 static HALTED: AtomicBool = AtomicBool::new(false);
 
 /// Raised to let a stopped scan task run again.
@@ -169,23 +144,30 @@ static RESUME: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 /// Latched by `halt`: the stop is for a reset, and `resume` is void.
 static FINAL: AtomicBool = AtomicBool::new(false);
 
-/// Stop the scan with the panel blank. Returns once the transfer in
-/// flight has ended, on its blanking frame, and no other will start; the
-/// wires then rest on their pull-downs. For a deliberate reset, which
-/// must not land mid-transfer or the row the drivers had latched stays
-/// lit at full current until the firmware is back, and for a firmware
-/// upload, whose flash writes would otherwise flicker the panel. Takes
-/// up to one transfer, about 3 ms. Safe to call while already stopped,
-/// so a self-heal during an upload does not hang here: it polls a flag
-/// rather than waiting on a one-shot signal.
+/// Stops since boot, and stops that needed the transfer cancelled because
+/// the chain did not end in time; for the heartbeat. One writer.
+static STOPS: AtomicU32 = AtomicU32::new(0);
+static CANCELLED: AtomicU32 = AtomicU32::new(0);
+
+/// Stop the scan with the panel blank. Returns once the lap in flight
+/// has ended, on its blanking frame, and no other will start; the wires
+/// then rest on their pull-downs. For a deliberate reset, which must not
+/// land mid-lap or the row the drivers had latched stays lit at full
+/// current until the firmware is back, and for a firmware upload, whose
+/// flash writes would otherwise flicker the panel. Takes up to two laps,
+/// about 6 ms, since the stop is applied at the next CONF state and that
+/// lap is the last. Safe to call while already stopped, so a self-heal
+/// during an upload does not hang here: it polls a flag rather than
+/// waiting on a one-shot signal.
 pub async fn stop() {
     STOP.store(true, Ordering::Release);
+    STOP_REQ.signal(());
     while !HALTED.load(Ordering::Acquire) {
         Timer::after_millis(1).await;
     }
 }
 
-/// Let a stopped scan run again, from the buffer it had. A no-op when
+/// Let a stopped scan run again, from the image it had. A no-op when
 /// it is running, and void once `halt` has latched the stop for a
 /// reset: an upload that fails while the reset is pausing must not put
 /// a transfer under it. The flags are read and written inside one
@@ -209,46 +191,42 @@ pub async fn halt() {
     stop().await
 }
 
-/// Give the publisher its spare buffer. Call once, before any `publish`.
-pub fn init_spare(buf: DmaTxBuf) {
-    assert!(FREE.try_send(buf).is_ok(), "spare buffer slot taken");
-}
-
-/// Hand a new image to the scan engine. Builds the transfer here, in the
-/// caller's task, so the scan task never spends more than a few
-/// microseconds between transfers. Takes effect at the next transfer
-/// boundary, within about 3 ms.
+/// Hand a new image to the scan. Builds the transfer into the spare
+/// buffer, in the caller's task, and points the ring at it; the image
+/// changes at a cycle boundary within one lap, about 3 ms.
 pub async fn publish(img: &ScanImage) {
-    let mut buf = FREE.receive().await;
-    build_transfer(img, buf.as_mut_slice());
-    READY.send(buf).await;
+    ring::publish(img).await
 }
 
 /// What the scan task builds its SPI bus from: the peripherals, the four
 /// wires with their idle pull-downs already set (the builder leaves a
-/// `Flex` pin's configuration alone, see `main.rs`), and the first DMA
-/// buffer. The async driver is built in the task rather than handed to
-/// it: esp-hal ties an async driver to the core its interrupt handler was
-/// installed on and makes it `!Send` for that reason, so it is created
-/// where it runs.
+/// `Flex` pin's configuration alone, see `main.rs`), and the two DMA
+/// buffers, one the ring points at and one the publisher fills. The
+/// async driver is built in the task rather than handed to it: esp-hal
+/// ties an async driver to the core its interrupt handler was installed
+/// on and makes it `!Send` for that reason, so it is created where it
+/// runs.
 pub struct ScanHardware {
     pub spi: SPI2<'static>,
     pub dma: DMA_CH0<'static>,
     /// SIO0 to SIO3: DATA, CLK, DATA_1, CLK_1.
     pub wires: [Flex<'static>; 4],
     pub buf: DmaTxBuf,
+    pub spare: DmaTxBuf,
 }
 
-/// Runs the display forever. Owns the SPI peripheral and the in-flight
-/// DMA buffer; swaps it for a freshly built one whenever there is one.
+/// Runs the display forever. Builds the bus, runs one ordinary dark
+/// transfer so esp-hal programs every register, builds the ring over
+/// that buffer and starts it; from then on the hardware scans by itself
+/// and the task only acts on `stop` and `resume`.
 #[embassy_executor::task]
 pub async fn scan_task(hw: ScanHardware) -> ! {
-    let ScanHardware { spi, dma, wires, mut buf } = hw;
+    let ScanHardware { spi, dma, wires, mut buf, spare } = hw;
     let [sio0, sio1, sio2, sio3] = wires;
 
     // SPI2 in quad mode, no SCK: the four data lines are the four panel
     // wires. See aip33628.rs for what goes down them.
-    let mut spi = Spi::new(spi, SpiConfig::default().with_frequency(Rate::from_hz(SPI_HZ)).with_mode(Mode::_0))
+    let spi = Spi::new(spi, SpiConfig::default().with_frequency(Rate::from_hz(SPI_HZ)).with_mode(Mode::_0))
         .expect("spi config")
         .with_sio0(sio0)
         .with_sio1(sio1)
@@ -258,63 +236,104 @@ pub async fn scan_task(hw: ScanHardware) -> ! {
         .into_async();
 
     build_transfer(&ScanImage::DARK, buf.as_mut_slice());
+    let mut transfer = spi
+        .half_duplex_write_buffer(DataMode::Quad, Command::None, Address::None, 0, TRANSFER_BYTES, buf)
+        .map_err(|(e, ..)| e)
+        .expect("scan: first transfer");
+    transfer.wait_for_done().await;
+    let (mut spi, buf) = transfer.wait();
+
+    let (_descriptors, mut live) = buf.split();
+    let (_descriptors, spare) = spare.split();
+    let mut ring = Ring::new(&mut live);
+    ring::init_slots(live, spare);
     info!(
-        "scan: {} us/cycle ({} Hz), {} us/unit, {} cycles and {} bytes per transfer",
+        "scan: {} us/cycle ({} Hz), {} us/unit, {} cycles and {} bytes per lap in {} descriptors; hardware chained",
         CYCLE_US,
         1_000_000 / CYCLE_US,
         UNIT_US,
         CYCLES_PER_TRANSFER,
-        TRANSFER_BYTES
+        TRANSFER_BYTES,
+        ring::DESCS
     );
 
-    // Nothing slow may run between a transfer ending and the next starting:
-    // that time is dark on the panel. No logging in this loop.
-    let mut ended_at: Option<Instant> = None;
-
     loop {
-        if let Some(t) = ended_at {
-            record_gap(t.elapsed().as_micros());
-        }
+        ring::clear_ended();
         let mut transfer = match spi.half_duplex_write_buffer(
             DataMode::Quad,
             Command::None,
             Address::None,
             0,
             TRANSFER_BYTES,
-            buf,
+            ring,
         ) {
             Ok(t) => t,
-            Err((e, s, b)) => {
+            Err((e, s, r)) => {
                 error!("scan: dma start failed: {e:?}");
                 spi = s;
-                buf = b;
+                ring = r;
                 Timer::after_millis(100).await;
                 continue;
             }
         };
-        transfer.wait_for_done().await;
-        (spi, buf) = transfer.wait();
-        ended_at = Some(Instant::now());
 
-        if STOP.load(Ordering::Acquire) {
-            HALTED.store(true, Ordering::Release);
-            // `resume` clears the stop before it signals; a stop set
-            // again meanwhile (a reset's `halt`) keeps the task here.
-            loop {
-                RESUME.wait().await;
-                if !STOP.load(Ordering::Acquire) {
-                    break;
-                }
+        // The ring runs. Wait for a stop; a stale signal from a stop
+        // issued while already halted is told by the flag.
+        loop {
+            STOP_REQ.wait().await;
+            if STOP.load(Ordering::Acquire) {
+                break;
             }
-            HALTED.store(false, Ordering::Release);
-            ended_at = None;
         }
+        ring::request_stop();
+        let asked = Instant::now();
+        while !ring::ended() && asked.elapsed() < STOP_TIMEOUT {
+            Timer::after_micros(200).await;
+        }
+        if ring::busy() {
+            // Not seen on the bench; the transfer is cut rather than hang
+            // the reset behind it. The latched row may stay lit.
+            warn!("scan: ring did not end within {} ms, cancelling", STOP_TIMEOUT.as_millis());
+            transfer.cancel();
+            CANCELLED.store(CANCELLED.load(Ordering::Relaxed) + 1, Ordering::Relaxed);
+        }
+        (spi, ring) = transfer.wait();
+        STOPS.store(STOPS.load(Ordering::Relaxed) + 1, Ordering::Relaxed);
 
-        if let Ok(next) = READY.try_receive() {
-            let done = core::mem::replace(&mut buf, next);
-            // The publisher always returns the spare before asking for
-            // another, so this slot is free.
-            let _ = FREE.try_send(done);
+        HALTED.store(true, Ordering::Release);
+        // `resume` clears the stop before it signals; a stop set again
+        // meanwhile (a reset's `halt`) keeps the task here.
+        loop {
+            RESUME.wait().await;
+            if !STOP.load(Ordering::Acquire) {
+                break;
+            }
+        }
+        HALTED.store(false, Ordering::Release);
+    }
+}
+
+/// How long the task waits for the chain to end after a stop request:
+/// two laps plus margin.
+const STOP_TIMEOUT: embassy_time::Duration = embassy_time::Duration::from_millis(20);
+
+/// The heartbeat's line: images published, stops, and where in the ring
+/// the DMA is, which must change between heartbeats while the scan runs.
+pub struct Report;
+
+impl fmt::Display for Report {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} images published, {} stops ({} cancelled), {}, at descriptor ",
+            ring::swaps(),
+            STOPS.load(Ordering::Relaxed),
+            CANCELLED.load(Ordering::Relaxed),
+            if HALTED.load(Ordering::Relaxed) { "halted" } else { "running" }
+        )?;
+        match ring::position() {
+            Some(i) => write!(f, "{i}"),
+            None => f.write_str("-"),
         }
     }
 }

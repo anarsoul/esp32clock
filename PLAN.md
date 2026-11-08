@@ -1284,7 +1284,9 @@ Found in the same review, not yet done, in rough order of value:
   `aip33628::IS_MA_TENTHS` and `scan::SLOT_US` have no callers; the lib
   crate hides the warnings. `Panel::lamp_test` is also unused but worth
   keeping as a hardware aid.
-- **Gap statistics on a DMA start failure.** The retry path in
+- ~~**Gap statistics on a DMA start failure.**~~ Done with the gap
+  measurement change of 2026-11-07: the retry resets the reference
+  start. The retry path in
   `scan_task` leaves `ended_at` set, so each retry adds its delay to the
   restart-gap statistics. Statistics only.
 
@@ -5469,6 +5471,296 @@ panel dark until the clock is back, never a lit row; the setup page's
 Rescan from two tabs at once returns both; and the MQTT page line after
 pointing the clock at a broker whose ACL denies `set/+`.
 
+### Scan restart gap: measure the whole dark time — built 2026-11-07, not yet verified on the bench
+
+The heartbeat's restart gap read an average of 1 to 2 µs and a maximum
+of 49 to 99 µs per minute, and the question was whether Wi-Fi caused
+the maximum and whether it could be cut. Read against the sources of
+esp-hal 1.2.2, esp-rtos 0.4.0, esp-radio 1.0.0-beta.1, esp-alloc 0.11
+and esp-println 0.18:
+
+- Nothing preempts the scan executor by priority. It runs at interrupt
+  priority 2; the Wi-Fi MAC and power interrupts and the esp-rtos tick
+  are priority 1, the driver's threads are thread mode. What holds the
+  restart off is a critical section held anywhere: esp-sync's
+  `RawMutex` is `csrrci mstatus, 8` on the C3, which masks every
+  interrupt until the holder leaves. The long ones are the Wi-Fi
+  blob's lock (`wifi_int_disable`, on every frame), esp-alloc's lock
+  around `linked_list_allocator` (the blob allocates and frees a
+  buffer per frame; a walk of a fragmented free list is tens of
+  microseconds), and esp-println's lock, held for the whole write
+  while it busy-waits on a full USB-JTAG FIFO, up to 50 000 iterations,
+  when a monitor is attached (with no host it drops output instead).
+  So the maximum is Wi-Fi activity, through interrupts-off stretches
+  rather than the Wi-Fi interrupt, and a higher executor priority
+  would change nothing.
+- The statistic read low. `ended_at` was taken after `transfer.wait()`
+  returned and the gap recorded before the restart call, so it covered
+  only the slice between the task waking and the restart: not the done
+  interrupt's latency, which is where a critical section lands, and
+  not the setup of the next transfer.
+- It is invisible either way: 72 µs once in a 3085 µs transfer is a
+  2.3 % dip in one lap, and a digit goes dark for 60 µs in every cycle
+  by design (twelve units between its planes).
+
+**Built:** the gap is now the interval between two consecutive starts
+less the transfer's length on the wire, `scan::TRANSFER_NS` (two
+nibbles per byte at 20 MHz, 3 084 700 ns), so it covers the latency,
+the wake, the swap and the setup. The start is stamped before
+`half_duplex_write_buffer` and recorded after it returns, with the DMA
+already streaming, so the statistics no longer run in the dark. A DMA
+start failure and a stop both clear the reference start, which closes
+the backlog item about retries inflating the figure. `GapStats` also
+keeps a histogram, ten buckets of 10 µs with the last open (90 µs and
+up), printed as the heartbeat's next line, `scan gap histogram, 10 us
+buckets, last open: n0 n1 … n9`, first bucket first. The shape tells
+the causes apart where the maximum alone cannot: a spike of a few
+hits in the last bucket against thousands in the first is a long
+critical section such as esp-println's FIFO wait, a smear across the
+middle buckets is the heap lock's walk varying with fragmentation,
+and a second hump at a fixed place is a periodic holder.
+
+**Expect** the first heartbeats to read higher than before: the
+average a few microseconds up (the interrupt latency and the setup
+are now in it) and the maximum above the old 49 to 99 µs, more so with
+the monitor attached. A number that moves with Wi-Fi load (a page
+load, an upload) is the critical sections; one that does not is the
+fixed cost of the restart path. For a window without esp-println's
+FIFO wait in it, attach the monitor after the clock has run a while:
+the first heartbeat line it prints covers a minute spent mostly with
+no host, when the printer drops output instead of waiting.
+
+**First bench numbers, 2026-11-07, monitor attached, the clock at
+−31 dBm on the near access point.** Three minutes, the first from
+boot: average 28, 24, 24 µs; maximum 910, 1078, 976 µs; histogram
+(10 µs buckets, last open) `0 14602 1645 670 653 368 214 109 81 929`,
+then `0 16164 766 589 521 361 199 85 51 561` and `0 16176 733 633
+582 353 171 83 36 531`. A minute with eight settings-page loads: `0
+16010 699 612 514 356 193 98 58 740`, maximum 657. Read:
+
+- No gap under 10 µs, three quarters in 10 to 19 µs: the fixed cost
+  of the restart path (done interrupt, executor wake, esp-hal's setup
+  with its descriptor walk and `update` wait, the DMA start). The old
+  statistic's 1 to 2 µs was the middle slice of it.
+- A steady smear from 20 to 89 µs, about 3600 a minute, that page
+  loads do not move at all. Not traffic, then.
+- Some 530 to 560 gaps a minute of 90 µs and up when idle, close to
+  the access point's beacon rate (one per 102.4 ms, 586 a minute),
+  930 in the boot minute, 740 with the page loads: the long holds
+  follow Wi-Fi work. Power save is not involved: esp-radio sets
+  `PowerSaveMode::None` itself and the firmware leaves it. A 1 ms
+  gap is a 30 % dip of one 3 ms lap, below what the eye picks up.
+- The smear has a second explanation besides critical sections, found
+  in esp-hal: the SPI done handler is bound with `#[handler]` at its
+  default priority 1, the level of the Wi-Fi MAC interrupt and the
+  esp-rtos tick, and same-level interrupts do not preempt each other.
+  A transfer ending while the Wi-Fi ISR runs waits for it to return
+  before the scan executor can be woken at all; its priority 2 never
+  came into play. The driver's ISR runs for every received frame,
+  beacons included, which fits a smear at a rate the LAN does not
+  change.
+
+**Experiment, built 2026-11-07:** `esp_hal::interrupt::enable(
+Interrupt::SPI2, Priority::Priority3)` after `into_async()` in
+`scan_task`. `enable` remaps the peripheral interrupt to the CPU
+interrupt of that level and leaves the bound handler alone, so
+esp-hal's own handler runs above the Wi-Fi ISRs and pends the
+executor at once; the handler clears the interrupt and wakes the
+task, nothing else, so preempting another driver's ISR with it is
+safe. Expected: if the 20 to 89 µs buckets collapse into the 10 to 19
+one, the smear was ISR queueing and what remains in the open bucket
+is critical sections; if the smear stays, it is short critical
+sections at a high rate (the blob's own lock), and either way only
+the segmented transfer below removes the rest.
+
+**Result, 2026-11-07, same bench:** no measurable change. Idle minute
+before `0 16164 766 589 521 361 199 85 51 561`, after `0 16071 960
+792 496 247 94 54 28 553`: the middle buckets sum to 2572 and 2671,
+the open bucket 561 and 553, and a minute with ten page loads adds
+about 200 to the open bucket both times and nothing to the middle.
+The maximum stayed at 0.7 to 1.1 ms. So the smear is not the done
+interrupt queueing behind the Wi-Fi ISR; it is short critical
+sections at a high rate, the driver blob's own lock being the
+likeliest since it is taken on every operation, and the open bucket
+is its longer holds plus the heap lock on traffic. No priority
+reaches either. The remap stays, since it is right in principle and
+costs nothing, but it is not a fix. Only the segmented transfer below
+takes the CPU out of the loop.
+
+**Planned next, if the gap is to go away rather than be measured:**
+the C3's SPI2 has a DMA-controlled segmented transfer. Each segment
+begins with a 15-word conf buffer the SPI reads from the DMA stream
+(a bitmap word, `0x7FFF` with the magic `0x2` in bits 31:28, then
+ADDR, CTRL, CLOCK, USER, USER1, USER2, MS_DLEN, MISC, DIN_MODE,
+DIN_NUM, DOUT_MODE, DMA_CONF, DMA_INT_ENA, DMA_INT_CLR), followed by
+that segment's data; `usr_conf_nxt` in the USER word says another
+segment follows, `slave.usr_conf` enables the mode,
+`slave.dma_seg_magic_value` sets the magic and `cmd.conf_bitlen` the
+conf state's length (esp-idf v5.4 `components/hal/esp32c3/include/
+hal/spi_ll.h`, section "Segmented-Configure-Transfer"; esp-hal's
+metadata lists `spi_master.has_dma_segmented_transfer` for the C3
+but the driver does not expose it). A descriptor ring of one segment
+whose conf word says "next" runs the scan forever with no CPU in the
+loop: the only gap is the conf state, a fixed microsecond or two
+after the blanking frame. Design: a `DmaTxBuffer` of one conf
+descriptor and eleven data descriptors of two cycles each (2800
+bytes, the last plus the blanking frame), the last pointing at the
+first, owner check off as in esp-hal's `DmaLoopBuf`; bring the bus
+up as today, run one ordinary dark transfer, copy the fourteen
+registers from `SPI2::regs()` into the conf words with `usr_conf_nxt`
+and the segment's MS_DLEN set, and start the ring through
+`half_duplex_write_buffer`, whose `prepare()` call on the buffer
+lands after esp-hal zeroes the SLAVE register and before it sets
+`usr`, which is where `usr_conf`, the magic and `conf_bitlen` go.
+Publishing rewrites the eleven data descriptors' buffer pointers
+(single aligned stores the DMA reads per lap; whole cycles per
+descriptor, so a mid-lap swap changes the image at a cycle boundary
+as today) and frees the old buffer after one lap time. `stop`/`halt`
+clear `usr_conf_nxt` in the conf word; the chain ends within two
+segments, under 7 ms, on the blanking frame. Caveat: Espressif never
+enabled its segmented-transfer driver on the C3 (no
+`SOC_SPI_SCT_SUPPORTED` in its soc_caps, though the low-level code is
+there), so the first step is a bench spike that only proves the ring
+runs. Not planned: trimming the critical sections (esp-println's lock
+is a feature, the heap lock would need another allocator).
+
+### Scan ring spike: the segmented transfer on the bench — built 2026-11-08, not yet run
+
+The spike, `src/ring.rs` behind the cargo feature `ring-spike`,
+answers one question before anything depends on it: does the C3's
+SPI2 run a looping DMA-controlled configurable segmented transfer in
+quad mode from our descriptor chain? It runs on a bare board; the
+user has a scope for the wires.
+
+**What the manual says** (ESP32-C3 TRM v1.4, 27.5.8.5, read from the
+PDF): each segment's CONF state reads a conf buffer from the TX DMA
+stream, `SPI_BIT_MAP_WORD` first, with the magic in bits 31:28
+compared against `SPI_DMA_SEG_MAGIC_VALUE` (the example uses 0xA; a
+mismatch ends the transfer with `SPI_SEG_MAGIC_ERR`) and bits 0 to 13
+naming the registers whose new values follow, one word each, in
+order: ADDR, CTRL, CLOCK, USER, USER1, USER2, MS_DLEN, MISC,
+DIN_MODE, DIN_NUM, DOUT_MODE, DMA_CONF, DMA_INT_ENA, DMA_INT_CLR
+(esp-idf's `spi_ll.h` sets 0x7FFF, a fifteenth bit the table does
+not list; the spike names only what it needs). Only registers that
+change need a word. `SPI_USR_CONF` goes on before `SPI_USR`;
+`SPI_USR_CONF_NXT` (USER bit 15) set means another segment follows,
+clear means the transfer ends after this one; `SPI_CONF_BITLEN` sets
+the CONF state's length, (value + 5) APB clocks; the CONF and data
+buffers should have their own descriptors; `SPI_DMA_SEG_TRANS_DONE`
+fires once, at the end of the whole transfer, and `SPI_TRANS_DONE` at
+the end of each bus transfer. Half-duplex MOSI is listed as supported
+for the mode, with the CPU-controlled variant not.
+
+**Design.** `Ring` implements esp-hal's `DmaTxBuffer`: a conf
+descriptor of 8 bytes (the bitmap with magic 0xA and bit 3, then the
+USER word) and eleven data descriptors of two cycles each (2800
+bytes; the last 2847 with the blanking frame; `CHUNK_SIZE` is 4092),
+the last pointing back at the first, owner check off and no
+write-back as in esp-hal's `DmaLoopBuf`. The data is the existing
+transfer buffer, `DmaTxBuf::split`. Startup runs one ordinary quad
+transfer so esp-hal programs every register, then starts the ring
+through `half_duplex_write_buffer`; esp-hal calls the buffer's
+`prepare` after it has zeroed SLAVE and programmed USER and before
+it sets `usr`, so `prepare` sets `usr_conf`, the magic,
+`conf_bitlen` 0 and `usr_conf_nxt`, and copies the USER register
+back into the conf buffer's USER word with `usr_conf_nxt` set: the
+CONF state then rewrites exactly the configuration in force. The
+stop is the manual's: clear `usr_conf_nxt` in the conf buffer's USER
+word (a volatile store and a fence; the C3 has no data cache), the
+next CONF state applies it, and the transfer ends within two
+segments on the blanking frame. The spike loop runs the ring for 60
+s, counting laps by polling `trans_done` every 500 µs and clearing
+it, watching `seg_magic_err` and an early `dma_seg_trans_done`; then
+stops it, waits up to 20 ms for `dma_seg_trans_done`, logs the run
+(laps, gap per lap as elapsed over laps less `TRANSFER_NS`, the stop
+latency, whether `usr` cleared), reclaims the ring with
+`transfer.wait()` (which only checks `usr`), pauses 3 s and starts
+again, for ever. The heartbeat's `ring:` line has the totals, the
+DMA channel's current and last-EOF descriptor addresses, the raw SPI
+interrupt bits and `usr`. The test image lights every segment in the
+shortest plane at the lowest current step, so the data lines carry
+ones for the scope. The normal scan loop is `scan_loop`, compiled
+out when the feature is on; the clock's build is unchanged.
+
+**Verification on the bench board**, `cargo run --release --features
+ring-spike -- --port /dev/ttyACM0`:
+
+1. The boot prints `ring: 12 descriptors: conf 8 bytes, data 2800
+   bytes each, last 2847 bytes; 3084 us per lap on the wire`.
+2. A minute later `ring: ran 60000 ms, N laps, G us gap per lap; stop:
+   seg_trans_done true after S us, usr clear`. N near 19 450 and G of
+   a few microseconds is the result hoped for; a G that is the
+   current 24 to 28 µs would mean the mode is not chaining at all
+   (it would also have stopped after one segment, so N would be 1).
+   S under 7000.
+3. The heartbeat's `ring:` line: runs climbing by one a minute, laps
+   by about 19 450, magic errors and early ends 0, stops ok equal
+   to runs, the descriptor address changing between heartbeats.
+4. On the scope, GPIO8 (CLK of driver 1) against GPIO9 (DATA): bursts
+   of 47-byte frames every 5 µs unit, and at the segment boundary
+   the blanking frame followed by a silent stretch of the CONF state
+   (a conf-word fetch plus 5 APB clocks, a microsecond or two) and
+   then the next frame. The lines must sit idle through the CONF
+   state; any clock edge there is the risk the panel would see.
+   `SPI_HZ` can be dropped to 2 MHz in `scan.rs` for a slower scope,
+   the mechanism does not care.
+
+**First run, 2026-11-08, bench board on ttyACM0:** `ring: ran 60000
+ms, 0 laps, 0 us gap per lap; stop: seg_trans_done true after 3742
+us, usr clear`. The chain loops: a stop request lands mid-segment,
+the next CONF state applies it and that segment is the last, so a
+running ring stops in 3085 to 6170 µs, which 3742 is; a chain that
+had ended after one segment would have had `seg_trans_done` set
+already and a stop time near zero. `trans_done` is not raised per
+segment in CONF mode, hence 0 laps; the lap counter moved to the
+GDMA's `out_eof`, with `suc_eof` set on the last data descriptor (as
+esp-hal sets it on the last descriptor of every SPI transfer), polled
+and cleared on the channel's interrupt registers.
+
+**Second run, 2026-11-08:** `ring: ran 60000 ms, 19447 laps, 0 us gap
+per lap; stop: seg_trans_done true after 3756 us, usr clear`, the
+heartbeat at descriptor 6 with last EOF 11, magic errors and early
+ends 0. 60.000 s over 19 447 laps is 3085.3 µs a lap against 3084.7
+on the wire: the gap is about 0.6 µs, some 48 APB clocks for the
+conf descriptor and its two words, the five-clock CONF state and the
+first data descriptor's fetch, and it is fixed, since no CPU is in
+the loop. The spike prints it in nanoseconds from here on. The mode
+works on the C3 in quad mode from our ring; what remains before the
+scan path is rebuilt on it is the scope's view of the lines through
+the CONF state.
+
+**Scope aids, 2026-11-08.** The user's scope triggers on edges only,
+and the lap boundary's 0.6 µs CONF state is hidden among the planes'
+padding (the cycle's frames sit 0.3, 5.3 and 15.3 µs apart in planes
+0, 1 and 2: 47-byte frames in regions of 50, 100 and 200 bytes). Two
+aids in the spike build: `CONF_BITLEN` 3995 stretches the CONF state
+to 50 µs, the one gap in a lap longer than any padding (the scan
+wants 0), and SPI2's chip select is routed to GPIO10, high through
+the CONF state and low during a segment, so its rising edge is the
+lap boundary. Trigger on GPIO10 rising, watch GPIO8 (CLK) and GPIO9
+(DATA): the blanking frame just before the edge, then 50 µs with
+both lines flat, then the next lap's dense plane-0 frames. Any edge
+in the flat stretch is what the drivers would shift in.
+
+**Scope, 2026-11-08, bench board, CS on GPIO10 as the trigger:** the
+lap boundary shows the blanking frame, then the 50 µs CONF state with
+CLK and DATA flat low, then the next lap's plane-0 frames. No edge in
+the stretch on either line, CS clean. The high level of CLK and DATA
+droops a little on the unloaded pins through the probe, which the
+panel's inputs will not show. The spike has answered its question:
+the C3 chains our segments in quad mode, stops on request within two
+segments, idles its lines through the CONF state, and the gap is a
+fixed 0.6 µs. The scan path is rebuilt on it next (below).
+
+**Outcomes.** Laps counting and the descriptor moving: the mode works
+and steps 2 to 5 of the plan above turn the spike into the scan
+path. Laps 1 and early ends 1 a run: the hardware does not chain,
+the conf word is wrong or the first segment reads its registers from
+the register file only; look at `seg_magic_err` first. `trans_done`
+never set but the descriptor address moving: the flag is not per
+segment; the gap is then measured by other means (the scope, or the
+GDMA EOF counter with `suc_eof` on the last descriptor).
+
 ### Soak of v0.2 and v0.3 on the bench — 2026-11-07/08, passed
 
 A long run of the released images on the bench clock (`test-clock.lan`,
@@ -5535,3 +5827,133 @@ codex fixes' own checks (the `411`, the broker-host notice, the
 `<+15>-15` rule across a boot, the lit-row case, the denied `set/+`)
 stay owed above. The run says the release is stable on the paths a
 clock takes every day: boot, join, sync, serve, publish, tick.
+
+### Hardware-chained scan: the ring as the scan path — DONE, verified on the panel by the user and on the bench 2026-11-08 (soak running)
+
+The spike above showed the C3 chains our segment in quad mode, stops
+on request within two laps, idles its lines through the CONF state,
+and that the gap between laps is a fixed 0.6 µs. This makes the ring
+the scan path and takes the CPU out of the loop for good.
+
+**Design.** `src/ring.rs` keeps `Ring` as the spike had it, with
+`CONF_BITLEN` 0 and the chip-select, feature and run-stop-restart loop
+gone. `scan_task` builds the bus, runs one ordinary dark transfer so
+esp-hal programs every register, builds the ring over that buffer,
+hands both buffers to the publisher (`ring::init_slots`) and starts
+the ring; then it waits on a `STOP_REQ` signal. `stop` sets the flag,
+signals, and polls `HALTED` as before; the task clears
+`usr_conf_nxt` in the conf USER word (`request_stop`), waits up to 20
+ms for `dma_seg_trans_done`, cancels the transfer if `usr` is still
+set (never seen; counted as `cancelled` in the heartbeat), reclaims
+the ring with `transfer.wait()`, sets `HALTED` and waits for `resume`,
+which restarts the ring through `half_duplex_write_buffer`; `prepare`
+re-arms the flag and rewrites the conf word from the live USER
+register. `halt` latches as before. A stale `STOP_REQ` from a stop
+issued while already halted is told by the `STOP` flag. The
+`publish` entry point forwards to `ring::publish`: take the slots,
+wait until two laps and a bit (`HOLD`) after the previous swap so the
+lap then in flight has let go of the buffer, build the image into the
+spare, repoint the eleven data descriptors with aligned volatile
+stores and a fence (`point_at`; the DMA reads each descriptor as it
+reaches it, so the image changes at a cycle boundary within one lap),
+swap the slots' roles and put them back. The slots are a
+`Mutex<RefCell<Option<Slots>>>` taken for the duration of a publish;
+the display task is the one publisher, and the first publish waits a
+millisecond at a time for the scan task to have built the ring. The
+`FREE`/`READY` channels, `init_spare`, `GapStats`, the histogram and
+the priority-3 remap of the done interrupt are gone; `ScanHardware`
+carries both buffers. The heartbeat's `scan` field is images
+published, stops and cancellations, running or halted, and the
+descriptor index the DMA is at. `ring.rs` is the one module touching
+registers (SPI2's SLAVE, USER, CMD and the raw interrupt flags; the
+DMA channel's current descriptor), through esp-hal's `regs()`. The
+callers (`display`, `ota`, `heal`) are unchanged. Build and clippy
+clean on both targets, 95 host tests, main stack 66.9 KB (67.1
+before).
+
+**Verification.** Bench board first:
+
+1. The boot line `scan: 140 us/cycle (7142 Hz), 5 us/unit, 22 cycles
+   and 30847 bytes per lap in 12 descriptors; hardware chained`.
+2. Heartbeats: `scan N images published, 0 stops (0 cancelled),
+   running, at descriptor k`, N up by about 60 a minute with the
+   time tick and k different each time.
+3. `scripts/reload.sh <ip>`: one stop, the clock back with the time.
+4. An upload killed mid-body: `stops 2`, running again, the heartbeat
+   moving.
+
+Then on a clock: a steady image at boot, the colour and brightness
+buttons landing without a blink, the time ticking, the temperature
+face at 30 s, `/reload` and `POST /ap` blanking cleanly with nothing
+left lit, the killed upload bringing the panel back through `resume`,
+and a completed upload rebooting onto the new slot. A swap mid-lap (a
+cycle of the old image next to a cycle of the new, 140 µs) is by
+design invisible; anything visible at a button press is a swap
+problem.
+
+**Bench, 2026-11-08, test clock at 10.1.1.30 (the user ran the panel
+first: the display works).** The first bench run found a regression
+from the codex fixes of 2026-11-07, not the ring: `scripts/reload.sh`
+got `411 Length Required`, because the new rule refused every `POST`
+without `Content-Length`, and the body-less command posts (`/reload`,
+`/ap`, `/pin`, `/scan`) are sent as a bare `curl -X POST`, which
+carries no length. Fixed: `http::reads_body` names the routes that
+read a body (`/`, `/api`, `/play`, `/token`, `/ota`), and only those
+get the `411`; the others take a missing length as none. The same run
+then lost the station (`MissingAcks` at 352 s, the near access point
+refusing with `Class3FrameFromNonAssociatedStation`, the far one at
+−73 dBm expiring ten authentications in a row), so the connect budget
+fired the self-heal: `heal: no connection after 10 attempts over 101
+s ... blanking the panel and rebooting`, the ring stopped through
+`halt`, the time carried, the ring back at boot, the station back
+after five more attempts. Wi-Fi, not the scan; the upload test did not
+run and is redone with the fixed firmware, over the air.
+
+**Bench, second and third runs, 2026-11-08.** The token in `.env` is
+not the one this clock stores (the record wins over the build), so the
+first attempts were `bad token`; a PIN from `POST /pin` (sent with an
+empty body, which carries a length the old firmware's `411` rule
+takes) and `POST /token` set it from the serial log, the bench path
+as designed. Then: a truncated upload (200 000 of a declared 650 000
+bytes) gave `ota: writing image ... to ota_1`, `upload failed after
+196608 of 650000 bytes: body read failed; the running image stays`,
+and the heartbeat `2 stops (0 cancelled), running, at descriptor 9`:
+the stop and resume path through the ring works, twice. The full
+upload failed at 90 KB when the station dropped (`net: link down`,
+then `AuthenticationExpired` from the far access point at −77 dBm),
+the second drop in a quarter hour, both under HTTP traffic; the ring
+resumed and ran on each time, descriptor index moving and about 56
+images a minute throughout, refused upload bodies drained and all.
+Whether the drops have anything to do with the new firmware is open:
+this clock soaked eleven hours on v0.3 the same day without one, but
+with no uploads and a page fetch every 30 s. To be watched with a soak
+of the ring firmware under `scripts/watch-clock.sh`.
+
+**Fourth run, 2026-11-08: everything passes.** The full upload of the
+fixed firmware: `HTTP 200` in 60 s, `ota: rebooting into the new
+image`, booted from `ota_1` with the time carried, `image ...
+confirmed good` at the first probe, the ring running at boot. Then
+`scripts/reload.sh` against the fixed firmware: `HTTP 200`, back in 3
+s, `reset reason Some(CoreSw)`, time carried, the ring started again;
+so the latched halt path works, and the `411` fix is verified. No
+disconnect in that run. The user had already run the firmware on a
+clock: the display works. The heartbeat's descriptor index came out
+11 at the 60 s heartbeat after both boots, which is what a
+deterministic lap period and a fixed boot timeline give; within a run
+it read 0, 4, 8, 9 and 11. A soak of the ring firmware runs on the
+bench clock from 12:50 with the serial log and
+`scripts/watch-clock.sh`, to count station drops against the eleven
+clean hours on v0.3: two drops under HTTP traffic in the first
+quarter hour of testing are the open question, and the soak answers
+whether they were the firmware or the afternoon's air.
+
+Verified by the user on the panel the same day: the display works.
+Not re-checked on a panel after the `411` fix, which touches nothing
+in the scan; the buttons, the temperature face and the alarm are the
+checks left for the next time a clock is flashed.
+
+The drops are the board, not the firmware (the user, 2026-11-08): the
+bench clock is a SuperMini, whose antenna mismatch AGENTS.md records,
+and it would not connect at all upstairs the day before on the old
+firmware. The soak stays running for what it is worth, with nothing
+riding on it.
