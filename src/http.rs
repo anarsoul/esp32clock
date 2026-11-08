@@ -596,8 +596,8 @@ async fn rescan(out: &mut Response) -> Result<Then, core::fmt::Error> {
         return Ok(Then::Close);
     }
     info!("http: rescan asked for");
-    net::request_scan();
-    if with_timeout(SCAN_WAIT, net::scan_done()).await.is_err() {
+    let scan = net::request_scan();
+    if with_timeout(SCAN_WAIT, net::scan_done(scan)).await.is_err() {
         warn!("http: scan not done within {} s", SCAN_WAIT.as_secs());
     }
     redirect_home(out, None)?;

@@ -130,23 +130,33 @@ pub const NETWORKS_MAX: usize = 12;
 pub type Networks = heapless::Vec<Network, NETWORKS_MAX>;
 static NETWORKS: CsMutex<RefCell<Networks>> = CsMutex::new(RefCell::new(Networks::new()));
 
-/// The page asks for a scan; the AP task says when it is done.
+/// The page asks for a scan; the AP task counts the scans it has done.
+/// A count rather than a signal, since every listener may ask at once
+/// and a `Signal` wakes one waiter: each waits for the count to pass
+/// what it saw when it asked. One writer, `ap_task`.
 static SCAN_REQUEST: Signal<CriticalSectionRawMutex, ()> = Signal::new();
-static SCAN_DONE: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+static SCANS_DONE: AtomicU32 = AtomicU32::new(0);
 
 /// The networks the last scan saw.
 pub fn networks() -> Networks {
     critical_section::with(|cs| NETWORKS.borrow_ref(cs).clone())
 }
 
-/// Ask the access point for a scan; `scan_done` resolves when it is in.
-pub fn request_scan() {
-    SCAN_DONE.reset();
+/// Ask the access point for a scan. `scan_done` with the value returned
+/// resolves when a scan has finished since: the one asked for, or one
+/// that was under way, whose list is as fresh.
+pub fn request_scan() -> u32 {
+    let seen = SCANS_DONE.load(Ordering::Acquire);
     SCAN_REQUEST.signal(());
+    seen
 }
 
-pub async fn scan_done() {
-    SCAN_DONE.wait().await
+/// Wait for the scan `request_scan` asked for, polling: a scan takes
+/// about three seconds and the page is waiting on it anyway.
+pub async fn scan_done(seen: u32) {
+    while SCANS_DONE.load(Ordering::Acquire) == seen {
+        Timer::after_millis(100).await;
+    }
 }
 
 /// Scan every channel and keep what is worth listing: named networks,
@@ -187,7 +197,7 @@ async fn scan_networks(controller: &mut WifiController<'static>) {
         Err(e) => warn!("wifi: scan failed: {e:?}"),
     }
     critical_section::with(|cs| *NETWORKS.borrow_ref_mut(cs) = found);
-    SCAN_DONE.signal(());
+    SCANS_DONE.store(SCANS_DONE.load(Ordering::Relaxed).wrapping_add(1), Ordering::Release);
 }
 
 /// Raise the access point and keep it up, logging stations joining and
