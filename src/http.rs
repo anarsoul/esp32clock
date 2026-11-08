@@ -206,12 +206,23 @@ struct Request<'a> {
 
 /// Why `read_request` gave no request: the connection is just closed,
 /// or a status goes out first, for a request the server understood
-/// enough to refuse: a `POST` without `Content-Length` (not an empty
-/// form, whose length is 0, but a body the server cannot read: `411`)
-/// or a `Transfer-Encoding`, which it does not read (`400`).
+/// enough to refuse: a `POST` without `Content-Length` to a route that
+/// reads a body (not an empty form, whose length is 0, but a body the
+/// server cannot read: `411`) or a `Transfer-Encoding`, which it does
+/// not read (`400`).
 enum NoRequest {
     Close,
     Refuse(&'static str),
+}
+
+/// Whether a `POST` to `path` carries a body the server reads, so that a
+/// missing `Content-Length` is a request it cannot serve. The other
+/// posts (`/reload`, `/ap`, `/pin`, `/scan`) are commands with nothing
+/// to read, sent as a bare `curl -X POST` by the scripts, and a missing
+/// length there means none (found on the bench, 2026-11-08, when the
+/// first `411` rule refused `scripts/reload.sh`).
+fn reads_body(path: &str) -> bool {
+    matches!(path, "/" | "/api" | "/play" | "/token" | "/ota")
 }
 
 /// Read the head and the body. `Err` for anything that is not a request
@@ -248,7 +259,8 @@ async fn read_request<'a>(socket: &mut TcpSocket<'_>, buf: &'a mut [u8; REQUEST_
         let content_length = match (head.method, head.content_length) {
             (_, Some(n)) => n,
             (Method::Get, None) => 0,
-            (Method::Post, None) => return Err(NoRequest::Refuse("411 Length Required")),
+            (Method::Post, None) if reads_body(head.path) => return Err(NoRequest::Refuse("411 Length Required")),
+            (Method::Post, None) => 0,
         };
         (head.method == Method::Post && head.path == "/ota", content_length)
     };
