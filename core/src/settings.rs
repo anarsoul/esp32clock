@@ -629,7 +629,10 @@ impl Settings {
     /// thermometer offset, the temperature-on-the-panel byte, and the
     /// broker: host, port, user and password; then the timezone rule.
     pub fn to_record(&self) -> [u8; RECORD_LEN] {
-        let tz = tz::parse(self.tz.as_str()).unwrap_or(tz::UTC).std_offset_minutes().to_le_bytes();
+        // The old minute field, for an image before version 11, which
+        // checks it against `TZ_LIMIT_MINUTES`; a rule's standard offset
+        // may go to 24 hours, so it is clamped there.
+        let tz = tz::parse(self.tz.as_str()).unwrap_or(tz::UTC).std_offset_minutes().clamp(-TZ_LIMIT_MINUTES, TZ_LIMIT_MINUTES).to_le_bytes();
         let mut r = [0u8; RECORD_LEN];
         r[..9].copy_from_slice(&[
             RECORD_VERSION,
@@ -698,10 +701,14 @@ impl Settings {
         if version >= 2 {
             s.twelve_hour = *r.get(6)? != 0;
             let minutes = i16::from_le_bytes([*r.get(7)?, *r.get(8)?]);
-            if !(-TZ_LIMIT_MINUTES..=TZ_LIMIT_MINUTES).contains(&minutes) {
-                return None;
+            // The timezone up to version 10; informational after, where
+            // the rule's own check below is the one that counts.
+            if version < 11 {
+                if !(-TZ_LIMIT_MINUTES..=TZ_LIMIT_MINUTES).contains(&minutes) {
+                    return None;
+                }
+                s.tz = tz::fixed(minutes);
             }
-            s.tz = tz::fixed(minutes);
         }
         if version >= 3 {
             let len = *r.get(RECORD_HOSTNAME_LEN)? as usize;
@@ -1012,6 +1019,22 @@ mod tests {
         };
         assert_eq!(old(-420).map(|s| s.tz), Some(tz::fixed(-420)), "a version 10 record's minutes");
         assert!(old(TZ_LIMIT_MINUTES + 1).is_none(), "timezone past the limit");
+        // A rule's standard offset may pass the old limit (POSIX allows
+        // 24 hours): the record round-trips on this image, and the old
+        // field is clamped so that an older image reads the record too.
+        for rule in ["XXX-15", "<-14>14", "<+24>-24", "AAA-15BBB,M3.2.0,M11.1.0"] {
+            let s = Settings { tz: Text::new(rule).unwrap(), ..full() };
+            assert!(s.is_valid(), "{rule}");
+            let r = s.to_record();
+            assert_eq!(Settings::from_record(&r).map(|s| s.tz), Some(s.tz), "{rule} round trip");
+            let legacy = i16::from_le_bytes([r[7], r[8]]);
+            assert!((-TZ_LIMIT_MINUTES..=TZ_LIMIT_MINUTES).contains(&legacy), "{rule}: {legacy}");
+            let mut v10 = r;
+            v10[0] = 10;
+            assert_eq!(Settings::from_record(&v10).map(|s| s.tz), Some(tz::fixed(legacy)), "{rule} read by version 10");
+        }
+        let wild = with(&|r| r[7..9].copy_from_slice(&(TZ_LIMIT_MINUTES + 1).to_le_bytes()));
+        assert_eq!(wild.map(|s| s.tz), Some(full().tz), "the old field is not checked in a version 11 record");
         // Indexes a newer image may have added land on the last entry.
         assert_eq!(with(&|r| r[1] = 200).map(|s| s.color), Some(PALETTE.len() - 1));
         assert_eq!(with(&|r| r[RECORD_MELODY] = 200).map(|s| s.melody), Some(melody::MELODIES.len() - 1));
