@@ -403,6 +403,13 @@ hardware facts that bite, the timing rules of the scan path and the
 sizes that must be kept. `PLAN.md` holds the design of each milestone
 and what was measured on the panel.
 
+Much of this project, firmware and documentation alike, was written
+with the assistance of an AI coding agent (Claude), working from the
+design, the measurements on the panel and the review of the author.
+Every change was built, run through the host tests and checked on the
+hardware before it was kept, but read the code with that in mind, and
+report what looks wrong.
+
 ## License
 
 MIT or Apache-2.0, at your option. See `LICENSE-MIT` and
