@@ -165,7 +165,13 @@ impl Store {
                     Some(s)
                 }
                 None => {
-                    warn!("settings: stored record {record:?} not understood, using defaults");
+                    // The version and the length only: the bytes hold the
+                    // passwords and the token.
+                    warn!(
+                        "settings: stored record (version {}, {} bytes) not understood, using defaults",
+                        record.first().copied().unwrap_or(0),
+                        record.len()
+                    );
                     None
                 }
             },
