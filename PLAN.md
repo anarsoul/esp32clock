@@ -2323,7 +2323,7 @@ sounding until a press or five minutes, then `heal: ... self-heal reset`
 and the reboot with no second ring. Then the plain case: an undismissed
 alarm must stop on its own after five minutes.
 
-### Carry the time across a reset as plain Unix time (after the ring hold) — verified on the bench 2026-10-28 at short uptime (five software resets, serial log); the hour-long soak still owed
+### Carry the time across a reset as plain Unix time (after the ring hold) — verified on the bench 2026-10-28 at short uptime (five software resets, serial log); the carry at 4.5 h of uptime checked in the soak of 2026-11-08
 
 **Problem.** The user saw the clock jump back nine minutes after a
 self-heal. The carried time was Unix time minus
@@ -2537,7 +2537,10 @@ monitor resets the board when it connects:
   sync five seconds later moved nothing visible. The same held on the
   two reloads before it. That is the carry-as-plain-Unix-time design
   checked at short uptime; it has no uptime term, unlike the RTC
-  scheme it replaced, so the hour-long soak is a formality still owed.
+  scheme it replaced, so the hour-long soak was a formality. Paid on
+  2026-11-08: the OTA reboot into v0.3 at 4h31m of uptime carried the
+  time to the second, and the NTP sync 6 s later kept it (the soak
+  section at the end).
 - The rollback count cannot be tested this way: serving the reload
   request confirms the image before the reset.
 
@@ -5301,7 +5304,7 @@ monitor's log supplied the digits). As planned, with these findings:
   JSON, not watched on the LEDs), the alarm across a real transition
   (host tests only), and the setup form's button on a phone.
 
-### Codex review of 2026-11-07: eleven findings fixed — built 2026-11-07, not yet verified on the panel
+### Codex review of 2026-11-07: eleven findings fixed — built 2026-11-07, released as v0.3 and soaked 11 h on the bench 2026-11-08; the fixes' own checks still owed
 
 A review by another agent (`codex-review.md`, at commit 0a26b1d) listed
 fourteen findings, six new and eight from this file's backlog. The user
@@ -5452,7 +5455,10 @@ findings:
   clippy clean on both targets, the release build 0.3 KB larger in
   static RAM.
 
-Not verified on the panel or the bench: everything. To check there, in
+Not verified on the panel or the bench: the fixes themselves. The
+image ran 11 h on the bench without a fault (the soak of 2026-11-08 at
+the end of this file), which says the fixes broke nothing on the paths
+a running clock takes, not that each fix works. To check them, in
 order: `curl -X POST http://<ip>/` with no body is `411 Length
 Required` and the alarm stays armed; the settings page with the broker
 host changed and the password empty comes back with the notice, and
@@ -5462,3 +5468,70 @@ during an upload that then fails (a `curl` killed mid-body) leaves the
 panel dark until the clock is back, never a lit row; the setup page's
 Rescan from two tabs at once returns both; and the MQTT page line after
 pointing the clock at a broker whose ACL denies `set/+`.
+
+### Soak of v0.2 and v0.3 on the bench — 2026-11-07/08, passed
+
+A long run of the released images on the bench clock (`test-clock.lan`,
+the C3 on the adapter, no sensors fitted, -40 to -48 dBm on the near
+access point), to catch what the short checks cannot: a slow heap
+leak, an MQTT session that drops and recovers, a self-heal with no
+cause, a lost ping that the TCP retries hide, the time drifting.
+Tooling, all host side: `espflash monitor` into a serial log (its
+attach reset the board, so the run starts from a clean boot),
+`scripts/watch-clock.sh` every 30 s (one 498-byte ping and one `GET
+/api`), a watch on both logs for `WARN`, `ERROR`, panic, reset, failed
+probe or lost request, and a summary script read every 30 minutes:
+uptime, heals, RSSI, the heap-free histogram from the heartbeats, the
+ping and `/api` tallies, the page's local time against the host, the
+heartbeat's `mqtt` counts. The rule was the user's `PDT7` throughout,
+the alarm disarmed, the broker the home one.
+
+**v0.2, 4h28m** (17:54 to 22:25 local, MQTT saved from the page at
+5 min, which did not reset the clock): no reset, no heal, no warning;
+540 of 541 pings and 541 of 541 `/api` fetches answered (the miss was
+12 s after boot, with HTTP answering at the same instant, and never
+again); one MQTT session, 269 publishes, a publish a minute. Heap free 54080 bytes
+on every heartbeat for 3h40m, then one step down of 188 bytes to
+53892 that held to the end, plus two one-minute dips (1704 and 680
+bytes) that recovered the next minute. Nothing in the log at the step.
+
+**Update to v0.3** by `POST /ota` with a panel PIN from the monitor
+log, the release's `esp32clock-ota-v0.3.bin`: written to `ota_1` in
+23 s, reboot with the time carried (`local time 22:25:58` from the
+record, NTP at 6 s said 22:26:03), every setting kept, Wi-Fi up at
+5 s, MQTT connected at 7 s, `ota: image v0.2 confirmed good` logged
+by the old image on its way out.
+
+**v0.3, 10h59m** (22:26 to 09:25 local, overnight):
+
+| | |
+| --- | --- |
+| resets, self-heals, panics, WARN, ERROR | 0 |
+| pings from the host, every 30 s | 1315 of 1315 |
+| `/api` fetches, every 30 s | 1315 of 1315, slowest 256 ms |
+| gateway probes | all answered |
+| MQTT | one session, 661 publishes, no reconnect |
+| local time against the host | matched at every checkpoint, through midnight |
+| heap free | 54032 bytes on 655 of 659 heartbeats |
+| RSSI | -40 to -43 dBm |
+
+The four other heartbeats were one-minute dips of 1704, 2908, 3408
+and 8520 bytes, each back to 54032 the next minute, with nothing but
+the watcher's `/api` in the log around them. Only the Wi-Fi driver
+uses the heap (the firmware does not allocate), and 8.5 KB is a
+handful of received frames held in its queue at the instant of the
+heartbeat, so these are LAN bursts, not a leak. The 188-byte step of
+v0.2 did not recur in 11 h; one step in 15 h of running is noted, not
+a finding. NTP corrected 80 to 90 ms every hour in the same
+direction: the crystal runs about 24 ppm fast, the hourly sync keeps
+the panel within a tenth of a second, nothing to do. The soaked image
+carries the old restart-gap statistic (the measured-whole-dark-time
+rework above is later than the tag): average 2 µs, maximum 66 to
+104 µs a minute, steady for 15 h.
+
+**Not covered:** the alarm never rang; no setting was saved after the
+broker, so the save retry and the double-rescan fix did not run; the
+codex fixes' own checks (the `411`, the broker-host notice, the
+`<+15>-15` rule across a boot, the lit-row case, the denied `set/+`)
+stay owed above. The run says the release is stable on the paths a
+clock takes every day: boot, join, sync, serve, publish, tick.
