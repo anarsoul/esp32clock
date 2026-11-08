@@ -678,8 +678,8 @@ fn write_firmware_line(out: &mut impl core::fmt::Write, st: &Status, link: bool)
 /// Shared `<head>`: the viewport and the styles of both pages.
 const HEAD: &str = "<!doctype html><html><head><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\">\
 <style>body{font-family:sans-serif;max-width:22em;margin:2em auto;padding:0 1em}\
-label{display:block;margin:.8em 0}select,input{font-size:1em;width:100%;box-sizing:border-box}input[type=checkbox]{width:auto}\
-button{font-size:1em;padding:.5em 1.5em;margin-top:1em}p.err{color:#b00}progress{width:100%}[hidden]{display:none}</style>";
+label{display:block;margin:.8em 0}select,input{font-size:1em;width:100%;box-sizing:border-box}input[type=checkbox]{width:auto}input[type=file]{margin:.5em 0}\
+button{font-size:1em;padding:.5em 1.5em}p.err{color:#b00}progress{width:100%}[hidden]{display:none}</style>";
 
 /// The sentence both PIN pages open with, or the lockout notice when
 /// no PIN was issued because of a wrong attempt just before.
@@ -806,7 +806,7 @@ pub fn write_page(
     // The hostname is letters, digits and dashes, so no escaping here.
     write!(
         out,
-        "<style>fieldset{{border:1px solid #ccc;border-radius:.3em;margin:1em 0;padding:0 1em}}#p{{margin:0 0 1em}}</style>\
+        "<style>fieldset{{border:1px solid #ccc;border-radius:.3em;margin:1em 0;padding:0 1em}}#p{{margin-bottom:1em}}</style>\
 <title>Clock: {0}</title></head><body><h1>Clock: {0}</h1>",
         s.hostname.as_str()
     )?;

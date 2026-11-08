@@ -480,7 +480,7 @@ module ends with its `#[cfg(test)] mod tests`.
   overflow is a 500, not a truncation. The headers are 88 bytes;
   `core::http::PAGE_MAX` (6016) is what a page may take, and the
   `form` tests build each page at its worst case and assert it
-  (2026-11-07: settings 5525 in its four fieldsets with the Play and unsaved-changes script, the Wi-Fi, MQTT and local-time lines, a stored SSID of 32 `"`, a 48-byte timezone rule of `<` (four bytes each through `HtmlStr`), a 64-byte broker host twice, a user of 32 `"`, the hostname in the title and heading and the version in the script tag; update 2476 and token 2043 since the split of 2026-11-02; setup with twelve 32-character networks 3177). `cargo host-test` after adding a field
+  (2026-11-07: settings 5544 in its four fieldsets with the Play and unsaved-changes script, the Wi-Fi, MQTT and local-time lines, a stored SSID of 32 `"`, a 48-byte timezone rule of `<` (four bytes each through `HtmlStr`), a 64-byte broker host twice, a user of 32 `"`, the hostname in the title and heading and the version in the script tag; update 2492 and token 2059 since the split of 2026-11-02; setup with twelve 32-character networks 3193). `cargo host-test` after adding a field
   or label; the test prints the sizes with `-- --nocapture`. The setup
   page's network list stops at `form::NETWORK_LIST_BUDGET` (1900)
   bytes, strongest first, with a "N more not shown" line, because a
