@@ -204,22 +204,35 @@ struct Request<'a> {
     body: Body<'a>,
 }
 
-/// Read the head and the body. `None` for anything that is not a request
-/// this server answers, in which case the connection is just closed.
+/// Why `read_request` gave no request: the connection is just closed,
+/// or a status goes out first, for a request the server understood
+/// enough to refuse: a `POST` without `Content-Length` (not an empty
+/// form, whose length is 0, but a body the server cannot read: `411`)
+/// or a `Transfer-Encoding`, which it does not read (`400`).
+enum NoRequest {
+    Close,
+    Refuse(&'static str),
+}
+
+/// Read the head and the body. `Err` for anything that is not a request
+/// this server answers; see `NoRequest`.
 ///
 /// The head is parsed twice: once for the two facts that decide how the
 /// body is read (a firmware upload's body stays on the socket), so that
 /// its borrow of the buffer ends before the body is read into it, and
 /// once more afterwards, on the same bytes, for the request itself.
-async fn read_request<'a>(socket: &mut TcpSocket<'_>, buf: &'a mut [u8; REQUEST_BUF]) -> Option<Request<'a>> {
+async fn read_request<'a>(socket: &mut TcpSocket<'_>, buf: &'a mut [u8; REQUEST_BUF]) -> Result<Request<'a>, NoRequest> {
+    fn close<E>(_: E) -> NoRequest {
+        NoRequest::Close
+    }
     let mut n = 0;
     let head_end = loop {
         if n == buf.len() {
-            return None;
+            return Err(NoRequest::Close);
         }
-        let got = socket.read(&mut buf[n..]).await.ok()?;
+        let got = socket.read(&mut buf[n..]).await.map_err(close)?;
         if got == 0 {
-            return None;
+            return Err(NoRequest::Close);
         }
         n += got;
         if let Some(i) = buf[..n].windows(4).position(|w| w == b"\r\n\r\n") {
@@ -228,30 +241,38 @@ async fn read_request<'a>(socket: &mut TcpSocket<'_>, buf: &'a mut [u8; REQUEST_
     };
 
     let (upload, content_length) = {
-        let head = parse_head(core::str::from_utf8(&buf[..head_end]).ok()?)?;
-        (head.method == Method::Post && head.path == "/ota", head.content_length)
+        let head = parse_head(core::str::from_utf8(&buf[..head_end]).map_err(close)?).ok_or(NoRequest::Close)?;
+        if head.transfer_encoding {
+            return Err(NoRequest::Refuse("400 Bad Request"));
+        }
+        let content_length = match (head.method, head.content_length) {
+            (_, Some(n)) => n,
+            (Method::Get, None) => 0,
+            (Method::Post, None) => return Err(NoRequest::Refuse("411 Length Required")),
+        };
+        (head.method == Method::Post && head.path == "/ota", content_length)
     };
     if !upload {
         if content_length > BODY_MAX || head_end + content_length > buf.len() {
-            return None;
+            return Err(NoRequest::Close);
         }
         while n < head_end + content_length {
-            let got = socket.read(&mut buf[n..]).await.ok()?;
+            let got = socket.read(&mut buf[n..]).await.map_err(close)?;
             if got == 0 {
-                return None;
+                return Err(NoRequest::Close);
             }
             n += got;
         }
     }
 
     let (head_bytes, rest) = buf.split_at(head_end);
-    let head = parse_head(core::str::from_utf8(head_bytes).ok()?)?;
+    let head = parse_head(core::str::from_utf8(head_bytes).map_err(close)?).ok_or(NoRequest::Close)?;
     let body = if upload {
         Body::Stream { first: &rest[..n - head_end], total: content_length }
     } else {
         Body::Inline(&rest[..content_length])
     };
-    Some(Request { method: head.method, path: head.path, query: head.query, authorization: head.authorization, body })
+    Ok(Request { method: head.method, path: head.path, query: head.query, authorization: head.authorization, body })
 }
 
 fn status_line(out: &mut Response, status: &str, content_type: &str) -> core::fmt::Result {
@@ -689,30 +710,47 @@ pub async fn http_task(stack: Stack<'static>, index: usize) -> ! {
             Err(_) => {
                 bump(&me.head_timeouts);
                 info!("http: L{index} no request within {} s", HEAD_TIMEOUT.as_secs());
-                None
+                Err(NoRequest::Close)
             }
         };
         let mut then = Then::Close;
-        if let Some(req) = req {
-            info!("http: L{index} {:?} {}", req.method, req.path);
-            let mut out = Response::new();
-            let built = match req.body {
-                Body::Inline(_) if req.method == Method::Post && req.path == "/scan" => rescan(&mut out).await,
-                Body::Inline(body) => respond(&mut out, &req, body),
-                Body::Stream { .. } => upload(&mut out, &req, &mut socket).await,
-            };
-            match built {
-                Ok(t) => then = t,
-                Err(_) => {
-                    warn!("http: response did not fit");
-                    out = Response::new();
-                    let _ = status_line(&mut out, "500 Internal Server Error", "text/plain");
+        // The one response buffer of the loop: a second one for the
+        // refusal cost 6 KB of static RAM per listener (2026-11-07).
+        let mut out = Response::new();
+        let served = match req {
+            Ok(req) => {
+                info!("http: L{index} {:?} {}", req.method, req.path);
+                let built = match req.body {
+                    Body::Inline(_) if req.method == Method::Post && req.path == "/scan" => rescan(&mut out).await,
+                    Body::Inline(body) => respond(&mut out, &req, body),
+                    Body::Stream { .. } => upload(&mut out, &req, &mut socket).await,
+                };
+                match built {
+                    Ok(t) => then = t,
+                    Err(_) => {
+                        warn!("http: response did not fit");
+                        out = Response::new();
+                        let _ = status_line(&mut out, "500 Internal Server Error", "text/plain");
+                    }
                 }
+                true
             }
+            Err(NoRequest::Refuse(status)) => {
+                warn!("http: L{index} refused: {status}");
+                let _ = status_line(&mut out, status, "text/plain");
+                let _ = out.write_str(status);
+                let _ = out.write_str("\n");
+                false
+            }
+            Err(NoRequest::Close) => false,
+        };
+        if !out.as_bytes().is_empty() {
             me.set(State::Writing);
             if let Err(e) = socket.write_all(out.as_bytes()).await {
                 warn!("http: L{index} write: {e:?}");
             }
+        }
+        if served {
             bump(&me.served);
             // Serving a request is proof enough that a new image works.
             ota::confirm();

@@ -22,17 +22,22 @@ pub enum Method {
     Post,
 }
 
-/// The request line, `Content-Length` and `Authorization`, borrowed
-/// from the head.
+/// The request line, `Content-Length`, `Authorization` and whether a
+/// `Transfer-Encoding` was given, borrowed from the head.
 pub struct Head<'a> {
     pub method: Method,
     pub path: &'a str,
     pub query: &'a str,
     pub authorization: Option<&'a str>,
-    pub content_length: usize,
+    /// `None` when the header is absent: a `POST` without it is not an
+    /// empty form but a request whose body the server cannot read.
+    pub content_length: Option<usize>,
+    /// A `Transfer-Encoding` header was present. The server reads no
+    /// chunked body and refuses the request.
+    pub transfer_encoding: bool,
 }
 
-/// Parse the head of a request: the request line and the two headers
+/// Parse the head of a request: the request line and the three headers
 /// the server reads. `None` for anything but `GET` or `POST`, or a
 /// `Content-Length` that is not a number.
 pub fn parse_head(head: &str) -> Option<Head<'_>> {
@@ -46,16 +51,19 @@ pub fn parse_head(head: &str) -> Option<Head<'_>> {
     };
     let target = words.next()?;
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
-    let mut content_length = 0;
+    let mut content_length = None;
     let mut authorization = None;
+    let mut transfer_encoding = false;
     for (key, value) in lines.filter_map(|l| l.split_once(':')) {
         if key.eq_ignore_ascii_case("content-length") {
-            content_length = value.trim().parse().ok()?;
+            content_length = Some(value.trim().parse().ok()?);
         } else if key.eq_ignore_ascii_case("authorization") {
             authorization = Some(value.trim());
+        } else if key.eq_ignore_ascii_case("transfer-encoding") {
+            transfer_encoding = true;
         }
     }
-    Some(Head { method, path, query, authorization, content_length })
+    Some(Head { method, path, query, authorization, content_length, transfer_encoding })
 }
 
 
@@ -69,8 +77,9 @@ mod tests {
         assert_eq!(h.method, Method::Post);
         assert_eq!(h.path, "/ota");
         assert_eq!(h.query, "");
-        assert_eq!(h.content_length, 831488);
+        assert_eq!(h.content_length, Some(831488));
         assert_eq!(h.authorization, Some("Bearer abc"));
+        assert!(!h.transfer_encoding);
     }
 
     #[test]
@@ -79,8 +88,12 @@ mod tests {
         assert_eq!(h.method, Method::Get);
         assert_eq!(h.path, "/");
         assert_eq!(h.query, "error=value");
-        assert_eq!(h.content_length, 0);
+        assert_eq!(h.content_length, None, "absent, not zero");
         assert_eq!(h.authorization, None);
+        let chunked = parse_head("POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n").unwrap();
+        assert!(chunked.transfer_encoding && chunked.content_length.is_none());
+        let empty = parse_head("POST / HTTP/1.0\r\nContent-Length: 0\r\n\r\n").unwrap();
+        assert_eq!(empty.content_length, Some(0), "an explicit empty body is a body");
         let bare = parse_head("GET /api").unwrap();
         assert_eq!((bare.path, bare.query), ("/api", ""));
     }
