@@ -36,12 +36,24 @@ const expected = {
   // Nuuk changes with Europe, at 01:00 UTC: Sunday -01:00 local.
   'America/Nuuk': '<-02>2<-01>,M3.5.0/-1,M10.5.0/0',
   'UTC': 'UTC0',
+  // Fixed since 2022 and 2019: no change in the year, not an equal
+  // offset in January and July.
+  'Asia/Tehran': '<+0330>-3:30',
+  'America/Sao_Paulo': '<-03>3',
+  // Casablanca falls back an hour for Ramadan, which moves eleven days
+  // a year: two changes, but no rule, and the page says so.
+  'Africa/Casablanca': 'throws',
 };
 
 let bad = 0;
 for (const [zone, want] of Object.entries(expected)) {
-  const got = ctx.posixTz(zone);
-  const ok = got === want;
+  let got;
+  try {
+    got = ctx.posixTz(zone);
+  } catch (e) {
+    got = `throws: ${e.message}`;
+  }
+  const ok = want === 'throws' ? got.startsWith('throws: no rule for ') : got === want;
   bad += !ok;
   console.log(`${ok ? 'ok  ' : 'FAIL'} ${zone.padEnd(22)} ${got}${ok ? '' : `  (expected ${want})`}`);
 }

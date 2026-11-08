@@ -1,11 +1,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 // Copyright (c) 2026 Vasily Khoruzhick
 // The browser's IANA zone as a POSIX TZ rule for the clock, from next
-// year's two offset changes (a zone dropping daylight time this year has
-// one change left and no rule) checked against the six years after (a
-// midnight change is Saturday 24:00 in some zones, Sunday 00:00 in others;
-// only a year where they differ can tell). scripts/tz-check.mjs runs it
-// under Node.
+// year's two offset changes checked against the six years after; throws
+// for a zone no such rule describes. PLAN.md has the why; the Node check
+// is scripts/tz-check.mjs.
 function posixTz(zone) {
   var y = new Date().getUTCFullYear() + 1;
   var fmt = new Intl.DateTimeFormat('en-US', {timeZone: zone, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric'});
@@ -71,11 +69,17 @@ function posixTz(zone) {
     var a = Math.abs(r.t), h = Math.floor(a / 60), m = a % 60;
     return 'M' + r.m + '.' + r.w + '.' + r.d + (r.t == 120 ? '' : '/' + (r.t < 0 ? '-' : '') + h + (m ? ':' + (m < 10 ? '0' : '') + m : ''));
   }
-  // The two changes of year yr: in its first half and in its second.
+  // Every change of year yr, in order, from monthly samples bisected.
   function changes(yr) {
-    var j = Date.UTC(yr, 0, 1), l = Date.UTC(yr, 6, 1);
-    return [change(j, l), change(l, Date.UTC(yr + 1, 0, 1))];
+    var out = [], t = Date.UTC(yr, 0, 1);
+    for (var m = 1; m <= 12; m++) {
+      var n = Date.UTC(yr, m, 1);
+      if (off(n) != off(t)) out.push(change(t, n));
+      t = n;
+    }
+    return out;
   }
+  function unruly() { return new Error('no rule for ' + zone); }
   // The candidate that also predicts later[k], year y + 1 + k's change.
   function rule(t, before, later) {
     var c = candidates(t, before);
@@ -84,20 +88,21 @@ function posixTz(zone) {
       for (var k = 0; k < later.length; k++) if (when(c[i], y + 1 + k, before) != later[k]) ok = false;
       if (ok) return text(c[i]);
     }
-    return text(c[0]);
+    throw unruly();
   }
-  var jan = Date.UTC(y, 0, 1), jul = Date.UTC(y, 6, 1);
-  var oj = off(jan), ol = off(jul);
-  if (oj == ol) return name(jan, oj) + west(oj);
-  // Standard time is the smaller offset; the south has it in July.
-  var south = oj > ol, std = south ? ol : oj, dst = south ? oj : ol;
-  var now = changes(y), starts = [], ends = [];
+  var jan = Date.UTC(y, 0, 1), now = changes(y), a = off(jan);
+  if (now.length == 0) return name(jan, a) + west(a);
+  var b = now.length == 2 ? off(now[0]) : a;
+  if (b == a || off(now[1]) != a) throw unruly();
+  // Standard time is the smaller offset; the south has it mid-year.
+  var south = a > b, std = south ? b : a, dst = south ? a : b, starts = [], ends = [];
   for (var k = 1; k <= 6; k++) {
     var c = changes(y + k);
+    if (c.length != 2) throw unruly();
     starts.push(south ? c[1] : c[0]);
     ends.push(south ? c[0] : c[1]);
   }
-  return name(south ? jul : jan, std) + west(std) + name(south ? jan : jul, dst) + (dst - std == 60 ? '' : west(dst)) + ',' + rule(south ? now[1] : now[0], std, starts) + ',' + rule(south ? now[0] : now[1], dst, ends);
+  return name(south ? now[0] : jan, std) + west(std) + name(south ? jan : now[0], dst) + (dst - std == 60 ? '' : west(dst)) + ',' + rule(south ? now[1] : now[0], std, starts) + ',' + rule(south ? now[0] : now[1], dst, ends);
 }
 if (typeof document != 'undefined') (function () {
   var b = document.getElementById('b'), z = document.getElementById('z'), zn = document.getElementById('zn');
@@ -110,7 +115,7 @@ if (typeof document != 'undefined') (function () {
       var f = z.form;
       if (f && f.oninput) f.oninput();
     } catch (e) {
-      zn.textContent = 'could not read ' + zone;
+      zn.textContent = e.message || 'could not read ' + zone;
     }
   };
 })();
