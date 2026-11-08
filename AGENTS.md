@@ -118,7 +118,13 @@ value would change, which would make a password oracle), and never on
 the settings form; the broker keys `mqtt_*` need the token on `/api`
 the same way (a broker of the attacker's choosing would be handed the
 stored password) but the settings form takes them (`form::Allow`:
-`PAGE`, `ALL`, `NONE`); a saved change resets the clock into the new network
+`PAGE`, `ALL`, `NONE`) under one rule, checked in `form::apply` after
+the pairs: a form that moves the broker to another host without typing
+the password again is refused (`FormError::BrokerPassword`, with its
+own notice), so the stored password goes only to the host it was typed
+for; the same host keeps it on an empty field, an empty host clears it,
+the token is not held to the rule, and `POST /play` applies the form
+with `ALL` since nothing is saved; a saved change resets the clock into the new network
 (`heal::switch_mode`, with the carry record started over), so a wrong
 one costs the LAN until the password is right again. On the access
 point every save resets into the station once a network is stored,
@@ -188,7 +194,9 @@ bench without hands on the buttons. The access point runs as AP+STA
 with a station half that never connects, because the driver refuses a
 scan in AP-only mode: it scans once when it comes up and again on
 `POST /scan` (the page's Rescan button, which comes back to `/` with
-the list), and the setup form lists what it saw, strongest first, with
+the list; `ap_task` counts the scans it has done and each waiter polls
+the count, so two clicks from two tabs are each answered rather than
+one waking the other's `Signal`), and the setup form lists what it saw, strongest first, with
 an "Other" entry and a text field for a hidden network. The AP stays
 up through a scan. A `POST` of `ssid=` (empty) leaves the network
 unchanged, since the form always sends both the list's pick and the
@@ -295,7 +303,12 @@ backs off from 5 s doubling to 60 s; a change to the broker settings
 disconnects cleanly and starts over, a cleared host publishes
 `offline` and waits. `poll_header` is the one cancel-safe client
 future the loop selects on; a header is followed by `poll_body` to
-completion, and publishes happen between polls. Received packets land
+completion, and publishes happen between polls. The three subscriptions are
+confirmed by SUBACKs the loop matches by packet identifier: a reason
+code of 0x80 or more, or no answer within 10 s, fails the session
+with the reason on the page (`subscribe` only sends). A broker or
+hostname change that lands during the start is compared after it,
+not dropped with its notification. Received packets land
 in a 1 KB `BumpBuffer`, reset after each event (the one `unsafe` in
 the module). Before a deliberate reset (`heal::reboot`, `heal::reset`,
 `heal::switch_mode`, the OTA reboot) `mqtt::goodbye` lets the task
@@ -351,18 +364,18 @@ module ends with its `#[cfg(test)] mod tests`.
 | `core/src/lib.rs` | `#![cfg_attr(not(test), no_std)]`; the module list; nothing else |
 | `core/src/aip33628.rs` | frame format, bit-reversed current table, quad-nibble waveform encoder; pure `core` |
 | `core/src/panel.rs` | COM/SEG map, font, per-position colour as duty `Levels` (no RGB; the palette is written in levels), `Panel::render` → `ScanImage` |
-| `src/scan.rs` | cycle/transfer builder, double-buffered DMA scan task that builds the SPI2 quad + DMA bus itself (an async esp-hal driver is `!Send`), restart-gap statistics, `stop` on a blank frame before a deliberate reset or a flash write, `resume` after a failed one |
+| `src/scan.rs` | cycle/transfer builder, double-buffered DMA scan task that builds the SPI2 quad + DMA bus itself (an async esp-hal driver is `!Send`), restart-gap statistics, `stop` on a blank frame before a flash write and `resume` after a failed one, `halt` before a deliberate reset (the stop latched: `resume` is void after it, so an upload failing under the reset's pause cannot restart the scan) |
 | `src/display.rs` | UI loop: tick, button or settings change → `ui` → draw → publish; rings the alarm and signals the ringing edges (`ringing_changed`) for the MQTT state; `silence` ends a ring as a press would; shows the IP, or `AP` in place of the sweep on the access point; acts on the hold before the UI sees it; seeds and carries the skip flag and the time the alarm last rang |
 | `core/src/ui.rs` | mode state machine, pure logic, one timer for the current mode; edits the settings it is handed; alarm due check and missed-alarm grace, both gated by the carried local second the alarm last rang (local rather than Unix, so the hour a fall-back transition repeats rings once; an alarm minute a spring-forward transition skips rings when the clock lands past it); consumes `skip_next`; `view` takes the room reading and answers the `Temp` face mid-minute in clock mode |
 | `core/src/settings.rs` | `Settings`, palette and brightness tables, `Hostname`, `Text`/`Secret` strings, `Credentials`, the token and the MQTT `Broker` with their rules, the build-time `seed`, shared `Watch` with change signal, versioned append-only flash record |
 | `src/storage.rs` | the one flash handle (`with_flash`), nvs partition lookup, `sequential-storage` map over it, debounced persist task that compares records, not structs, and resets into station mode after a save that changed the credentials, or after any save on the access point with a network stored |
-| `src/heal.rs` | deliberate resets: `reboot` says the MQTT goodbye, blanks the panel through `scan::stop`, carries the time and resets, for `/reload` and the OTA reboot; `reset`, the self-heal, waits out a ringing alarm and counts itself first; `switch_mode`, the reset between station and access point, which starts the carry record over and freezes it |
+| `src/heal.rs` | deliberate resets: `reboot` says the MQTT goodbye, blanks the panel through `scan::halt`, carries the time and resets, for `/reload` and the OTA reboot; `reset`, the self-heal, waits out a ringing alarm and counts itself first; `switch_mode`, the reset between station and access point, which starts the carry record over and freezes it |
 | `core/src/auth.rs` | the API token (a setting; constant-time compare) and the panel PIN with its TTL and lockout; `token`, `token_or_pin`, `issue_pin`, `pin_to_show`; `Refusal` with its HTTP status; pure rules with the clock and the random number passed in |
 | `core/src/form.rs` | key=value parsing, all-or-nothing `apply` on a copy with the `Allow` flags for the guarded keys, JSON, the HTML page with its error notice, its unsaved-changes mark (a script compares the form with the defaults it was served with) and the read-only `Status` lines, the update and token pages, each its own script over the shared `PIN_JS` helpers and `PIN_FIELD`, `JsonStr`/`HtmlStr` escaping for the SSID, `parse_token`; pure logic |
-| `core/src/http.rs` | `Method`, `Head`, `parse_head`; `RESPONSE_BUF` and `PAGE_MAX`, which the page tests assert against |
+| `core/src/http.rs` | `Method`, `Head` (`content_length` is `None` when the header is absent, and `transfer_encoding` says one was sent), `parse_head`; `RESPONSE_BUF` and `PAGE_MAX`, which the page tests assert against |
 | `core/src/mqtt.rs` | Home Assistant over MQTT, pure: `DeviceId` and its topics, `Link` (the state for the page), `Route` and `Command`, `SET_KEYS` and `apply_set` over `form::apply_one`, `write_discovery` (the device payload with every entity) and `DISCOVERY_MAX` |
 | `src/mqtt.rs` | the MQTT task: resolve, connect with the will, subscribe, discovery and state publishes, keepalive pings, the select loop over `poll_header`, the back-off, `goodbye` for the reset paths, `link()` and `Report` for the page and the heartbeat |
-| `src/http.rs` | HTTP/1.0 server, `LISTENERS` sockets each in its own task: `GET`/`POST` on `/` (the settings page, or the setup form on the access point) and `/api`, `POST /play`, `GET /update` and `GET /token` (each issues a PIN), `POST /ota` with the body streamed to `ota::install`, `POST /reload` and `POST /ap` with the token, `POST /token` with the token or the PIN, `POST /pin`, `POST /scan` on the access point, `GET /favicon.ico` and `GET /tz.js` (`src/favicon.ico` and `src/tz.js` embedded, the two cacheable responses; the page loads the script as `/tz.js?v=<version>` so an update is not served the cached one); the settings, update and token pages are titled and headed `Clock: <hostname>`; a refused form redirects to `/?error=…`; per-listener state and counters for the heartbeat |
+| `src/http.rs` | HTTP/1.0 server, `LISTENERS` sockets each in its own task: a `POST` without `Content-Length` is answered `411` and any `Transfer-Encoding` `400` before a route is looked at (`NoRequest`), since a bodiless post is not an empty form; `GET`/`POST` on `/` (the settings page, or the setup form on the access point) and `/api`, `POST /play`, `GET /update` and `GET /token` (each issues a PIN), `POST /ota` with the body streamed to `ota::install`, `POST /reload` and `POST /ap` with the token, `POST /token` with the token or the PIN, `POST /pin`, `POST /scan` on the access point, `GET /favicon.ico` and `GET /tz.js` (`src/favicon.ico` and `src/tz.js` embedded, the two cacheable responses; the page loads the script as `/tz.js?v=<version>` so an update is not served the cached one); the settings, update and token pages are titled and headed `Clock: <hostname>`; a refused form redirects to `/?error=…`; per-listener state and counters for the heartbeat |
 | `core/src/buttons.rs` | `Button`, `Kind`, `Event` |
 | `src/buttons.rs` | debounced short/long press events, the two-button long press, and the 10 s two-button `Hold` |
 | `core/src/melody.rs` | alarm tunes as pitch and length data with tempo; `RANDOM` and the pure `pick` that turns it into a tune; pure |
@@ -372,7 +385,7 @@ module ends with its `#[cfg(test)] mod tests`.
 | `core/src/sensors.rs` | the NTC table (10 kΩ, B 3950, under the adapter's 10 kΩ pull-up from 3V3) and `temperature_dc` by interpolation, `fahrenheit_tenths`, `ldr_ohms` and `light_pct` (the logarithm of the LDR's resistance, 1 kΩ is 100 and 50 kΩ is 0), `face` (the panel's four characters for a temperature), `Tenths`; pure |
 | `src/sensors.rs` | `sensor_task`: the async `Adc<ADC1>` with `AdcCalCurve` (the scheme that reads straight on the C3) on GPIO0 (NTC) and GPIO1 (LDR), 8 samples a second each into a 10 s exponential average, published as millivolts in two atomics; `room()` for `http::status`, `Report` for the heartbeat |
 | `core/src/tz.rs` | POSIX TZ rules: `parse` (`const`, so a build-time rule is checked by the compiler), `Tz::period_at(unix)` (the offset, the daylight flag and the name in force), `fixed(minutes)` for the old setting, the calendar arithmetic; `TZ_MAX` 48 |
-| `src/tz.js` | the page's `Use this browser's zone` button, served as `/tz.js`: the browser's IANA zone as a POSIX rule from next year's two offset changes (so a zone dropping daylight time this year, as Vancouver did in 2026, comes out fixed), each transition's rule checked against the six years after (a midnight change is Saturday 24:00 in Chile and Sunday 00:00 elsewhere), names from the first locale that has letters; `scripts/tz-check.mjs` runs it under Node |
+| `src/tz.js` | the page's `Use this browser's zone` button, served as `/tz.js`: the browser's IANA zone as a POSIX rule from next year's two offset changes (so a zone dropping daylight time this year, as Vancouver did in 2026, comes out fixed), each transition's rule checked against the six years after (a midnight change is Saturday 24:00 in Chile and Sunday 00:00 elsewhere), names from the first locale that has letters; throws, and the page shows the message, for a zone with other than none or two changes a year or none of whose candidate rules predicts the six years after (Casablanca's Ramadan hour); `scripts/tz-check.mjs` runs it under Node |
 | `core/src/clock.rs` | `LocalTime` (with the `offset_secs` it was computed with and `local_secs`), `weekday_of_days`, `local_time(unix, offset_secs)` |
 | `src/clock.rs` | Unix time = uptime + NTP offset; `period_at` and `local_time` under the settings' rule; `carry_time`/`restore_carried` move the time across a software reset as plain Unix time, written every second by the display tick; `RESET_PAUSE` for every deliberate reset |
 | `core/src/ota.rs` | image header and descriptor offsets, `Slot` names, `hash_chunk` for the appended SHA-256, `version_from` |
@@ -444,7 +457,8 @@ module ends with its `#[cfg(test)] mod tests`.
   write is invisible, a sector erase is a brief dark blink. That is why the
   persist task debounces and skips writes that would not change the record,
   and why a firmware upload stops the scan first rather than flicker
-  through 200 erases.
+  through 200 erases. A save that fails is tried again after 2 s,
+  doubling to 60 s, with whatever the settings are by then.
 - **One flash handle.** `storage::with_flash` is the only way to the
   flash, one blocking operation at a time, never across an await. A
   second `FlashStorage` does not work: its constructor sizes the flash
@@ -470,7 +484,8 @@ module ends with its `#[cfg(test)] mod tests`.
 - Never reset the chip while a transfer is in flight: the row the drivers
   last latched stays lit at full current until the firmware is back. A
   deliberate reset goes through `heal::reset`, which waits for
-  `scan::stop` (the transfer ends on its blanking frame) first. The panic
+  `scan::halt` (the transfer ends on its blanking frame, and the stop
+  is latched against an upload's `resume`) first. The panic
   path in `custom_halt` cannot do this and is the one exception.
 
 ## Sizes that bite
@@ -480,7 +495,7 @@ module ends with its `#[cfg(test)] mod tests`.
   overflow is a 500, not a truncation. The headers are 88 bytes;
   `core::http::PAGE_MAX` (6016) is what a page may take, and the
   `form` tests build each page at its worst case and assert it
-  (2026-11-07: settings 5544 in its four fieldsets with the Play and unsaved-changes script, the Wi-Fi, MQTT and local-time lines, a stored SSID of 32 `"`, a 48-byte timezone rule of `<` (four bytes each through `HtmlStr`), a 64-byte broker host twice, a user of 32 `"`, the hostname in the title and heading and the version in the script tag; update 2492 and token 2059 since the split of 2026-11-02; setup with twelve 32-character networks 3193). `cargo host-test` after adding a field
+  (2026-11-07: settings 5564 in its four fieldsets with the Play and unsaved-changes script, the Wi-Fi, MQTT and local-time lines, a stored SSID of 32 `"`, a 48-byte timezone rule of `<` (four bytes each through `HtmlStr`), a 64-byte broker host twice, a user of 32 `"`, the hostname in the title and heading and the version in the script tag; update 2492 and token 2059 since the split of 2026-11-02; setup with twelve 32-character networks 3193). `cargo host-test` after adding a field
   or label; the test prints the sizes with `-- --nocapture`. The setup
   page's network list stops at `form::NETWORK_LIST_BUDGET` (1900)
   bytes, strongest first, with a "N more not shown" line, because a
@@ -494,7 +509,7 @@ module ends with its `#[cfg(test)] mod tests`.
 - An OTA image must fit a slot (`partitions.csv`, 0x1E0000 = 1920 KB);
   the release image is about 650 KB. Static RAM: `ota.rs` holds 11 KB
   of buffers, and what the statics leave of DRAM is the main stack,
-  67.4 KB on 2026-11-07 (`Settings` is a 385-byte record and sits in several task futures: the 49-byte timezone rule cost 2.2 KB of stack); check `.stack` in `llvm-readelf -S` after adding one. `src/tz.js` (5.7 KB) is sent from one response buffer and a `const` assert in `src/http.rs` keeps it under `RESPONSE_BUF` with its header.
+  67.1 KB on 2026-11-07 (`Settings` is a 385-byte record and sits in several task futures: the 49-byte timezone rule cost 2.2 KB of stack); check `.stack` in `llvm-readelf -S` after adding one, and compare with a build of `HEAD` in a worktree when in doubt: one `Response` per listener loop, since a second one in another arm of the same loop was not overlapped by the compiler and cost 6 KB per listener until it was hoisted (2026-11-07). `src/tz.js` (5.8 KB) is sent from one response buffer and a `const` assert in `src/http.rs` keeps it under `RESPONSE_BUF` with its header; it was trimmed to comments of a line each to fit.
 - `form::apply` decodes each key into 16 bytes and each value into 64
   (`form::VALUE_MAX`, the password); longer input is reported as a bad
   key or value before parsing. The record is `settings::RECORD_LEN` (385) bytes and the map scratch in `storage.rs` 512, which must hold
@@ -531,7 +546,7 @@ module ends with its `#[cfg(test)] mod tests`.
 
 ## Verifying without a board
 
-`cargo host-test` runs the tests of `core/` on the host (94 on 2026-11-07): the AiP33628 encoder against a behavioural model of the
+`cargo host-test` runs the tests of `core/` on the host (95 on 2026-11-07): the AiP33628 encoder against a behavioural model of the
 chip (shift on CLK rise, latch on DIN rise while CLK high), the panel
 map, the palette and brightness tables, the hostname, password and
 token rules, the record round trip and every older version, the form
@@ -541,7 +556,7 @@ header rules, the NTC and LDR tables against their equations, and the
 MQTT topics, routes and discovery payload (parsed with `serde_json`, a
 host-only dev-dependency, and checked key by key against the `/api`
 JSON and the form parser). `cargo clippy -p esp32clock-core --target host-tuple
---tests` lints the tests. `node scripts/tz-check.mjs` checks the browser half of the timezone field, `src/tz.js`, against zones with known rules under Node, whose `Intl` is a browser's. `.cargo/config.toml` aims every cargo command at the chip, which is why the alias passes `--target host-tuple`; the `[unstable] build-std` line there is ignored by
+--tests` lints the tests. `node scripts/tz-check.mjs` checks the browser half of the timezone field, `src/tz.js`, against zones with known rules under Node, whose `Intl` is a browser's, and against Casablanca, which must throw. `.cargo/config.toml` aims every cargo command at the chip, which is why the alias passes `--target host-tuple`; the `[unstable] build-std` line there is ignored by
 stable cargo. Not under test: `scan.rs`'s `build_cycle` (the M1 lit-time
 check needs it on the host), `dhcpd.rs` and `dnsd.rs` (their pure halves
 use embassy-net's address types), `storage.rs`'s map over the flash,

@@ -1343,7 +1343,9 @@ Bugs, in rough order of value:
   leaves the panel flashing in silence for the rest of the 120 s. Fix:
   ignore `Preview` while ringing, or go back into the ring loop after
   it.
-- **A `POST /` without `Content-Length` disarms the alarm.**
+- ~~**A `POST /` without `Content-Length` disarms the alarm.**~~ Done
+  2026-11-07 (the codex review's item 12): `411`, and `400` for a
+  `Transfer-Encoding`.
   `parse_head` defaults the length to 0 and nothing records whether the
   header was present, so a chunked or bodiless post is an empty form;
   `form::apply` with `checkboxes_absent_off` then clears `alarm_armed`,
@@ -1363,7 +1365,9 @@ Gaps:
   contrary to `ota.rs`'s header. Fix: enable the RWDT with a few-second
   timeout fed from the heartbeat or the display tick, and keep
   `ota_boots` in `carry::init` on a watchdog reset reason.
-- **A heal reset can land mid-transfer during a failing upload.**
+- ~~**A heal reset can land mid-transfer during a failing upload.**~~
+  Done 2026-11-07 (codex item 7): `scan::halt` latches the stop for
+  the deliberate resets and `resume` honours the latch.
   `ota::install` has stopped the scan; a probe or connect budget then
   calls `heal::reset`, whose `scan::stop` returns at once (already
   halted) and which waits 200 ms before `software_reset`. If the
@@ -1417,11 +1421,14 @@ Gaps:
   of connect-ok, disconnect, retry in which neither budget fires and the
   probe never arms. Fix: clear the budget only once DHCP has an address
   or the connection has lasted some tens of seconds.
-- **A failed save is never retried.** `persist_task` logs an `Err` from
+- ~~**A failed save is never retried.**~~ Done 2026-11-07 (codex item
+  10): tried again after 2 s, doubling to 60 s. `persist_task` logs an `Err` from
   `store_item` and goes back to waiting for the next change, so the
   unsaved settings live only in RAM until something else changes. Fix:
   re-arm the settle timer on an error.
-- **A reset inside the settle window loses the last change.** Changes
+- ~~**A reset inside the settle window loses the last change.**~~ Not a
+  bug, decided 2026-11-07: a reload a second after a save is the
+  operator's own doing, and the save follows two quiet seconds. Changes
   reach flash two seconds after the last one; `heal::reboot` carries
   the time and alarm state but not the settings, so a colour or arming
   change made just before the probe budget fires is gone after the
@@ -1442,7 +1449,8 @@ Gaps:
 
 Nits:
 
-- **The display task freezes during an upload.** With the scan halted
+- ~~**The display task freezes during an upload.**~~ Not a bug, decided
+  2026-11-07: the panel is dark for the write anyway. With the scan halted
   the scan task does not swap buffers, so the second `publish` after
   `stop` blocks in `FREE.receive()` for the whole 11 s write: no tick,
   no button handling, a ringing alarm cannot be silenced, and after a
@@ -1715,20 +1723,23 @@ Gaps:
   make this image discard the whole record. Fix: a bad string field
   falls back to its default (`Credentials::NONE`, empty token) and the
   rest is kept.
-- **The raw record, password and token included, goes into the serial
-  log.** `Store::load` logs `stored record {record:?}` when a record is
+- ~~**The raw record, password and token included, goes into the serial
+  log.**~~ Done 2026-11-07 (codex item 14): the version and the length. `Store::load` logs `stored record {record:?}` when a record is
   not understood; the bytes hold the Wi-Fi password and the API token
   in the clear, unlike `Settings`'s `Debug`, which prints `<set>`. Fix:
   log the version byte and the length.
-- **Disarming from the page or `/api` does not stop a ring.** In
+- ~~**Disarming from the page or `/api` does not stop a ring.**~~ Not a
+  bug, decided 2026-11-07: whoever disarms it from the page is awake,
+  and MQTT has `silence`. In
   `Mode::Ringing` `tick` looks only at `RING_TIMEOUT`; `alarm_armed`,
   which a form post or `/api alarm=off` clears, is read only in the
   `Clock` arm's due check. The display task wakes on the change, ticks,
   and keeps ringing for up to five minutes until a press. Fix: in the
   `Ringing` arm, `enter(Clock)` when `!settings.alarm_armed`;
   `last_alarm` is already set, so the grace does not ring it again.
-- **Two `/scan` posts at once thrash the executor and leave one waiter
-  for the full timeout.** `net::SCAN_DONE` is an embassy-sync `Signal`
+- ~~**Two `/scan` posts at once thrash the executor and leave one waiter
+  for the full timeout.**~~ Done 2026-11-07 (codex item 13): a scan
+  count each waiter polls. `net::SCAN_DONE` is an embassy-sync `Signal`
   and `rescan` is reachable from every listener. `Signal::poll_wait`
   with a second, different waker replaces the first and wakes it, so
   two listeners waiting on `scan_done()` wake each other in a loop
@@ -5289,3 +5300,165 @@ monitor's log supplied the digits). As planned, with these findings:
 - Not verified: the panel itself (the time moved nine hours in the
   JSON, not watched on the LEDs), the alarm across a real transition
   (host tests only), and the setup form's button on a phone.
+
+### Codex review of 2026-11-07: eleven findings fixed — built 2026-11-07, not yet verified on the panel
+
+A review by another agent (`codex-review.md`, at commit 0a26b1d) listed
+fourteen findings, six new and eight from this file's backlog. The user
+set three aside as not bugs: disarming an alarm does not silence it
+(the fourth-pass item; whoever disarms it from the page is awake and can
+press a button, and MQTT has `silence`), the display task freezing
+during an upload (the second-pass nit; the panel is dark for the write
+anyway) and a deliberate reset discarding a change still inside the
+save debounce (the second-pass item; a reload a second after a save is
+the operator's doing). The eleven left, in the order of the work, with
+the design of each fix:
+
+1. **The settings page hands the MQTT password to a new host** (new,
+   P1). `Allow::PAGE` lets the unauthenticated `POST /` change
+   `mqtt_host` and the stored password goes along to whatever answers
+   there. Fix in `form::apply`, after the pairs: on `Allow::PAGE` (the
+   broker allowed without the network, so the token did not vouch for
+   the request), a host that changed to another non-empty host while
+   the body posted no non-empty `mqtt_password` and a password is
+   stored is refused as `FormError::BrokerPassword`, a new variant with
+   its own notice ("Nothing was saved: a new broker needs its password
+   typed again."). The same host keeps its password on an empty field
+   as before; clearing the host still clears the credentials; the token
+   (`Allow::ALL`) is not subject to the rule. `POST /play` applies the
+   form to a scratch copy and nothing is saved, so it uses `Allow::ALL`
+   and a form with a changed host still previews. The page's password
+   label says "empty keeps the stored one for the same broker". Tests:
+   refused with the stored password, accepted with a typed one, with
+   the same host, with an empty host, with no stored password, and
+   under `Allow::ALL`.
+2. **A rule with an offset past 14 hours fails the record round trip**
+   (new). `tz::parse` takes offsets to 24 hours (POSIX), `from_record`
+   checks the version-2 minute field against `TZ_LIMIT_MINUTES` for
+   every version, and `to_record` writes the rule's standard offset
+   there: `tz=XXX-15` is saved and the next boot throws the record
+   away, network and token with it. Fix: `to_record` clamps the legacy
+   field to the limit (an older image reads a fixed rule within its
+   range) and `from_record` checks that field only for versions before
+   11, where it is the timezone. Test: the round trip of `XXX-15` and
+   `<-14>14`, and a version-10 read of the record.
+3. **MQTT startup swallows a broker or hostname change** (new). The
+   `try_changed` after the first publishes drops whatever came in
+   during resolve, connect and the publishes without looking. Fix:
+   consume the notification just before the state is built (so the
+   state published is the newest), keep the value, and after the start
+   compare it: a different broker says farewell and returns
+   `Outcome::Settings`; a different hostname from the one the discovery
+   was built with schedules a resend.
+4. **A refused subscription looks like success** (new). `subscribe`
+   returns when SUBSCRIBE is sent; the SUBACK comes as an event the
+   loop ignored. Fix: keep the three packet identifiers, handle
+   `Event::Suback` in the loop (a reason code at or above 0x80 fails
+   the session with "subscribe to <topic> refused"), and fail it too
+   when any is still unanswered after `SUBACK_TIMEOUT` (10 s). The link
+   is reported connected as before; a refusal takes it back to
+   connecting with the reason on the page.
+5. **The browser script invents a fixed rule** (new). It compares the
+   January and July offsets and calls the zone fixed when they match
+   (Casablanca's Ramadan dip is lost), and returns the first candidate
+   when none predicts the later years. Fix: `changes(yr)` samples the
+   offset at every month's start and bisects each month that differs,
+   so it finds every change of the year; none is a fixed zone, two are
+   a rule, anything else throws; `rule` throws when no candidate
+   validates. The page shows the error's message in place of the zone
+   name ("no rule for Africa/Casablanca"). `scripts/tz-check.mjs` gets
+   Casablanca (a throw), Tehran and São Paulo (fixed since 2022 and
+   2019) and prints a thrown message as the result.
+6. **A transition displaced across New Year is evaluated in the wrong
+   year** (new). `period_at` takes the two transitions of the instant's
+   own year only; a time of `-1` or `25` or more can put one in the
+   neighbouring year. Fix: evaluate the transitions of the year before,
+   the year and the year after, and take the latest that is not after
+   the instant: a start means daylight time, an end standard time. The
+   southern hemisphere needs no special case then. Tests: the review's
+   `STD0DST,J1/-1,J180/2` at both sides of midnight, and the existing
+   transitions unchanged.
+7. **A failed upload can resume the scan under a reset** (second pass,
+   P1). `scan::STOP` has two owners. Fix: `scan::halt`, for the three
+   deliberate resets in `heal.rs`, latches `FINAL` and sets `STOP`
+   inside one critical section; `resume` clears `STOP` and signals
+   only when `FINAL` is not set, in a critical section too, so the
+   two cannot interleave; the scan task, woken by `RESUME`, goes back
+   to waiting while `STOP` is still set. `stop` stays for the upload.
+8. **A failed save is never retried** (second pass). Fix: after an
+   `Err` the persist task waits 2 s, doubling to 60 s, and saves again
+   with whatever the settings are then (a change during the wait is
+   taken up); the warning carries the wait.
+9. **A `POST` without `Content-Length` is an empty form** (second
+   pass). Fix: `Head::content_length` becomes `Option<usize>`, a
+   `Transfer-Encoding` header is noted, and `read_request` answers
+   `411 Length Required` to a `POST` without a length and `400 Bad
+   Request` to any request with a transfer encoding, through a new
+   `Reading` result the listener writes before closing. A `GET`
+   without a length is zero, as before.
+10. **Two rescans share one `Signal`** (fourth pass). Fix: a scan
+    generation counter written by `ap_task`; `request_scan` returns
+    the generation it saw and `scan_done(gen)` polls every 100 ms
+    until it moves. Any number of waiters, each released by the scan
+    after its request.
+11. **A bad record is logged with its secrets** (fourth pass). Fix:
+    the warning prints the version byte and the length.
+
+Each fix strikes its backlog item; the three set aside are struck as
+"not a bug, decided 2026-11-07" with the reason above. Verification:
+`cargo host-test` with the new tests, clippy on both targets, `node
+scripts/tz-check.mjs`; on the bench, a page save with a changed broker
+host and no password (the notice), `curl -X POST http://<ip>/` without
+a body (`411`), and the Rescan button pressed twice on the access
+point. The MQTT and scan interleavings are by construction.
+
+**Built 2026-11-07, host and build only.** As planned, with these
+findings:
+
+- The broker rule lives in `form::apply` after the pairs, so the order
+  of `mqtt_host` and `mqtt_password` in the body does not matter; the
+  test posts them both ways and without the field. `Allow` is compared
+  whole (`== Allow::PAGE`), so the token's `ALL` and the setup form's
+  `ALL` are both exempt. The page's label grew by 20 bytes: settings
+  5564 of 6016.
+- The record keeps its layout: version 11 still writes the standard
+  offset in bytes 7 and 8, clamped to ±14 hours, and ignores them on
+  the way back in. A version 10 image reading a record saved with
+  `<+24>-24` gets `<+14>-14`, which is the nearest thing it can hold.
+- `period_at` is six candidate transitions and a maximum; the
+  southern-hemisphere branch went. All the existing transition tests
+  pass unchanged.
+- The SUBACK match is by packet identifier against a three-entry
+  `heapless::Vec` the start fills; the reason strings are static so
+  `Outcome::Failed` can carry them. The link reads connected from the
+  start as before, and a refusal takes it back to connecting with
+  `subscribe to set/+ refused` on the page.
+- `scan::halt` and `resume` each take a critical section for their two
+  flags; the scan task, woken, checks `STOP` again before it runs. The
+  three deliberate resets call `halt`; the upload keeps `stop`.
+- The first version of the `411`/`400` path built a second `Response`
+  in another arm of the listener loop, and the compiler did not overlap
+  it with the first: `.bss` grew 17.5 KB (6 KB per listener) and the
+  main stack fell to 50.3 KB. Found by building `HEAD` in a worktree
+  and comparing `llvm-readelf -S`. Hoisted to one buffer per loop:
+  `.bss` is 304 bytes over `HEAD`, the stack 67.1 KB (from 67.4).
+- `src/tz.js` passed the 6016-byte ceiling by 105 bytes with its new
+  comments and is 5766 after trimming them to a line each; the why is
+  here. The Node check has twenty zones, Casablanca expected to throw
+  `no rule for Africa/Casablanca`; Tehran and São Paulo come out fixed
+  from a year with no change, which the January-July comparison would
+  also have given, but now by the same path as every other zone.
+- 95 host tests (from 94: the TZ test is new, the others grew),
+  clippy clean on both targets, the release build 0.3 KB larger in
+  static RAM.
+
+Not verified on the panel or the bench: everything. To check there, in
+order: `curl -X POST http://<ip>/` with no body is `411 Length
+Required` and the alarm stays armed; the settings page with the broker
+host changed and the password empty comes back with the notice, and
+with the password typed connects to the new host; `GET /api` after a
+reboot still shows the network with `tz=<+15>-15` saved; a reload
+during an upload that then fails (a `curl` killed mid-body) leaves the
+panel dark until the clock is back, never a lit row; the setup page's
+Rescan from two tabs at once returns both; and the MQTT page line after
+pointing the clock at a broker whose ACL denies `set/+`.
