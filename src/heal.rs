@@ -37,7 +37,7 @@ pub fn last_unix() -> Option<i64> {
 /// Log the reason, stop the scan on a blank frame, count the reset and
 /// reboot. A reset in the middle of a transfer would leave whatever row
 /// the drivers had latched lit at full current until the firmware is
-/// back, so the scan is stopped first; see `scan::stop`.
+/// back, so the scan is stopped first, for good; see `scan::halt`.
 ///
 /// A ringing alarm is not cut off: the reset waits until the ring ends
 /// by a press or its timeout, bounded by `ui::RING_TIMEOUT` plus a
@@ -63,13 +63,14 @@ pub async fn reset(reason: core::fmt::Arguments<'_>) -> ! {
 
 /// Stop the scan on a blank frame, carry the time and reset. The tail of
 /// a self-heal, the whole of `POST /reload`, and the reboot into a new
-/// image, which has stopped the scan already (a second `stop` returns at
-/// once). Whatever the caller wants carried goes into the record first;
+/// image, which has stopped the scan already (`halt` then latches the
+/// stop and returns at once, so a failing upload cannot resume the scan
+/// under the reset). Whatever the caller wants carried goes into the record first;
 /// the time is written here, and the restore adds the pause back. The
 /// MQTT task says goodbye first, so Home Assistant sees the clock go.
 pub async fn reboot() -> ! {
     mqtt::goodbye().await;
-    scan::stop().await;
+    scan::halt().await;
     clock::carry_time();
     // Let the last log line leave the serial port.
     Timer::after(clock::RESET_PAUSE).await;
@@ -90,7 +91,7 @@ pub async fn switch_mode(boot_ap: bool) -> ! {
         if boot_ap { "access point" } else { "station" }
     );
     mqtt::goodbye().await;
-    scan::stop().await;
+    scan::halt().await;
     carry::freeze(Carried { ota_boots: carry::get().ota_boots, boot_ap, ..Carried::default() });
     Timer::after(clock::RESET_PAUSE).await;
     esp_hal::system::software_reset()

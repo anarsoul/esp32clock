@@ -166,6 +166,9 @@ static HALTED: AtomicBool = AtomicBool::new(false);
 /// Raised to let a stopped scan task run again.
 static RESUME: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
+/// Latched by `halt`: the stop is for a reset, and `resume` is void.
+static FINAL: AtomicBool = AtomicBool::new(false);
+
 /// Stop the scan with the panel blank. Returns once the transfer in
 /// flight has ended, on its blanking frame, and no other will start; the
 /// wires then rest on their pull-downs. For a deliberate reset, which
@@ -183,11 +186,27 @@ pub async fn stop() {
 }
 
 /// Let a stopped scan run again, from the buffer it had. A no-op when
-/// it is running.
+/// it is running, and void once `halt` has latched the stop for a
+/// reset: an upload that fails while the reset is pausing must not put
+/// a transfer under it. The flags are read and written inside one
+/// critical section here and in `halt`, so the two cannot interleave.
 pub fn resume() {
-    if HALTED.load(Ordering::Acquire) {
-        RESUME.signal(());
-    }
+    critical_section::with(|_| {
+        if !FINAL.load(Ordering::Acquire) && HALTED.load(Ordering::Acquire) {
+            STOP.store(false, Ordering::Release);
+            RESUME.signal(());
+        }
+    });
+}
+
+/// `stop`, latched: for a deliberate reset, after which nothing resumes
+/// the scan, whatever an upload under way does.
+pub async fn halt() {
+    critical_section::with(|_| {
+        FINAL.store(true, Ordering::Release);
+        STOP.store(true, Ordering::Release);
+    });
+    stop().await
 }
 
 /// Give the publisher its spare buffer. Call once, before any `publish`.
@@ -279,8 +298,14 @@ pub async fn scan_task(hw: ScanHardware) -> ! {
 
         if STOP.load(Ordering::Acquire) {
             HALTED.store(true, Ordering::Release);
-            RESUME.wait().await;
-            STOP.store(false, Ordering::Release);
+            // `resume` clears the stop before it signals; a stop set
+            // again meanwhile (a reset's `halt`) keeps the task here.
+            loop {
+                RESUME.wait().await;
+                if !STOP.load(Ordering::Acquire) {
+                    break;
+                }
+            }
             HALTED.store(false, Ordering::Release);
             ended_at = None;
         }
