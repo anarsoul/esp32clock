@@ -42,7 +42,7 @@ use rust_mqtt::client::options::{
 };
 use rust_mqtt::client::{Client, MqttError};
 use rust_mqtt::config::KeepAlive;
-use rust_mqtt::types::{MqttBinary, MqttString, ReasonCode, TopicFilter, TopicName};
+use rust_mqtt::types::{MqttBinary, MqttString, PacketIdentifier, ReasonCode, TopicFilter, TopicName};
 
 pub use esp32clock_core::mqtt::{Command, DeviceId, Link, Route};
 use esp32clock_core::mqtt::{self as core_mqtt, DISCOVERY_MAX, Device, HA_ONLINE, OFFLINE, ONLINE};
@@ -59,6 +59,10 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const KEEP_ALIVE_SECS: u16 = 60;
 const PING_AFTER: Duration = Duration::from_secs(45);
 const PING_TIMEOUT: Duration = Duration::from_secs(10);
+/// The subscriptions must be acknowledged within this after the connect,
+/// or the session fails; `subscribe` only sends, and a refusal comes
+/// back as a SUBACK with a reason code, not as an error.
+const SUBACK_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The socket's own inactivity timeout, a safety net behind the pings.
 const SOCKET_TIMEOUT: Duration = Duration::from_secs(2 * KEEP_ALIVE_SECS as u64);
@@ -269,14 +273,15 @@ async fn publish(client: &mut MqttClient<'_, '_>, topic: &str, payload: &[u8], r
 /// Subscribe at QoS 0. `retained` says whether a retained message on
 /// the filter is wanted at once: Home Assistant's birth message may be
 /// retained, and a replay would make every connect resend discovery
-/// twice.
-async fn subscribe(client: &mut MqttClient<'_, '_>, filter: &str, retained: bool) -> Result<(), &'static str> {
+/// twice. Returns the packet identifier the SUBACK will carry; this only
+/// sends the SUBSCRIBE.
+async fn subscribe(client: &mut MqttClient<'_, '_>, filter: &str, retained: bool) -> Result<PacketIdentifier, &'static str> {
     let filter = TopicFilter::new(MqttString::from_str(filter).map_err(|_| "bad filter")?).ok_or("bad filter")?;
     let mut options = SubscriptionOptions::new();
     if !retained {
         options = options.retain_handling(RetainHandling::NeverSend);
     }
-    client.subscribe(filter, &options).await.map(|_| ()).map_err(|e| describe(&e))
+    client.subscribe(filter, &options).await.map_err(|e| describe(&e))
 }
 
 /// The `/api` JSON, as the state message.
@@ -419,23 +424,43 @@ async fn session(stack: Stack<'static>, id: &DeviceId, broker: &Broker, rx: &mut
 
     let mut state = heapless::String::<STATE_BUF>::new();
     let mut discovery = heapless::String::<DISCOVERY_MAX>::new();
+    // The subscriptions are answered later, by SUBACKs the loop below
+    // matches against these identifiers; the reason to fail with goes
+    // along with each.
+    let mut awaiting: heapless::Vec<(PacketIdentifier, &'static str), 3> = heapless::Vec::new();
+    let set_filter = id.set_filter();
+    let cmd_topic = id.cmd_topic();
+    let subscriptions = [
+        (set_filter.as_str(), true, "subscribe to set/+ refused"),
+        (cmd_topic.as_str(), false, "subscribe to cmd refused"),
+        (core_mqtt::HA_STATUS_TOPIC, false, "subscribe to homeassistant/status refused"),
+    ];
+    // The hostname the discovery is built for; a change during the start
+    // is caught below.
+    let mut hostname = settings::get().hostname;
     let start = async {
         publish(&mut client, status_topic.as_str(), ONLINE.as_bytes(), true).await?;
-        subscribe(&mut client, id.set_filter().as_str(), true).await?;
-        subscribe(&mut client, id.cmd_topic().as_str(), false).await?;
-        subscribe(&mut client, core_mqtt::HA_STATUS_TOPIC, false).await?;
+        for (filter, retained, refused) in subscriptions {
+            let pid = subscribe(&mut client, filter, retained).await?;
+            let _ = awaiting.push((pid, refused));
+        }
         discovery_json(&mut discovery, stack, id)?;
         publish(&mut client, id.discovery_topic().as_str(), discovery.as_bytes(), false).await?;
+        // Whatever changed up to here goes into the state built now, so
+        // the notification is taken; its value is compared below, since
+        // a broker or hostname change is more than a state to publish.
+        let pending = rx.try_changed();
         state_json(&mut state)?;
-        publish(&mut client, id.state_topic().as_str(), state.as_bytes(), true).await
+        publish(&mut client, id.state_topic().as_str(), state.as_bytes(), true).await?;
+        Ok::<_, &'static str>(pending)
     };
-    if let Err(reason) = start.await {
-        let _ = client.abort().await;
-        return failed(reason);
-    }
-    // The state just published is the current settings; a change that
-    // came in before this point must not publish it again.
-    let _ = rx.try_changed();
+    let pending = match start.await {
+        Ok(pending) => pending,
+        Err(reason) => {
+            let _ = client.abort().await;
+            return failed(reason);
+        }
+    };
     bump(&CONNECTS);
     set_link(Link::Connected);
     info!("mqtt: connected to {}:{} as {}", broker.host.as_str(), broker.port, id.as_str());
@@ -445,8 +470,19 @@ async fn session(stack: Stack<'static>, id: &DeviceId, broker: &Broker, rx: &mut
     let mut ping_sent: Option<Instant> = None;
     let mut state_due = now + STATE_PERIOD;
     let mut discovery_due: Option<Instant> = None;
-    let mut hostname = settings::get().hostname;
+    let suback_deadline = now + SUBACK_TIMEOUT;
     let failed = |reason| Outcome::Failed { reason, was_up: true };
+    if let Some(s) = pending {
+        if s.mqtt != *broker {
+            info!("mqtt: broker setting changed during the start, disconnecting");
+            farewell(&mut client, status_topic.as_str()).await;
+            return Outcome::Settings;
+        }
+        if s.hostname != hostname {
+            hostname = s.hostname;
+            discovery_due = Some(now + birth_delay());
+        }
+    }
 
     /// Say goodbye on this connection: `offline` retained and a
     /// DISCONNECT, then the socket closed and flushed.
@@ -469,6 +505,9 @@ async fn session(stack: Stack<'static>, id: &DeviceId, broker: &Broker, rx: &mut
         if let Some(at) = discovery_due {
             deadline = deadline.min(at);
         }
+        if !awaiting.is_empty() {
+            deadline = deadline.min(suback_deadline);
+        }
         let resend_discovery = match select4(
             client.poll_header(),
             rx.changed(),
@@ -486,6 +525,7 @@ async fn session(stack: Stack<'static>, id: &DeviceId, broker: &Broker, rx: &mut
                         return failed(reason);
                     }
                 };
+                let mut refused = None;
                 let resend = match event {
                     Event::Publish(p) => match p.topic.name() {
                         Some(name) => incoming(id, name.as_ref().as_str(), p.message.as_bytes()).await,
@@ -495,11 +535,28 @@ async fn session(stack: Stack<'static>, id: &DeviceId, broker: &Broker, rx: &mut
                         ping_sent = None;
                         false
                     }
+                    Event::Suback(ack) => {
+                        match awaiting.iter().position(|(pid, _)| *pid == ack.packet_identifier) {
+                            Some(i) => {
+                                let (_, reason) = awaiting.swap_remove(i);
+                                if !ack.reason_code.is_success() {
+                                    warn!("mqtt: {reason}: reason code {:#04x}", ack.reason_code.value());
+                                    refused = Some(reason);
+                                }
+                            }
+                            None => warn!("mqtt: SUBACK for a packet not waited for"),
+                        }
+                        false
+                    }
                     _ => false,
                 };
                 // Safety: the event, the only borrower of the buffer, has
                 // been dropped.
                 unsafe { client.buffer_mut().reset() };
+                if let Some(reason) = refused {
+                    let _ = client.abort().await;
+                    return failed(reason);
+                }
                 resend
             }
             Either4::First(Err(e)) => {
@@ -542,6 +599,10 @@ async fn session(stack: Stack<'static>, id: &DeviceId, broker: &Broker, rx: &mut
         }
 
         let now = Instant::now();
+        if !awaiting.is_empty() && now >= suback_deadline {
+            let _ = client.abort().await;
+            return failed("no answer to a subscribe");
+        }
         if discovery_due.is_some_and(|at| now >= at) {
             discovery_due = None;
             let sent = async {
