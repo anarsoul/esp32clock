@@ -1,14 +1,90 @@
 # Changelog
 
+All notable changes to this project are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Releases are annotated `v*` tags; each one has its images on the
 [GitHub release](https://github.com/anarsoul/esp32clock/releases) and
 in the [web installer](https://anarsoul.github.io/esp32clock/).
 A running clock takes the `esp32clock-ota-<tag>.bin` of a release
 from `http://<ip>/update`; its settings survive the update.
 
-## v0.2 — 2026-11-07
+## [Unreleased]
 
-### Timezone as a POSIX TZ rule, with daylight saving
+## [0.3] - 2026-11-07
+
+Fixes from a review of the v0.2 code. Nothing new is configured;
+updating keeps every setting.
+
+### Changed
+
+- A `POST` without `Content-Length` is answered `411 Length Required`,
+  and one with any `Transfer-Encoding` is answered `400 Bad Request`,
+  before a route is looked at. Before, a bodiless or chunked post to
+  the settings page was taken as an empty form, which cleared the
+  checkboxes (alarm armed, 12 hour, skip) and saved them.
+- The page's buttons sit at the same distance under a field or a
+  fieldset as any field does; the shared stylesheet had stacked a
+  button's own top margin on the block above it.
+- The settings record that cannot be decoded is logged with its
+  version byte and length only. The whole record used to be printed,
+  and it holds the Wi-Fi password, the API token and the MQTT password
+  in the clear.
+- The README says the project was written with the assistance of an AI
+  agent, from the author's design, measurements and review.
+
+### Fixed
+
+- A timezone rule with a standard offset past 14 hours (`<+15>-15`)
+  was accepted, saved, and thrown away at the next boot with the whole
+  record: network, token, broker and alarm. The rule is kept now, and
+  an image older than this one reads it as a fixed rule clamped to
+  its own range.
+- A timezone transition that falls in the neighbouring calendar year
+  (a rule like `J1/-1`, whose first transition is 23:00 on December
+  31) is now evaluated in the right year; the evaluator takes the
+  transitions of the year before and after as well.
+- The **Use this browser's zone** button no longer calls a zone fixed
+  because its January and July offsets match, and no longer returns a
+  rule that fails to predict the six following years. It finds every
+  offset change of the year; a zone with other than none or two, or
+  one no candidate rule predicts (Casablanca's Ramadan hour), shows
+  `no rule for <zone>` instead of a confident wrong rule.
+- A broker host or hostname changed while the MQTT session was
+  starting up was dropped unread, leaving the clock connected to the
+  old broker for good or Home Assistant with stale discovery. The
+  change is compared after the start now.
+- The MQTT session checks the broker's SUBACKs: a subscription refused
+  (reason code 0x80 or more) or unanswered within 10 s fails the
+  session with the reason on the page, where before the page said
+  `connected` and the controls did nothing.
+- A settings save that failed was not tried again, so the unsaved
+  settings lived in RAM until something else changed; on the access
+  point a setup form could answer "saved, joining" and the clock stay
+  where it was. A failed save is retried after 2 s, doubling to 60 s.
+- Two Rescan requests at once on the access point (a double click, or
+  a phone's sign-in sheet and a browser tab) each took the other's
+  wake-up, and one waited out the timeout. Every waiter is now
+  released by the next scan to finish.
+- A firmware upload failing during the pause of a deliberate reset
+  (self-heal, reload, OTA reboot) restarted the display scan, so the
+  reset landed with a transfer in flight and the last row stayed lit
+  at full current until the firmware was back. The stop is latched
+  against the upload's resume.
+
+### Security
+
+- The settings page refuses to move the MQTT broker to another host
+  unless the password is typed again, with the notice "a new broker
+  needs its password typed again". Before, an unauthenticated post to
+  the page could move the clock to a broker of the poster's choosing,
+  and the clock handed it the stored user and password. The same host
+  keeps its password on an empty field, an empty host clears the
+  credentials, and the token and the setup form are exempt.
+
+## [0.2] - 2026-11-07
+
+### Added
 
 - The timezone setting is a POSIX TZ rule (`PST8PDT,M3.2.0,M11.1.0`,
   `CET-1CEST,M3.5.0,M10.5.0/3`, `<-07>7`), evaluated on the clock from
@@ -22,33 +98,39 @@ from `http://<ip>/update`; its settings survive the update.
   time this year comes out fixed.
 - The status block shows the local time the rule gives, with the
   zone's name and the offset in force, for checking a rule.
-- The `tz` key of `/api` takes a rule or, as before, minutes east of
-  UTC, which become a fixed rule; the JSON answers `tz` as a string
-  now, and gains the read-only `utc_offset` (minutes east of UTC in
+- `/api` gains the read-only `utc_offset` (minutes east of UTC in
   force) and `dst` (whether daylight time is in force), both `null`
   before the first time sync.
-- The alarm handles a transition: an alarm minute that the spring
-  jump skips rings when the clock lands past it, and the hour that
-  the autumn change repeats rings once.
-- Build: `TZ_RULE` seeds the rule and a bad one fails the build;
-  `TZ_OFFSET_MINUTES` still works as a fixed rule. The prebuilt images
-  stay on Vancouver time without daylight saving, now written `<-07>7`.
+- Build: `TZ_RULE` seeds the rule and a bad one fails the build.
+- The README points at the installer first and walks through an OTA
+  update.
+
+### Changed
+
+- The `tz` key of `/api` takes a rule or, as before, minutes east of
+  UTC, which become a fixed rule; the JSON answers `tz` as a string
+  now. `TZ_OFFSET_MINUTES` still works at build time as a fixed rule.
+  The prebuilt images stay on Vancouver time without daylight saving,
+  now written `<-07>7`.
 - Updating from v0.1 keeps every setting: the stored offset becomes
   the fixed rule with the same minutes.
 
-### Web installer
+### Fixed
 
+- The alarm handles a transition: an alarm minute that the spring
+  jump skips rings when the clock lands past it, and the hour that
+  the autumn change repeats rings once.
 - The installer flashes four parts (bootloader, partition table,
   erased `otadata`, the application) and leaves the `nvs` partition
   alone, so a reflash keeps the saved settings unless the erase is
   chosen. The v0.1 installer wrote one merged image, which cleared
   them.
-- The README points at the installer first and walks through an OTA
-  update.
 
-## v0.1 — 2026-11-07
+## [0.1] - 2026-11-07
 
-The first release, for the HU-058 LED clock kit on an ESP32-C3:
+The first release, for the HU-058 LED clock kit on an ESP32-C3.
+
+### Added
 
 - Time over NTP, 12 or 24 hour, with a fixed UTC offset.
 - Alarm with a choice of melodies and a random pick, per-weekday
@@ -72,3 +154,8 @@ The first release, for the HU-058 LED clock kit on an ESP32-C3:
   stops answering or the join keeps failing, and carries the time and
   the alarm state across the reset.
 - A web installer on GitHub Pages and a release workflow.
+
+[Unreleased]: https://github.com/anarsoul/esp32clock/compare/v0.3...HEAD
+[0.3]: https://github.com/anarsoul/esp32clock/compare/v0.2...v0.3
+[0.2]: https://github.com/anarsoul/esp32clock/compare/v0.1...v0.2
+[0.1]: https://github.com/anarsoul/esp32clock/releases/tag/v0.1
