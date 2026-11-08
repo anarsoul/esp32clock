@@ -40,6 +40,11 @@ const KEY: u8 = 0;
 /// Quiet time after the last change before it is written.
 const SETTLE: Duration = Duration::from_secs(2);
 
+/// A save that failed is tried again after this, doubling to the
+/// maximum, with whatever the settings are by then.
+const RETRY_MIN: Duration = Duration::from_secs(2);
+const RETRY_MAX: Duration = Duration::from_secs(60);
+
 /// The one flash handle. Taken for one blocking operation at a time,
 /// never across an await, by the settings map here and by `ota`.
 static FLASH: CsMutex<RefCell<Option<FlashStorage<'static>>>> = CsMutex::new(RefCell::new(None));
@@ -197,7 +202,10 @@ impl Store {
 }
 
 /// Write the settings to flash whenever they change, once they have been
-/// stable for [`SETTLE`]. `stored` is what the flash holds at start.
+/// stable for [`SETTLE`]. `stored` is what the flash holds at start. A
+/// save that fails is tried again after [`RETRY_MIN`], doubling to
+/// [`RETRY_MAX`], so a change does not live only in RAM until the next
+/// one; a change during the wait is what gets saved.
 ///
 /// A save is followed by a reset into station mode (`heal::switch_mode`)
 /// when, on the station, it changed the Wi-Fi credentials, which is how
@@ -225,24 +233,34 @@ pub async fn persist_task(mut store: Store, mut stored: Option<Settings>) -> ! {
                 Either::Second(next) => s = next,
             }
         }
-        // Compare what would be written, so a change to a field the
-        // record leaves out (`skip_next`) does not touch flash.
-        if stored.is_some_and(|old| old.to_record() == s.to_record()) {
-            continue;
-        }
-        match store.save(&s).await {
-            Ok(()) => {
-                info!("settings: saved");
-                stored = Some(s);
-                let leave = match net::mode() {
-                    Mode::Station => s.wifi != boot_wifi,
-                    Mode::AccessPoint => !s.wifi.is_none(),
-                };
-                if leave {
-                    heal::switch_mode(false).await
+        let mut retry = RETRY_MIN;
+        loop {
+            // Compare what would be written, so a change to a field the
+            // record leaves out (`skip_next`) does not touch flash.
+            if stored.is_some_and(|old| old.to_record() == s.to_record()) {
+                break;
+            }
+            match store.save(&s).await {
+                Ok(()) => {
+                    info!("settings: saved");
+                    stored = Some(s);
+                    let leave = match net::mode() {
+                        Mode::Station => s.wifi != boot_wifi,
+                        Mode::AccessPoint => !s.wifi.is_none(),
+                    };
+                    if leave {
+                        heal::switch_mode(false).await
+                    }
+                    break;
+                }
+                Err(e) => {
+                    warn!("settings: save failed: {e:?}; trying again in {} s", retry.as_secs());
+                    if let Either::Second(next) = select(Timer::after(retry), rx.changed()).await {
+                        s = next;
+                    }
+                    retry = (retry * 2).min(RETRY_MAX);
                 }
             }
-            Err(e) => warn!("settings: save failed: {e:?}"),
         }
     }
 }
