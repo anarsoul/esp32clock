@@ -131,6 +131,11 @@ pub const DEFAULT_TZ_OFFSET_MINUTES: i16 = match option_env!("TZ_OFFSET_MINUTES"
 /// user sets it.
 pub const DEFAULT_TWELVE_HOUR: bool = false;
 
+/// Tenths of a degree Celsius added to the thermometer's reading until
+/// the user sets it: the NTC sits in the case's warm air and the clocks
+/// built so far read about 2.5 °C above the room.
+pub const DEFAULT_TEMP_OFFSET_DC: i16 = -25;
+
 /// Index into `settings::PALETTE` at boot. 1 is orange.
 pub const DEFAULT_COLOR: usize = 1;
 

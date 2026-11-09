@@ -103,7 +103,9 @@ they change, and the root `build.rs` exports `git describe --always
 goes into the app descriptor, the boot line, the page and `/api`. The timezone (`tz`: a POSIX TZ rule such as `PST8PDT,M3.2.0,M11.1.0`, parsed by `core/src/tz.rs` and evaluated on the chip from the NTP time, so daylight saving needs nothing from the network; the key also takes minutes east of UTC, stored as the fixed rule `<-07>7`; the default is `TZ_RULE` from the build, checked by a `const` assert so a bad rule fails the build, else `TZ_OFFSET_MINUTES` as a fixed rule, the CI's `<-07>7` being Vancouver without daylight saving; the page's `Use this browser's zone` button fills it in through `/tz.js`, see `src/tz.js`), 12/24 hour, colour, brightness, alarm, alarm days,
 alarm melody, thermometer offset (`temp_offset`, tenths of a degree
 Celsius added to the NTC's reading, ±10.0, for the warm air at the
-sensor's spot in the case; blue-clock measured 0.7 high), the
+sensor's spot in the case; the default is −2.5, `config::DEFAULT_TEMP_OFFSET_DC`,
+what the user's clocks typically need, for a clock with no record or one older than
+version 8, while a stored value, 0 included, stays), the
 temperature on the panel (`temp_show`: `off`, `c` or `f`, default
 `c`; with a reading in hand the UI shows ` 23C` with the degree mark
 for seconds 30 to 34 of every minute in clock mode, `ui::TEMP_SHOW_AT`

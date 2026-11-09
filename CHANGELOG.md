@@ -11,6 +11,15 @@ from `http://<ip>/update`; its settings survive the update.
 
 ## [Unreleased]
 
+### Changed
+
+- The thermometer offset defaults to −2.5 °C instead of 0, the typical
+  difference between the sensor in the case and the room. It applies
+  to a clock that has no settings yet (a fresh flash, or the web
+  installer with the erase chosen) and to one updated from a firmware
+  older than the offset setting; a clock that already has settings
+  keeps its offset, 0 included.
+
 ## [0.3] - 2026-11-07
 
 Fixes from a review of the v0.2 code. Nothing new is configured;

@@ -1412,7 +1412,7 @@ mod tests {
         let mut rule = String::new();
         write_json(&mut rule, &s, &status(true)).unwrap();
         assert!(rule.contains(r#""twelve_hour":false,"tz":"<+0545>-5:45","temp_offset""#), "{rule}");
-        assert!(out.contains(r#""temp_offset":0.0,"temp_show":"c","hostname""#), "{out}");
+        assert!(out.contains(r#""temp_offset":-2.5,"temp_show":"c","hostname""#), "{out}");
         assert!(out.contains(r#""last_heal":1800000000}"#));
         assert!(out.ends_with("}\n"));
         let mut none = String::new();

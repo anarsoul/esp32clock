@@ -14,7 +14,7 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::watch::{Receiver, Watch};
 
 use crate::config::{
-    API_TOKEN, DEFAULT_ALARM, DEFAULT_BRIGHTNESS, DEFAULT_COLOR, DEFAULT_HOSTNAME, DEFAULT_TWELVE_HOUR,
+    API_TOKEN, DEFAULT_ALARM, DEFAULT_BRIGHTNESS, DEFAULT_COLOR, DEFAULT_HOSTNAME, DEFAULT_TEMP_OFFSET_DC, DEFAULT_TWELVE_HOUR,
     DEFAULT_TZ_OFFSET_MINUTES, DEFAULT_TZ_RULE, MAX_CURRENT_STEP, MQTT_HOST, MQTT_PASSWORD, MQTT_PORT, MQTT_USER, WIFI_PASSWORD, WIFI_SSID,
 };
 use crate::melody;
@@ -556,7 +556,7 @@ impl Settings {
         alarm_armed: false,
         twelve_hour: DEFAULT_TWELVE_HOUR,
         tz: DEFAULT_TZ,
-        temp_offset_dc: 0,
+        temp_offset_dc: DEFAULT_TEMP_OFFSET_DC,
         temp_show: TempShow::Celsius,
         hostname: Hostname::DEFAULT,
         alarm_days: DAYS_ALL,
@@ -962,7 +962,7 @@ mod tests {
             assert_eq!(got.wifi, if version >= 6 { s.wifi } else { Credentials::NONE }, "v{version} network");
             assert_eq!(got.token, if version >= 6 { s.token } else { Secret(Text::EMPTY) }, "v{version} token");
             assert!(!got.token_cleared, "v{version} has no flags");
-            assert_eq!(got.temp_offset_dc, if version >= 8 { s.temp_offset_dc } else { 0 }, "v{version} thermometer offset");
+            assert_eq!(got.temp_offset_dc, if version >= 8 { s.temp_offset_dc } else { d.temp_offset_dc }, "v{version} thermometer offset");
             assert_eq!(got.temp_show, if version >= 9 { s.temp_show } else { d.temp_show }, "v{version} temperature on the panel");
             assert_eq!(got.mqtt, if version >= 10 { s.mqtt } else { Broker::NONE }, "v{version} broker");
             assert!(!got.mqtt_cleared);

@@ -5957,3 +5957,40 @@ bench clock is a SuperMini, whose antenna mismatch AGENTS.md records,
 and it would not connect at all upstairs the day before on the old
 firmware. The soak stays running for what it is worth, with nothing
 riding on it.
+
+### Thermometer offset: default −2.5 °C — DONE, verified on the bench 2026-11-09
+
+The user's clocks typically need an offset of −2.5 °C (2026-11-09),
+so that is the default instead of 0: `config::DEFAULT_TEMP_OFFSET_DC`
+(−25 tenths), used by `Settings::DEFAULT`. No record change and no new
+version. Who gets it: a clock with no record (a fresh flash, the web
+installer with the erase) and one whose record is version 7 or older,
+which never had the field and reads it from the defaults. A record of
+version 8 or later keeps what it stores, 0 included: the record cannot
+tell an offset of 0 the user chose from one never touched, and a
+reading that moved 2.5 °C by itself after an update would be worse
+than a default that is not applied. Tests: the older-records test
+expects the default below version 8, and the JSON test `-2.5` for the
+default settings.
+
+**Verify on a clock.** After a USB flash with `nvs` erased (or a
+merged image), `/api` says `"temp_offset":-2.5`, the page's field
+shows −2.5 and the room line is 2.5 °C under the uncorrected reading;
+a clock updated over the air with a stored offset keeps it.
+
+**Bench, 2026-11-09.** A clock flashed over USB with `nvs` erased:
+`settings: nothing stored, using defaults`, the settings line with
+`temp_offset_dc: -25`, and the first sensor line `ntc 842 mV ... room
+48.8 C (119.8 F) with offset -2.5`. So the default is applied. The
+48.8 °C means nothing: this bench board has no NTC and no adapter
+pull-up, so GPIO0 floats (842 mV) instead of reading high as a clock
+with a missing sensor would.
+
+The update path, same board and day: `POST /api temp_offset=0` (the
+value a record cannot tell from untouched), then the same firmware
+flashed over USB with `nvs` left alone, from a build with no
+credentials in its environment. Eight seconds after the reset `/api`
+said `"temp_offset":0.0` with the network and token from the record,
+so a stored 0 stays 0 under the new default. The board was put back
+to −2.5 afterwards. A record of version 7 or older picking up the
+default is covered by the host test only.
