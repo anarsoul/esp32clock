@@ -22,7 +22,7 @@ of. `CLAUDE.md` is a symlink to this file; edit this one.
   then hand the user a flash command and say exactly what to look for.
   Do not claim hardware results.
 - Commit only when asked. Commit messages end with
-  `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>` (the user asked
+  `Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>` (the user asked
   for this trailer in this project).
 - `3rdparty/` is the reverse-engineering reference (public domain), ignored
   by git. Read it; do not modify it.
