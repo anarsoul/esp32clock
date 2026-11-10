@@ -11,14 +11,36 @@ from `http://<ip>/update`; its settings survive the update.
 
 ## [Unreleased]
 
+## [0.4] - 2026-11-10
+
+The display scan runs in hardware. Nothing new is configured; updating
+keeps every setting.
+
 ### Changed
 
+- The panel is scanned by one SPI transfer the hardware repeats by
+  itself, a DMA descriptor ring in the ESP32-C3's segmented-transfer
+  mode, with no CPU in the loop. The dark gap between two laps is a
+  fixed 0.6 µs. Before, the firmware restarted every transfer, which
+  took 10 to 19 µs each time and up to 1 ms whenever Wi-Fi, the heap
+  or the log held interrupts off. The minute heartbeat's `scan` field
+  reports images published, stops and the descriptor the DMA is at,
+  in place of the gap statistics.
 - The thermometer offset defaults to −2.5 °C instead of 0, the typical
   difference between the sensor in the case and the room. It applies
   to a clock that has no settings yet (a fresh flash, or the web
   installer with the erase chosen) and to one updated from a firmware
   older than the offset setting; a clock that already has settings
   keeps its offset, 0 included.
+
+### Fixed
+
+- A bare `curl -X POST` to `/reload`, `/ap`, `/pin` or `/scan` works
+  again. v0.3 answered `411 Length Required` to every `POST` without
+  `Content-Length`, and these four read no body, so
+  `scripts/reload.sh` and `scripts/pin.sh` were refused. Only the
+  routes that read a body (`/`, `/api`, `/play`, `/token`, `/ota`)
+  ask for the length now.
 
 ## [0.3] - 2026-11-07
 
@@ -164,7 +186,8 @@ The first release, for the HU-058 LED clock kit on an ESP32-C3.
   the alarm state across the reset.
 - A web installer on GitHub Pages and a release workflow.
 
-[Unreleased]: https://github.com/anarsoul/esp32clock/compare/v0.3...HEAD
+[Unreleased]: https://github.com/anarsoul/esp32clock/compare/v0.4...HEAD
+[0.4]: https://github.com/anarsoul/esp32clock/compare/v0.3...v0.4
 [0.3]: https://github.com/anarsoul/esp32clock/compare/v0.2...v0.3
 [0.2]: https://github.com/anarsoul/esp32clock/compare/v0.1...v0.2
 [0.1]: https://github.com/anarsoul/esp32clock/releases/tag/v0.1
