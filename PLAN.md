@@ -5958,6 +5958,39 @@ and it would not connect at all upstairs the day before on the old
 firmware. The soak stays running for what it is worth, with nothing
 riding on it.
 
+**Soak, 2026-11-08.** The pre-commit build ran 50 minutes from 12:50
+on the bench clock with no drop, no probe failure and the heap flat at
+54 080 bytes, then the committed `v0.3-3-gdf7f547` was uploaded over
+the air at 13:41 (20 s, booted from `ota_0`) and the soak runs on
+under `scripts/watch-clock.sh` and the serial log, to compare with
+the eleven clean hours of v0.3. Result after 19 h 14 min (09:00 on
+2026-11-09): 1154 heartbeats, no disconnect, self-heal or panic, the
+scan running with 0 stops and the descriptor index moving every
+minute; 2304 pings and `/api` fetches with one failure, the reboot
+itself; one gateway probe lost at 07:08 and answered on the next.
+The heap sat at 54 032 bytes for the first 7.9 hours, took one 188-byte
+step to 53 844 at 21:35 with nothing but `/api` fetches in the log,
+and held there for the remaining 11 hours; the six readings below
+the line each landed with a response in flight and the next heartbeat
+was back on it. At 25 h 36 min (15:18 on 2026-11-09): 1536 heartbeats,
+still no disconnect, heal, stop or panic, the heap on 53 844 for 18
+hours, 3071 probes with a second one lost at 10:10 and answered on
+the next, 3066 watch samples with the one reboot failure. The soak
+was left running. Drift, from the 26 hourly NTP offsets: the uptime
+clock gains 83 ms an hour on NTP, -23.1 ppm over the 25 hours and
+between -21.5 and -24.3 every hour, with roundtrips of 10 to 80 ms;
+so the panel is never more than about 85 ms fast, and without the
+network it would gain 2 s a day. At 31 h 4 min (20:45 on 2026-11-09):
+1864 heartbeats, still nothing but the counters moving, heap on 53 844,
+a third probe lost at 18:27 and answered on the next, 3719 watch
+samples with the one reboot failure, drift unchanged at -23.1 ppm.
+At 43 h 20 min (09:01 on 2026-11-10): 2600 heartbeats, no new event
+of any kind, heap on 53 844, no probe lost since 18:27 the day before,
+5188 watch samples, drift -23.1 ppm over 44 syncs; the lowest
+heartbeat reading of the run, 47 028 at 21:41, landed four seconds
+before the hourly NTP sync with its name lookup in flight and was
+back on the line a minute later.
+
 ### Thermometer offset: default −2.5 °C — DONE, verified on the bench 2026-11-09
 
 The user's clocks typically need an offset of −2.5 °C (2026-11-09),
