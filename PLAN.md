@@ -5989,7 +5989,25 @@ of any kind, heap on 53 844, no probe lost since 18:27 the day before,
 5188 watch samples, drift -23.1 ppm over 44 syncs; the lowest
 heartbeat reading of the run, 47 028 at 21:41, landed four seconds
 before the hourly NTP sync with its name lookup in flight and was
-back on the line a minute later.
+back on the line a minute later. At 90 h 58 min (08:39 on
+2026-11-12, the soak still running): 5458 heartbeats, no disconnect,
+heal, stop or panic, one Wi-Fi association and one MQTT session for
+the whole run (5461 publishes), the heap on 53 844 for 83 hours and
+47 028 still the lowest reading, drift -23.1 ppm over 91 syncs.
+10 911 probes with eight lost: the three above, one at 08:16 on
+2026-11-11 answered on the next, two in a row at 08:19 the same
+morning answered on the third, the longest run of the soak, and one
+each at 06:08 and 06:21 on 2026-11-12. The host's 498-byte pings and
+`/api` fetches of the clock passed through all five (277 and 188 ms
+around the double loss, against the usual 50 to 120), so the clock
+was reachable from the LAN while the router did not answer it; two
+mornings running between 06:00 and 08:30 points at the router or the
+air at that hour, which the logs cannot settle. 10 986 watch samples
+with two failures, the reboot and one at 16:25:02 on 2026-11-10, ping
+and fetch both, fine again 38 s later: the clock's log has no event
+there, its probes on either side passed and no request reached a
+listener, so the sample was lost between the host and the clock, at
+which end is not known.
 
 ### Thermometer offset: default −2.5 °C — DONE, verified on the bench 2026-11-09
 
