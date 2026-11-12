@@ -4213,6 +4213,41 @@ plans a second adapter for the ESP32-C3 SuperMini Plus footprint
 (two rows of eight), so a module with its own IPEX antenna jack can
 go in without the receptacle rework.
 
+The SuperMini adapter on the bench, 2026-11-12: the user built a
+clock on the `adapter-esp32c3-supermini` board with an ESP32-C3
+SuperMini Plus and an external antenna on its IPEX jack (hostname
+`clock`, 10.1.1.11, id `clock-1d32d8`, `v0.4-1-g253a63e`) and put it
+in the case with the lid open, on USB, then swapped the
+old white-clock board (`white-clock`, 10.1.1.58, id `clock-6a1bec`,
+`v0.4`) into the same case and spot. Each got the same run from the
+session: three minutes connected to the near access point
+(`80:69:1a:1f:25:cc`, channel 9) with `/api` read every 10 s, a
+498-byte ping every second and the settings page fetched every 10 s,
+then four boot scans (the monitor's USB reset each time).
+
+| measure | SuperMini adapter | old white-clock board |
+| --- | --- | --- |
+| RSSI connected, near AP | −21 to −23, steady | two levels, −38/−39 and −52 to −54 |
+| boot scans, near AP | −31, −21, −21, −23 | −53, −56, −38, −39 |
+| boot scans, far AP (channel 3) | −74, −64, −62, −63 | −83, −82, −84, −86 |
+| 498-byte pings, 180 | 180 answered, 3.0/4.6/76 ms | 179 answered, 3.1/5.9/25 ms |
+| settings page | 40 to 52 ms | 42 to 62 ms, one of 117 |
+| boot probe | 10 ms | 57 ms |
+
+So the new adapter hears the near access point 16 to 30 dB better
+than the old board and the far one about 20 dB better, and 6 to 8 dB
+better at the near one than the U.FL rework did on 2026-11-01 (−29),
+with the far one about level with it (−58 to −61 then); the spot on
+the bench may not be the same as that day's. Two things not
+explained: the new board's first boot scanned both access points
+10 dB lower than its next three, while its connected figure on that
+boot was already −22; and the old board flipped between two levels
+14 dB apart from one 10 s sample to the next, in the scans as well,
+which the new board never did. All of this is the clock's side.
+Still owed: the access points' figure for each clock from the real
+spot with the lid closed, which the user reads from the router, and
+the same run on the v3 Zero adapter.
+
 #### Thermometer offset (after M11a) — DONE, verified on the bench 2026-11-01
 
 The afternoon's comparison above gave a constant 0.6 to 0.8 °C

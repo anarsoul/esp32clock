@@ -429,7 +429,12 @@ module ends with its `#[cfg(test)] mod tests`.
   same spot (the antenna sits inside the adapter's ground fill); a
   U.FL receptacle at the feed and a patch antenna put 25 to 30 dB
   back (2026-11-01: −29 dBm on the near access point at the bench;
-  installed in the case, both access points read it at −70). ADC1 is the converter that works with Wi-Fi on,
+  installed in the case, both access points read it at −70). The
+  SuperMini adapter with a SuperMini Plus and an external antenna on
+  its IPEX jack reads
+  −21 to −23 there, against −38 to −54 for the old white-clock board in
+  the same case and spot (2026-11-12; the access points' side not yet
+  read). ADC1 is the converter that works with Wi-Fi on,
   11 dB attenuation is only calibrated to about 2.5 V, and
   `AdcCalCurve` is the scheme to use: the line fit is percent off.
 - **Current:** `IS` comes from brightness alone, capped at
