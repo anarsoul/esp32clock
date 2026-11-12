@@ -6044,6 +6044,26 @@ there, its probes on either side passed and no request reached a
 listener, so the sample was lost between the host and the clock, at
 which end is not known.
 
+**The soak's first disconnects, 2026-11-12.** After 92 h 13 min on
+one association the clock was dropped twice, at 09:54:10 and at
+10:10:16, both logged `MissingAcks` with the clock's own RSSI at its
+usual -39 and -41, and both 0.1 to 0.2 s after it had served a watch
+`/api` fetch. Each time it scanned, rejoined the same access point
+9 s later, had its address 0.5 s after that and MQTT back 2 s after
+the address (a third session by the end). No self-heal, no reset, the
+uptime and the time kept, the scan at 0 stops, no probe lost; the heap
+went back from 53 844 to 54 032 on the first rejoin, so the 188-byte
+step of 2026-11-08 belonged to the association. The user takes this as
+the Wi-Fi recovery working as designed. What it exercised is a
+dropped association with the access point still in range: not the
+connect budget, not the probe-triggered self-heal. The cause is not
+settled: the second drop fell inside another session's measurement of
+the new SuperMini-adapter clock on the bench (498-byte pings every
+second to 10.1.1.11, a board that hears the access point 20 dB
+louder), the first 8 minutes before that board appeared on USB. The
+first watch ping after each rejoin, about 20 s later, was lost while
+the fetch 2 s after it passed, unexplained.
+
 ### Thermometer offset: default −2.5 °C — DONE, verified on the bench 2026-11-09
 
 The user's clocks typically need an offset of −2.5 °C (2026-11-09),
