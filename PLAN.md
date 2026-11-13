@@ -8139,3 +8139,31 @@ The three converters make a clip at 31 250 unless told `--rate 16000`
 re-made with them. `scripts/wav2pcm.sh` stays at 16 000 unless told:
 PCM at 31 250 is 31 KB of flash a second. Not read off the clock: the
 `clip:` line's share of the processor for a module at this rate.
+
+### The station picks its access point: the strongest of each scan — built 2026-11-13, not on a clock yet
+
+"Bench board keeps trying to connect to far AP. … let's do pinning
+right after scan - force it to connect to the AP with the strongest
+signal. After disconnect and next scan a new choice must be made" (the
+user). This is item 3 of the 2026-10 list above, without its
+fall-through. `net::wifi_task` scanned before every connect only to
+log the candidates and left the choice to the driver, which under
+`ScanMethod::AllChannels` should take the strongest and does not
+always: it avoids the access point that last dropped it.
+
+Now `strongest_candidate` answers the loudest access point of that
+scan and the connect is made with its BSSID and channel in the
+`StationConfig` (`station_config(creds, Some(ap))`), logged as
+`wifi: connecting to <ssid> at <bssid> channel N, rssi R`. The loop
+sets the unpinned config first (the scan runs under it), so a pin
+never outlives its connect: after a disconnect or a failed attempt the
+next turn scans and chooses again. A scan that fails or hears nothing
+leaves the driver to look for itself, as before (`the driver
+choosing`). There is no second choice within a turn: if the loudest
+access point refuses the clock every time, the run ends in the
+connect budget's reset (ten attempts or three minutes) as any other.
+
+To look for in the serial log: the `candidate` lines, then the
+`connecting to … at` line naming the loudest of them, then `connected
+to` with the same BSSID; pull the near access point's power and the
+next turn must name the other.

@@ -265,19 +265,32 @@ impl core::fmt::Display for Bssid {
 /// authenticate. `AllChannels` scans every channel first and, with the
 /// by-signal sort order esp-radio sets, connects to the strongest. It
 /// costs a second or two more at connect time.
-fn station_config(creds: &Credentials) -> Result<Config, esp_radio::wifi::WifiError> {
+///
+/// That choice is the driver's only when `pin` is `None`. It avoids the
+/// access point that last dropped it, and kept trying a far one that
+/// could not hear the clock while its own scan listed the near one, so
+/// `wifi_task` names the access point its scan heard loudest, by BSSID
+/// and channel, and the driver has nothing to choose.
+fn station_config(creds: &Credentials, pin: Option<Candidate>) -> Result<Config, esp_radio::wifi::WifiError> {
     let ssid = creds.ssid.as_str().try_into()?;
     let auth = if creds.password.0.is_empty() {
         AuthenticationMethodConfig::Open
     } else {
         AuthenticationMethodConfig::Wpa2Personal(creds.password.0.as_str().try_into()?)
     };
-    Ok(Config::Station(
-        StationConfig::default()
-            .with_ssid(ssid)
-            .with_authentication(auth)
-            .with_scan_method(ScanMethod::AllChannels),
-    ))
+    let station = StationConfig::default().with_ssid(ssid).with_authentication(auth).with_scan_method(ScanMethod::AllChannels);
+    Ok(Config::Station(match pin {
+        Some(ap) => station.with_bssid(ap.bssid).with_channel(ap.channel),
+        None => station,
+    }))
+}
+
+/// An access point on our SSID as a scan heard it.
+#[derive(Clone, Copy)]
+struct Candidate {
+    bssid: [u8; 6],
+    channel: u8,
+    rssi: i8,
 }
 
 /// Log every access point on our SSID with its channel and signal, so a
@@ -286,20 +299,35 @@ fn station_config(creds: &Credentials) -> Result<Config, esp_radio::wifi::WifiEr
 /// 10 to 20 ms per channel missed every AP but a strong one, since a far
 /// AP's probe response takes longer than that to arrive; ESP-IDF's own
 /// default is 120 ms.
-async fn log_candidates(controller: &mut WifiController<'static>, creds: &Credentials) {
-    let Ok(ssid) = creds.ssid.as_str().try_into() else { return };
+///
+/// Answers the one heard loudest, for the connect to be pinned to;
+/// `None` when the scan failed or heard none, and the driver is then
+/// left to look for itself.
+async fn strongest_candidate(controller: &mut WifiController<'static>, creds: &Credentials) -> Option<Candidate> {
+    let ssid = creds.ssid.as_str().try_into().ok()?;
     let scan = ScanConfig::default().with_ssid(ssid).with_scan_type(ScanTypeConfig::Active {
         min: esp_hal::time::Duration::from_millis(120),
         max: esp_hal::time::Duration::from_millis(200),
     });
     match controller.scan_async(&scan).await {
-        Ok(aps) if aps.is_empty() => warn!("wifi: scan found no AP for {}", creds.ssid.as_str()),
+        Ok(aps) if aps.is_empty() => {
+            warn!("wifi: scan found no AP for {}", creds.ssid.as_str());
+            None
+        }
         Ok(aps) => {
+            let mut best: Option<Candidate> = None;
             for ap in aps {
                 info!("wifi: candidate {} channel {} rssi {}", Bssid(ap.bssid), ap.channel, ap.signal_strength);
+                if best.is_none_or(|b| ap.signal_strength > b.rssi) {
+                    best = Some(Candidate { bssid: ap.bssid, channel: ap.channel, rssi: ap.signal_strength });
+                }
             }
+            best
         }
-        Err(e) => warn!("wifi: scan failed: {e:?}"),
+        Err(e) => {
+            warn!("wifi: scan failed: {e:?}");
+            None
+        }
     }
 }
 
@@ -341,7 +369,7 @@ pub async fn wifi_task(mut controller: WifiController<'static>, stack: Stack<'st
         }
     }
 
-    let cfg = match station_config(&creds) {
+    let cfg = match station_config(&creds, None) {
         Ok(c) => c,
         Err(e) => {
             error!("wifi: bad credentials: {e:?}");
@@ -356,10 +384,11 @@ pub async fn wifi_task(mut controller: WifiController<'static>, stack: Stack<'st
         Err(e) => warn!("wifi: set_max_tx_power: {e:?}"),
     }
 
-    // Failed connects in a row, and when the run of them started. The
-    // driver avoids the access point that last dropped it and can keep
-    // trying another one that cannot hear the clock; only a reset clears
-    // that, so a run that reaches either limit ends in `heal::reset`.
+    // Failed connects in a row, and when the run of them started. A
+    // run that reaches either limit ends in `heal::reset`: the driver,
+    // left to choose (a scan that heard nothing), avoids the access
+    // point that last dropped it and can keep trying one that cannot
+    // hear the clock, which only a reset clears.
     let mut failures: u32 = 0;
     let mut first_failure: Option<Instant> = None;
     loop {
@@ -368,8 +397,19 @@ pub async fn wifi_task(mut controller: WifiController<'static>, stack: Stack<'st
             Timer::after(RECONNECT_DELAY).await;
             continue;
         }
-        log_candidates(&mut controller, &creds).await;
-        info!("wifi: connecting to {}", creds.ssid.as_str());
+        // Every connect, the first and the one after a disconnect or a
+        // failure, is to the access point this scan heard loudest: the
+        // choice is made anew each time and is never the driver's.
+        match strongest_candidate(&mut controller, &creds).await {
+            Some(ap) => {
+                match station_config(&creds, Some(ap)).map(|pinned| controller.set_config(&pinned)) {
+                    Ok(Ok(())) => info!("wifi: connecting to {} at {} channel {}, rssi {}", creds.ssid.as_str(), Bssid(ap.bssid), ap.channel, ap.rssi),
+                    // The unpinned config set above stands.
+                    Ok(Err(e)) | Err(e) => warn!("wifi: pinning {}: {e:?}; the driver chooses", Bssid(ap.bssid)),
+                }
+            }
+            None => info!("wifi: connecting to {}, the driver choosing", creds.ssid.as_str()),
+        }
         match controller.connect_async().await {
             Ok(info) => {
                 info!("wifi: connected to {} channel {}", Bssid(info.bssid), info.channel);
