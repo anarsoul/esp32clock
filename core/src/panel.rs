@@ -188,8 +188,8 @@ impl Panel {
     /// Write one character into a digit. Leaves the annunciators alone.
     pub fn set_char(&mut self, block: usize, c: char) {
         let bits = glyph(c);
-        for seg in SEG_A..=SEG_G {
-            self.on[block][seg] = bits & (1 << seg) != 0;
+        for (seg, on) in self.on[block][SEG_A..=SEG_G].iter_mut().enumerate() {
+            *on = bits & (1 << (SEG_A + seg)) != 0;
         }
     }
 
@@ -325,11 +325,11 @@ mod tests {
         p.set_color(Levels::new(1, 1, 1));
         p.lamp_test();
         let img = p.render();
-        for drv in 0..2 {
-            for slot in 0..SLOTS {
+        for (drv, slots) in img.ss.iter().enumerate() {
+            for (slot, planes) in slots.iter().enumerate() {
                 // LEDs 1 to 5 of every COM pair are wired, except LED 1 on
                 // the second annunciator's pair of blocks 0, 2 and 3.
-                let lit = img.ss[drv][slot][0];
+                let lit = planes[0];
                 assert!(lit & 0b0111_1111_1111_1110 != 0, "drv {drv} slot {slot} dark");
             }
         }
