@@ -6664,6 +6664,20 @@ The set on the two clocks is now built with
 `CLIP_MODULATOR=sd CLIP_KBPS=256`; white-clock and martin-clock still
 run the earlier set with the four tunes until they are flashed again.
 
+**Chronos, 2026-11-12.** The user's next tape: the title music of
+Chronos, Tim Follin's, to be credited as Trantor's is. The tape is a
+cracked copy whose BASIC runs `USR 24983` (an unpacker), then `PAUSE
+0`, then `USR 64000`, so run by itself it sits in the ROM waiting for
+a key and plays nothing. `scripts/zxbeeper.py` got `--settle` and
+`--start` for that: run the loaded tape for a while, then jump to the
+address the loader would. From 64000 the tune starts at once and
+plays once, 184.3 s: 203 022 pulses, 85 µs at the median and on
+10.8 % of the time (Trantor's are 47 µs and 3.6 %), each edge within
+a tick of the emulator's. The clip is 472 KB, `clips/chronos.bpr`,
+with its paragraph in `clips/README.md`. Trantor converted again with
+the changed script is byte for byte the file in the repository. Not
+yet flashed or heard, and not committed.
+
 **The buzzer mod in the README, 2026-11-12.** The user's two changes
 to the buzzer circuit are now documented as an optional mod: a 1N4148
 across the buzzer as a flyback diode, and R5 at 5.1 k instead of the
@@ -6679,3 +6693,273 @@ The diode's orientation in the README is derived from the circuit
 (emitter at +5 V, buzzer from the collector to ground, the kick
 negative), not read off the user's board.
 
+
+**Chronos did not sound right; a finer tick, 2026-11-12.** Flashed
+with Trantor and Futurama, Chronos was wrong to the user's ear where
+Trantor is fine. The captured pulses say why, most likely: Chronos's
+commonest widths are 242, 256, 270, 298, 326, 340, 354 T-states, a
+ladder of 14 (4 µs), which is how Follin's player shapes loudness and
+tone, and the clip's tick was 1/128 000 s, 27 T-states. Each edge
+rounded to that grid by itself, so a width that should have stepped
+smoothly came out a tick more or less from one pulse to the next, a
+tenth of a typical pulse. Trantor's widths are few and far apart (59,
+118, ...), which is why it did not show.
+
+The format is now `BPR2`: the same, at 1/512 000 s (6.8 T-states), a
+bit a tick, and a beeper clip runs the line at its own
+`clip::BEEPER_BIT_RATE`, 512 kbit/s whatever `CLIP_KBPS` says
+(`Stream::bit_rate` is back for it). A `BPR1` file would be taken for
+PCM, so `melody.rs` refuses one at build time. Both clips converted
+again: Trantor 155 140 bytes (149 966), Chronos 572 420 (472 159).
+With Futurama the image is 1 806 096 bytes, 92 % of the slot. Flashed
+to white-clock. That the tick was the fault is an inference from the
+numbers; the user's ear decides.
+
+**Trantor ended on its own beginning, 2026-11-12** (the user heard
+it). The clip was cut at 141.5 s, at the second of the two 0.48 s
+pauses, on the reading that a pass ran from pause to pause. It does
+not: the game starts the tune over at 126.5 s, and the pause at
+141.8 s is the one at 15.3 s come round again (the opening's flips
+per 10 ms match the capture best at 126.5 to 126.6 s). The clip is
+now cut there, `--seconds 126.5`: 141 KB.
+
+**Chronos as PCM, 2026-11-12.** The finer tick did not win the user
+over ("I don't like it"), and instead of the beeper clip he recorded
+the title tune from the Xpeccy emulator, `wav/chronos_title_xpeccy.wav`
+(184.6 s, mono, 44.1 kHz), to be given Futurama's treatment with its
+first 4 s cut. `scripts/wav2pcm.sh` takes a fourth argument for that,
+seconds to skip, and fades the last second and a half of a clip it
+cuts short; Futurama through the changed script differs from the file
+in use by the dither alone (2 of 255 at most).
+
+The whole tune from 4 s on is 180.6 s, 1.44 MB of PCM, and does not
+fit: the image without clips is 857 KB of a 1920 KB slot. What is
+flashed is the first 90 s of it, `wav/chronos.pcm`, 720 KB, beside
+Trantor and Futurama: 1 944 048 bytes, 98.9 % of the slot, 22 KB to
+spare. The recording has no pause anywhere to cut at, so the 90 s is
+the room there was, not a musical choice. `clips/chronos.bpr` is no
+longer built in; it and the whole 180 s as PCM (`wav/chronos_full.pcm`)
+are kept on disk. Not yet heard.
+
+**Chronos dropped, 2026-11-12.** As PCM from the user's own recording
+it "sounds bad" too, so it is out in both forms: `clips/chronos.bpr`
+and the two PCM files are deleted (the recording stays in `wav/`), and
+`clips/README.md` is back to Trantor alone. Whatever makes that tune
+is more than this buzzer gives back. What the attempt leaves behind
+is kept: the beeper clip's finer tick (`BPR2`), `--settle` and
+`--start` in `scripts/zxbeeper.py`, and the skip and the fade in
+`scripts/wav2pcm.sh`. The clocks' set is Trantor and Futurama:
+`ALARM_CLIP=clips/trantor.bpr,wav/futurama.pcm` with
+`CLIP_MODULATOR=sd CLIP_KBPS=256`.
+
+### Tracker modules (XM) — first trial as a rendered clip 2026-11-12; a player on the chip only planned
+
+The user's next source of tunes: tracker modules, XM rather than MOD,
+with one to start from in `mods/`: "halftime" by Orion, a keygen
+chiptune (FastTracker 2, 4 channels, 7 patterns, 7 samples of 8 bits
+and 4.5 KB in all, 12 642 bytes, 43.5 s).
+
+**Trial, no new firmware code.** Rendered on the host with
+`openmpt123 --render --samplerate 44100 --channels 1`, then
+`scripts/wav2pcm.sh` as for Futurama: `wav/halftime.pcm`, 349 KB.
+Flashed to white-clock beside Trantor and Futurama. Of the render's
+energy 76 % is under 300 Hz and 91 % under 900 Hz, which the
+converter cuts, so what the buzzer gets is the top of the tune. Not
+yet heard.
+
+**If it is liked: play the module itself.** The file is 12.6 KB
+against 349 KB of PCM, 28 times less, and the ratio grows with the
+tune's length. A player on the chip would mix the channels at 8 kHz
+into the same modulator and ring the PCM clip uses, as a third kind
+behind `clip::Stream`. Two ways to it, to be chosen: the `xmrsplayer`
+crate (no_std, plays XM, MOD, S3M and IT; to be checked for what it
+allocates and costs in flash), or a player of our own for the subset
+these chiptunes use (notes, the volume column, a dozen effects,
+volume envelopes), which would stay within the project's no-`alloc`
+rule and be tested in `core/` against openmpt's render.
+
+**The module played on the chip — built 2026-11-12, flashed, not yet
+heard.** The rendered trial was liked ("I like it :)"), so the player.
+
+*Not the crate.* `xmrsplayer` 0.15 needs `alloc` (it unpacks a module
+into heap structures; its own `lib.rs` and `xmrs`'s say `extern crate
+alloc`), and the two are 22 000 lines with serde underneath. The clock
+has no heap to give it but the Wi-Fi driver's.
+
+*`core/src/xm.rs`.* A player for what chiptunes use of the format,
+written for the clock: the module read in place, eight channels at
+most, no allocation. The test module's inventory decided the scope:
+effects 0 3 4 6 A B C D and the volume column's set-volume, envelopes
+with sustain and loop, forward loops, the linear frequency table. It
+plays those and their neighbours (1 2 5 9, E1 E2 E9 EA EB EC ED, F, G,
+K, the column's slides, vibrato and tone portamento), FastTracker's
+arpeggio tick order included; not tremolo, pattern loop and delay,
+multi-retrigger, auto-vibrato, the Amiga table, or more than one
+sample an instrument. Channels are mixed at 32 kHz with linear
+interpolation and averaged to 8 kHz; then, on the chip, what
+`scripts/wav2pcm.sh` does to a PCM clip on the host: two second-order
+high-passes at 900 Hz and a limiter with 20 dB of drive (instant
+attack, 16 ms release). The samples go to the clip's modulator as PCM
+does: `clip::Player` takes its body from PCM or from a `Tune`.
+
+*`scripts/xm2clip.py`.* The file the clock holds is not the XM but
+`XMC1`: tables of where each pattern and sample is, the patterns as
+packed, samples as plain bytes (XM's are differences), ping-pong loops
+unrolled, the tune's length worked out; it lists what the module uses
+that the player lacks. "halftime" is 10 843 bytes (the module 12 642,
+its PCM 348 960) with nothing unplayed.
+
+*Checked.* 110 host tests, seven of them the player's on modules built
+in the test: pitch, relative note and finetune, volumes, each pitch
+effect's periods tick by tick, orders, jumps, breaks, speed and tempo,
+note delay, the envelope with key-off and fade, the shaping.
+`CLIP_PCM_DUMP=file cargo host-test dump_the_tune -- --ignored` writes
+what a built-in module gives the modulator; against the liked render
+(openmpt, then the host's conversion) it has the same length and
+timing (frame energies best at no lag), a median spectral cosine of
+0.89 frame by frame, 0.94 between the average spectra, and the same
+RMS, 0.42 of full scale. It is not sample for sample openmpt: no
+volume ramping, linear and not sinc interpolation, a limiter of our
+own. Image 6.5 KB larger; main stack 50.7 KB with clips.
+
+Flashed to white-clock as `halftime` from `mods/halftime.xmc`, beside
+Trantor and Futurama. Not known: what a chunk's mixing costs at
+interrupt priority on the chip (no serial log this time).
+
+**The module a bit louder, 2026-11-12** (the user's ask after hearing
+it). The limiter's release went from 16 ms to 4 and it aims peaks a
+quarter over full scale, the excess clipped (`xm::DRIVE`): the test
+module's RMS is 0.59 of full scale, from 0.42, 3 dB, with 16.5 % of
+the samples at the rails. Flashed to white-clock; not yet heard.
+
+**Two loudnesses side by side, and a second module, 2026-11-12.** To
+compare by ear in one firmware, the limiter's drive and release are
+now per clip: bytes 10 and 11 of the `XMC1` header, which were spare
+(0 keeps the player's `DRIVE` and `RELEASE_SHIFT`), set by
+`scripts/xm2clip.py --drive N --release N`. Halftime is built in
+twice: `halftime_a` at 127 and 7 (RMS 0.42, the level of the render
+first liked) and `halftime_b` at 160 and 5 (0.59).
+
+The second module in `mods/` is "keygentune2003 orn", also Orion's:
+4 channels, 57.6 s, 15 235 bytes converted. It uses an instrument's
+auto-vibrato, which the player did not have and now does: a sine that
+grows to its depth over the sweep, added to the period every tick
+(sweep, depth and rate in three of the instrument entry's spare
+bytes; other waveforms are played as a sine and the converter says
+so). Against openmpt's render through the host's conversion the new
+tune has the same length and timing, a median spectral cosine of 0.90
+and 0.975 between the average spectra; it is built at the player's
+default, the louder setting.
+
+Flashed to white-clock: Trantor, Futurama, Halftime A, Halftime B,
+Keygen Tune. 110 host tests. Not yet heard.
+
+**Halftime settled; the second tune's bass, 2026-11-12.** The user
+keeps Halftime B, the louder: it is the player's default, so the clip
+is `mods/halftime.xmc` again, built with no options.
+
+The second tune came out wrong to the ear: the intro incorrect, the
+channels' balance off, the bass not there at all. The player is not
+at fault: its mix before the shaping (`CLIP_RAW=1` with
+`CLIP_PCM_DUMP`, a new `xm::raw_mix` for tests) is openmpt's within
+1 dB in every band for the first sixteen seconds, spectral cosine
+1.00, bar a droop of 1 to 2.5 dB above 2 kHz from the linear
+interpolation. The shaping is: this tune's bass instrument (1) plays
+44 to 148 Hz and carries the intro, its lead (2) 349 to 879 Hz, and
+36 % of the tune's energy is under 150 Hz, all of it below the 900 Hz
+cut that suited Halftime.
+
+So the cut is the clip's to say now. The header grew to 32 bytes
+(`XMC2`; an `XMC1` file is refused at build time): how many passes of
+the high-pass, 0 to 2, and its section's five coefficients, which
+`scripts/xm2clip.py --highpass HZ --passes N` works out (the chip has
+no tangent; 900 Hz twice remains the default, and its section is to
+the digit what scipy gives). And `--raise INSTRUMENT:OCTAVES` adds
+octaves to an instrument's relative note in the clip, with no code
+on the chip: the one way a 100 Hz bass line is heard on this buzzer.
+
+Three of the tune side by side on white-clock for the user's ear:
+`keygen_a` as before (900 Hz, 24 dB an octave), `keygen_b` at 300 Hz
+and 12 dB, `keygen_c` the same with the bass two octaves up (176 to
+592 Hz). Not yet heard.
+
+**300 Hz, steep, 2026-11-12** (the user's ask after hearing A to C).
+Added beside the others on white-clock: `keygen_d` at 300 Hz and
+24 dB an octave, `keygen_e` the same with the bass two octaves up,
+and `halftime_low`, Halftime at 300 Hz and 24 dB to hear again
+against the 900 Hz one. Not yet heard.
+
+**The settings chosen by ear, 2026-11-12.** Of three Halftimes and
+five Keygens the user keeps the 300 Hz, 12 dB an octave ones with
+nothing raised ("Halftime Gentle" and "Keygen B"), at the louder
+limiter setting. Those are now `scripts/xm2clip.py`'s defaults, and
+the clips are `mods/halftime.xmc` and `mods/keygen.xmc`, built with no
+options. White-clock: Trantor, Futurama, Halftime, Keygen.
+
+Against the modules as openmpt renders them, what the clock plays has
+the energy under 300 Hz down from 71 % to 13 % (Halftime) and 59 % to
+8 % (Keygen), 300 to 900 Hz carrying over half of what is left,
+nothing above 4 kHz, and a crest factor of 4 dB where the originals
+have 13 to 14: the limiter takes nearly all the dynamics.
+
+**16 kHz for a module, to compare, 2026-11-12.** The user asked
+whether a higher sampling rate made sense. For PCM clips no (twice the
+flash for a buzzer that tops out early); for modules perhaps, since
+they cost nothing more in flash and the 8 kHz mix folds what a square
+wave has above 4 kHz back into the band. Built as an option to hear:
+byte 17 of the clip's header asks the player for 16 kHz
+(`scripts/xm2clip.py --rate 16000`, which also works the high-pass out
+for that rate), `xm::Tune` then averages two mixed samples and not
+four, and its limiter's release is a shift longer to stay the same
+time. The modulator needs no change: it writes `OSR` bits a sample
+whatever a sample is, so `Stream::bit_rate` doubles the line's rate
+for such a clip, 512 kbit/s in the 256 kbit/s build, and the
+sigma-delta's noise stays where it was.
+
+On the host the 16 kHz Halftime has 6 % of its energy between 4 and
+8 kHz and, below 4 kHz, is a little nearer openmpt's render with the
+same high-pass (spectral cosine 0.947 against 0.936), which is the
+aliasing going. White-clock has `halftime` and `halftime_hi`, `keygen`
+and `keygen_hi` side by side. Not yet heard.
+
+**16 kHz kept; the bass cut again, 2026-11-12.** The user likes the
+16 kHz versions, so that is `scripts/xm2clip.py`'s default now
+(`--rate 8000` for the other), and wonders whether 300 Hz cuts too
+much at that rate. Four of each tune on white-clock, all 16 kHz and
+12 dB an octave: A at 300 Hz (what was chosen at 8 kHz), B at 200,
+C at 100, D with no high-pass. More bass in is less of everything
+else out, the limiter working on the sum: in Keygen the level of what
+lies above 300 Hz is -4.7, -4.8, -5.4 and -8.0 dB for A to D, with
+2, 5, 20 and 33 % of the energy under 150 Hz. Not yet heard.
+
+**Settled, 2026-11-12.** A is better: 300 Hz at 12 dB an octave stays,
+at 16 kHz. Those are the converter's defaults, so the two clips are
+built with no options, and white-clock has Trantor, Futurama,
+Halftime and Keygen:
+`CLIP_MODULATOR=sd CLIP_KBPS=256
+ALARM_CLIP=clips/trantor.bpr,wav/futurama.pcm,mods/halftime.xmc,mods/keygen.xmc`.
+
+**In the repository and in every build, 2026-11-12** (the user's
+decision). Orion's two modules go in with their credit, as Trantor
+did: the `.xm` files in `mods/` as found, their clips in `clips/`
+(`halftime.xmc`, `keygen.xmc`), a section of `clips/README.md` for
+them. And Trantor and the two modules are packaged by default:
+`core/build.rs` takes `DEFAULT_CLIPS` when `ALARM_CLIP` is not set
+(set to nothing, it is a build with none), so the releases carry them
+from here on. That the credit is not a licence was said when Trantor
+went in, and holds for these and for the releases.
+
+For the default build to be what was listened to, its settings are
+the ones white-clock ran: `CLIP_MODULATOR` defaults to `sd` and
+`CLIP_KBPS` to 256 (they were `pwm` and 512, from the day the
+sigma-delta clip crackled, which was the pacer's doing). `pwm` and
+the other rates remain. A module at 16 kHz therefore runs the line at
+512 kbit/s, the beeper clip at its own 512.
+
+The default image is 1 036 784 bytes, 53 % of the slot (865 KB with
+no clips), the main stack 50.6 KB (67.2 KB with none). Settings page
+at its worst 5679 of 6016 bytes, discovery payload 4204 of 4608.
+110 host tests in the default build, with no clips, and with `pwm`
+at 512 and 256 kbit/s. Futurama stays on the user's clocks only
+(`wav/`, ignored). The stock buzzer circuit (no diode, R5 at 10 k)
+has not been listened to with these defaults.

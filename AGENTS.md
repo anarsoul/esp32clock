@@ -26,11 +26,12 @@ of. `CLAUDE.md` is a symlink to this file; edit this one.
   for this trailer in this project).
 - `3rdparty/` is the reverse-engineering reference (public domain), ignored
   by git. Read it; do not modify it.
-- `clips/` holds clips that are in the repository; they are other
-  people's music, not under the project's licence, and
-  `clips/README.md` says whose each is. Nothing builds them in unless
-  `ALARM_CLIP` names them. A clip nobody may redistribute stays in the
-  ignored `wav/` and `tap/`.
+- `clips/` holds the clips every build takes in unless `ALARM_CLIP`
+  says otherwise (`core/build.rs`, `DEFAULT_CLIPS`): Trantor's title
+  music and two of Orion's modules, whose sources are in `mods/`. They
+  are other people's music, not under the project's licence;
+  `clips/README.md` credits each and must go on doing so. A clip
+  nobody may redistribute stays in the ignored `wav/` and `tap/`.
 - The project is licensed MIT OR Apache-2.0 (`LICENSE-MIT`,
   `LICENSE-APACHE`, the `license` field of both manifests). Every `.rs`
   and `.sh` file starts with an `SPDX-License-Identifier` line and the
@@ -54,9 +55,11 @@ API_TOKEN='…' scripts/reload.sh <ip>   # software reset with the carry record,
 scripts/pin.sh <ip> <serial-log>        # POST /pin, then the four digits read back from the monitor's log
 AP_PASSWORD='…' cargo build --release   # optional: the clock's own access point's password (default esp32clock)
 scripts/wav2pcm.sh in.wav wav/tune.pcm [seconds]   # a sound file as the clip's raw PCM (sox): mono, 8 kHz, 8 bits unsigned
-~/.local/pipx/venvs/skoolkit/bin/python scripts/zxbeeper.py game.tap tap/tune.bpr --seconds 60 [--stretch 4]   # what a ZX Spectrum program plays on its beeper, as a clip (needs SkoolKit)
-ALARM_CLIP=clips/trantor.bpr,wav/tune.pcm cargo build --release   # optional: clips (PCM or beeper) as the last melodies, named after their files; ALARM_CLIP_LABEL='A,B' for other labels
-CLIP_MODULATOR=sd CLIP_KBPS=256 ALARM_CLIP=… cargo build --release   # a PCM clip as a sigma-delta stream, a decision a bit, instead of the default pulse a period (pwm) (CLIP_KBPS=128|256|512, default 512; CLIP_CARRIER_KHZ=8|16|32, default 16)
+~/.local/pipx/venvs/skoolkit/bin/python scripts/zxbeeper.py game.tap tap/tune.bpr --seconds 60 [--stretch 4] [--settle 20 --start 64000]   # what a ZX Spectrum program plays on its beeper, as a clip (needs SkoolKit; --start for a loader that waits for a key)
+scripts/xm2clip.py tune.xm mods/tune.xmc [--highpass 900 --passes 2] [--raise 1:2] [--drive 127 --release 7] [--rate 8000]   # a FastTracker 2 module for the clock's own player; lists what it uses that the player lacks; the bass cut, an instrument's octave and the limiter are the clip's
+ALARM_CLIP=clips/trantor.bpr,wav/tune.pcm cargo build --release   # other clips than the three in clips/ (PCM, beeper or tracker module), as the last melodies, named after their files; ALARM_CLIP_LABEL='A,B' for other labels
+ALARM_CLIP= cargo build --release   # no clips at all: the nine note melodies, 16 KB more stack
+CLIP_MODULATOR=pwm CLIP_KBPS=512 cargo build --release   # a PCM clip or module as a pulse a carrier period (CLIP_CARRIER_KHZ, default 16) instead of the default sigma-delta stream at 256 kbit/s
 ```
 
 Releases: `CHANGELOG.md` gets the version's section first (the release body points at it), then an annotated tag `v*` (`git tag -a`; `build.rs` runs `git
@@ -397,7 +400,8 @@ module ends with its `#[cfg(test)] mod tests`.
 | `core/src/carry.rs` | `Carried`, `MARK` with its layout version, `encode`/`decode` |
 | `src/carry.rs` | RTC-RAM record used only after a software reset (`CoreSw`/`Cpu0Sw`; anything else zeroes it at boot): self-heal count and time, the skip flag, the local second the alarm last rang, the Unix time last written, boots of an unconfirmed OTA image, the access-point flag for the next boot; the mark carries a layout version; `freeze` for a mode switch |
 | `src/buzzer.rs` | LEDC PWM on an open-drain pin; plays a melody on command, looped or once, stops within a note; a clip goes to `clip::play`, which hands it to the clip task on the same pin |
-| `core/src/clip.rs` | sampled sound for the 1-bit buzzer line, pure: `Player`, a pulse-width modulator (one pulse per carrier period, centred, its length the level at mid-period with the rounding error fed back as far as the carrier leaves room: `ORDER`; integer, linear interpolation between the 8 kHz samples, a sample of 255 at 0.95 of the rail) that writes a clip's bitstream a buffer at a time, wrapped in 30 ms ramps from and to the released line; `Beeper`, a clip that is the line's level as run lengths (`BPR1`, LEB128 counts of 1/128 000 s, off and on alternately; `scripts/zxbeeper.py`), written out as it is; `Runs`, which writes a `RunSource` (the beeper clip) out as bytes; `Stream`, either kind by its first bytes; `Pacer`, which says which chunks of the ring to write from the time since the start alone (one crystal clocks the line and the timer), counts underruns, and counts as strays the reads of the DMA's descriptor register that are not two slots on from that; `BIT_RATE` and `CARRIER_HZ` from `config::CLIP_KBPS` and `CLIP_CARRIER_KHZ`, `CHUNK` 1024, `SLOTS` 16 |
+| `core/src/clip.rs` | sampled sound for the 1-bit buzzer line, pure: `Player`, a pulse-width modulator (one pulse per carrier period, centred, its length the level at mid-period with the rounding error fed back as far as the carrier leaves room: `ORDER`; integer, linear interpolation between the 8 kHz samples, a sample of 255 at 0.95 of the rail) that writes a clip's bitstream a buffer at a time, wrapped in 30 ms ramps from and to the released line; `Beeper`, a clip that is the line's level as run lengths (`BPR2`, LEB128 counts of 1/512 000 s, off and on alternately; `scripts/zxbeeper.py`), written out as it is, with the line at its own `BEEPER_BIT_RATE`, 512 kbit/s (`Stream::bit_rate`); `Runs`, which writes a `RunSource` (the beeper clip) out as bytes; `Stream`, either kind by its first bytes; `Pacer`, which says which chunks of the ring to write from the time since the start alone (one crystal clocks the line and the timer), counts underruns, and counts as strays the reads of the DMA's descriptor register that are not two slots on from that; `BIT_RATE` and `CARRIER_HZ` from `config::CLIP_KBPS` and `CLIP_CARRIER_KHZ`, `CHUNK` 1024, `SLOTS` 16 |
+| `core/src/xm.rs` | a tracker module as a clip, pure: `Tune`, a player for the part of FastTracker 2's XM that chiptunes use (see its header for the effects), reading in place the `XMC2` file `scripts/xm2clip.py` makes of a module, no heap, eight channels; mixes at 32 kHz, averages to 8 kHz, then a high-pass and a hard limiter as `scripts/wav2pcm.sh` gives PCM, their settings read from the clip's header (the converter works out the filter's coefficients); its samples go to `clip::Player` as PCM's do |
 | `src/clip.rs` | `clip_task`, on the scan's interrupt executor so that Wi-Fi work on the thread executor cannot starve the ring (the buzzer task, whose LEDC driver is not `Send`, stays there and asks with `play`, lending the pin for the clip's length; `main.rs` makes the second pin handle, its one `unsafe`); `Sampler`: I2S0's transmitter (TDM, two 8-bit channels, no clock pins, so the data line is the ring's bytes MSB first at the bit rate) on GDMA channel 1 looping over a sixteen-descriptor ring; `play` writes the clip's bits (`clip::Stream`) from flash into the ring ahead of the DMA, connects GPIO5 as a frozen open-drain signal through the GPIO matrix's inverter once the stream runs, and hands it back released before stopping; reads the DMA's descriptor register through `regs()`, for the pacer's check only |
 | `core/src/sensors.rs` | the NTC table (10 kΩ, B 3950, under the adapter's 10 kΩ pull-up from 3V3) and `temperature_dc` by interpolation, `fahrenheit_tenths`, `ldr_ohms` and `light_pct` (the logarithm of the LDR's resistance, 1 kΩ is 100 and 50 kΩ is 0), `face` (the panel's four characters for a temperature), `Tenths`; pure |
 | `src/sensors.rs` | `sensor_task`: the async `Adc<ADC1>` with `AdcCalCurve` (the scheme that reads straight on the C3) on GPIO0 (NTC) and GPIO1 (LDR), 8 samples a second each into a 10 s exponential average, published as millivolts in two atomics; `room()` for `http::status`, `Report` for the heartbeat |
@@ -584,15 +588,16 @@ module ends with its `#[cfg(test)] mod tests`.
   one segment per round trip. `REQUEST_BUF` (1536) still bounds the
   head; an upload's body stays on the socket.
 - An OTA image must fit a slot (`partitions.csv`, 0x1E0000 = 1920 KB);
-  the release image is about 650 KB. Static RAM: `ota.rs` holds 11 KB
+  the release image is about 1040 KB with the three clips in `clips/`
+  (865 KB with none). Static RAM: `ota.rs` holds 11 KB
   of buffers, and what the statics leave of DRAM is the main stack,
   66.9 KB on 2026-11-08 (67.1 on 2026-11-07; the ring's descriptors and
   conf words are 160 bytes, the gap statistics and buffer channels went) (`Settings` is a 385-byte record and sits in several task futures: the 49-byte timezone rule cost 2.2 KB of stack); check `.stack` in `llvm-readelf -S` after adding one, and compare with a build of `HEAD` in a worktree when in doubt: one `Response` per listener loop, since a second one in another arm of the same loop was not overlapped by the compiler and cost 6 KB per listener until it was hoisted (2026-11-07). `src/tz.js` (5.8 KB) is sent from one response buffer and a `const` assert in `src/http.rs` keeps it under `RESPONSE_BUF` with its header; it was trimmed to comments of a line each to fit.
 - The sampled clip is 8 KB of flash a second (the 27.6 s test clip is
-  221 KB of `.rodata`, held once: `melody::CLIP_DATA` is a `static`; a beeper clip is about 1 KB a second)
+  221 KB of `.rodata`, held once: `melody::CLIP_DATA` is a `static`; a beeper clip is 1 to 3 KB a second, a tracker module some 10 KB whatever its length)
   and must leave the image inside its slot; the ring is 16 KB of
   static RAM, sized 0 in a build without a clip (2026-11-12: the main
-  stack is 68.4 KB without, 51.5 KB with). A chunk is 16 ms at
+  stack is 67.2 KB without, 50.6 KB with). A chunk is 16 ms at
   512 kbit/s and the ring holds fourteen ahead of the DMA, so the clip
   task not running for about 220 ms (twice that at 256 kbit/s) is an
   underrun, logged when the clip ends with the count of DMA positions
@@ -635,12 +640,12 @@ module ends with its `#[cfg(test)] mod tests`.
 
 ## Verifying without a board
 
-`cargo host-test` runs the tests of `core/` on the host (103 on 2026-11-12): the AiP33628 encoder against a behavioural model of the
+`cargo host-test` runs the tests of `core/` on the host (110 on 2026-11-12): the AiP33628 encoder against a behavioural model of the
 chip (shift on CLK rise, latch on DIN rise while CLK high), the panel
 map, the palette and brightness tables, the hostname, password and
 token rules, the record round trip and every older version, the form
 parser and the page sizes against `PAGE_MAX`, the head parser, the
-appended-hash split, the carry codec, the calendar arithmetic, the POSIX TZ parser with its rejects and the 2026 transitions of both hemispheres, the melodies, the clip's modulator (a sine back out of the bits, one centred pulse a period, the ramps, full-scale stability), the beeper clip's runs bit for bit, and the ring's pacer, run against a model of the DMA (`CLIP_KBPS` and `CLIP_CARRIER_KHZ` change what is tested; `ALARM_CLIP=… cargo host-test` covers the table with the clip in it), the UI's alarm, grace, skip and daylight-saving logic, the PIN and token
+appended-hash split, the carry codec, the calendar arithmetic, the POSIX TZ parser with its rejects and the 2026 transitions of both hemispheres, the melodies, the clip's modulator (a sine back out of the bits, one centred pulse a period, the ramps, full-scale stability), the beeper clip's runs bit for bit, the module player (pitch, volumes, each effect's periods tick by tick, the song's order, the envelope, the shaping; `CLIP_PCM_DUMP=file cargo host-test dump_the_tune -- --ignored` writes a built-in module's samples for comparison with another player's render), and the ring's pacer, run against a model of the DMA (`CLIP_KBPS` and `CLIP_CARRIER_KHZ` change what is tested; `ALARM_CLIP=… cargo host-test` covers the table with the clip in it), the UI's alarm, grace, skip and daylight-saving logic, the PIN and token
 header rules, the NTC and LDR tables against their equations, and the
 MQTT topics, routes and discovery payload (parsed with `serde_json`, a
 host-only dev-dependency, and checked key by key against the `/api`

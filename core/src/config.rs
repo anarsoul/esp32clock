@@ -165,14 +165,14 @@ pub const MAX_CURRENT_STEP: u8 = {
     step as u8
 };
 
-/// Bit rate of the sampled clip's stream on the buzzer line, in kbit/s,
-/// from `CLIP_KBPS` at build time: 128, 256 or 512. With the carrier
-/// it sets how many lengths a pulse can have (`clip::PERIOD_BITS`), so
-/// the default is the highest.
+/// Bit rate of a PCM clip's or a module's stream on the buzzer line, in
+/// kbit/s, from `CLIP_KBPS` at build time: 128, 256 or 512; a module
+/// at 16 kHz runs at twice it. The default is what was heard and
+/// accepted on a clock (2026-11-12): 256, 32 bits a sample.
 pub const CLIP_KBPS: u32 = {
     let kbps = match option_env!("CLIP_KBPS") {
         Some(s) => parse_i32(s),
-        None => 512,
+        None => 256,
     };
     assert!(kbps == 128 || kbps == 256 || kbps == 512, "CLIP_KBPS must be 128, 256 or 512");
     kbps as u32
@@ -193,13 +193,17 @@ pub const CLIP_CARRIER_KHZ: u32 = {
     khz as u32
 };
 
-/// Whether a PCM clip is sent as a sigma-delta stream, a decision a
-/// bit, and not as a pulse a carrier period: `CLIP_MODULATOR=sd` at
-/// build time (`pwm`, the default, is the other). The first version
-/// of the clip; quieter than the pulses on the stock buzzer circuit,
-/// kept for trying against a changed one.
+/// Whether a PCM clip or a module is sent as a sigma-delta stream, a
+/// decision a bit, and not as a pulse a carrier period:
+/// `CLIP_MODULATOR=sd`, the default, or `pwm` at build time. The
+/// pulses were written when the first sigma-delta clip was quiet and
+/// crackled, which turned out to be the pacer rewriting the ring under
+/// the DMA and not the modulator; with that fixed, a flyback diode
+/// across the buzzer and R5 at 3.2 k, sigma-delta is what the user
+/// listened to and kept. On the stock circuit neither has been judged
+/// since the fix.
 pub const CLIP_SIGMA_DELTA: bool = match option_env!("CLIP_MODULATOR") {
-    None => false,
+    None => true,
     Some(m) => {
         let m = m.as_bytes();
         let sd = m.len() == 2 && m[0] == b's' && m[1] == b'd';

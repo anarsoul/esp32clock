@@ -12,9 +12,13 @@ fn main() {
     clips();
 }
 
+/// The clips a build has when `ALARM_CLIP` is not set: the ones in the
+/// repository. Set it to nothing for a build with none.
+const DEFAULT_CLIPS: &str = "clips/trantor.bpr,clips/halftime.xmc,clips/keygen.xmc";
+
 /// `ALARM_CLIP` names the clips to build in as the last melodies, files
-/// separated by commas: raw PCM (`scripts/wav2pcm.sh`) or a beeper clip
-/// (`scripts/zxbeeper.py`).
+/// separated by commas: raw PCM (`scripts/wav2pcm.sh`), a beeper clip
+/// (`scripts/zxbeeper.py`) or a tracker module (`scripts/xm2clip.py`).
 /// A relative path is taken from the workspace root, where cargo is run.
 /// A clip's API name is its file's name without the extension, in lower
 /// case with everything but letters turned into `_`; its label is the
@@ -22,7 +26,7 @@ fn main() {
 /// commas, at the same place. `melody.rs` includes what this writes.
 fn clips() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().expect("core/ has a parent");
-    let files = std::env::var("ALARM_CLIP").unwrap_or_default();
+    let files = std::env::var("ALARM_CLIP").unwrap_or_else(|_| DEFAULT_CLIPS.to_string());
     let labels = std::env::var("ALARM_CLIP_LABEL").unwrap_or_default();
     let labels: Vec<&str> = labels.split(',').map(str::trim).collect();
     let mut names = String::new();

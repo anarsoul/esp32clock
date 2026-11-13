@@ -11,6 +11,24 @@ from `http://<ip>/update`; its settings survive the update.
 
 ## [Unreleased]
 
+### Added
+
+- Three more alarm melodies that are not beeps: the title music of
+  *Trantor: The Last Stormtrooper* by David Whittaker, as the ZX
+  Spectrum's speaker played it, and two chiptunes by Orion, "Halftime"
+  and "Keygen", played from their tracker modules by a player in the
+  firmware. They go out of the buzzer pin as a bitstream from I2S, and
+  are in the random draw. The music is its authors'; see
+  `clips/README.md`.
+- `ALARM_CLIP` at build time chooses other clips, or none: raw PCM
+  (`scripts/wav2pcm.sh`), a ZX Spectrum beeper recording
+  (`scripts/zxbeeper.py`) or a FastTracker 2 module
+  (`scripts/xm2clip.py`).
+
+### Changed
+
+- The firmware image is about 1040 KB, from 850 KB.
+
 ## [0.4] - 2026-11-10
 
 The display scan runs in hardware. Nothing new is configured; updating
