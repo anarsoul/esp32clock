@@ -56,6 +56,8 @@ pub struct Shaper {
     envelope: i32,
     drive: i32,
     release: u32,
+    /// The limiter's knee: a level under it gets the full gain.
+    knee: i32,
     /// Whether the samples keep what the limiter's division leaves
     /// under the 8-bit step.
     wide: bool,
@@ -68,8 +70,12 @@ impl Shaper {
     /// where a shift more is the same time), the high-pass's section in
     /// Q14 (b0 b1 b2 a1 a2, worked out by the converter since the chip
     /// has no tangent) and how many times it is applied (0 to 2), and
-    /// whether the samples are to be finer than the 8-bit step.
-    pub fn new(drive: u8, release: u8, twice: bool, section: [i16; 5], passes: u8, wide: bool) -> Self {
+    /// whether the samples are to be finer than the 8-bit step; and
+    /// the limiter's `knee` in 1024s of the mix's units (0 for `LIMIT`):
+    /// 32 is one voice at full level, and a knee above a tune's own
+    /// peak is the limiter off, a plain gain, for a speaker, where the
+    /// buzzer's 20 dB of drive is heard as overdrive.
+    pub fn new(drive: u8, release: u8, twice: bool, section: [i16; 5], passes: u8, wide: bool, knee: u8) -> Self {
         Self {
             highpass: section.map(|k| k as i64),
             passes: (passes as usize).min(2),
@@ -83,6 +89,10 @@ impl Shaper {
                 0 => RELEASE_SHIFT,
                 r => (r as u32).min(14),
             } + twice as u32,
+            knee: match knee {
+                0 => LIMIT,
+                k => k as i32 * 1024,
+            },
             wide,
         }
     }
@@ -96,7 +106,7 @@ impl Shaper {
             y = filter.run(&self.highpass, y);
         }
         self.envelope = (self.envelope - (self.envelope >> self.release)).max(y.abs());
-        let gain = self.envelope.max(LIMIT);
+        let gain = self.envelope.max(self.knee);
         if self.wide {
             (y as i64 * (self.drive * STEP) as i64 / gain as i64).clamp(-127 * STEP as i64, 127 * STEP as i64) as i16
         } else {

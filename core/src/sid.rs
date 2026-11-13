@@ -477,7 +477,7 @@ impl<'a> Tune<'a> {
             looping: false,
             ended: data.len() <= HEADER,
             chip: Chip::new(clock, byte(data, 4) & 1 != 0, oversample),
-            shaper: Shaper::new(byte(data, 5), byte(data, 6), true, core::array::from_fn(|i| word(data, 28 + 2 * i) as i16), byte(data, 7), true),
+            shaper: Shaper::new(byte(data, 5), byte(data, 6), true, core::array::from_fn(|i| word(data, 28 + 2 * i) as i16), byte(data, 7), true, 0),
         }
     }
 

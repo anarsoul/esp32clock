@@ -12,7 +12,7 @@ instrument, the first.
 
 Says what the module uses that the player does not play.
 
-    scripts/xm2clip.py tune.xm tune.xmc [--drive N] [--release N]
+    scripts/xm2clip.py tune.xm tune.xmc [--drive N] [--release N] [--knee N]
                        [--highpass HZ] [--passes N] [--raise INSTRUMENT:OCTAVES]
                        [--rate 8000] [--bits 8]
 
@@ -74,6 +74,7 @@ def main():
     parser.add_argument("out", help="the clip to write")
     parser.add_argument("--drive", type=int, default=0, help="what the limiter aims a peak at, full scale being 127; over that clips (default: the player's, 127; 160 is 3 dB louder with the release at 5)")
     parser.add_argument("--release", type=int, default=0, help="the limiter lets go by 1/2^N a sample at 8 kHz (default: the player's, 7; 5 is faster and louder)")
+    parser.add_argument("--knee", type=int, default=0, help="the level the limiter starts at, in 1024s of the mix where one voice at full level is 32 (default: the player's, 3000 of 32768, which is 20 dB of drive, for the buzzer; a knee above the tune's peak is the limiter off, a plain gain, for a speaker: the converter cannot say the peak, the host's dump of the mix can)")
     parser.add_argument("--highpass", type=float, default=300, help="the high-pass's corner in Hz (default 300)")
     parser.add_argument("--passes", type=int, default=1, choices=(0, 1, 2), help="how many times it is applied, 12 dB an octave each (default 1)")
     parser.add_argument("--rate", type=int, default=16000, choices=(8000, 16000), help="samples a second the player makes of it (default 16000, at twice the PCM clips' bit rate on the line; 8000 is theirs)")
@@ -82,6 +83,8 @@ def main():
     args = parser.parse_args()
     if not (0 <= args.drive <= 255 and 0 <= args.release <= 15):
         sys.exit("--drive is 1 to 255, --release 1 to 15")
+    if not 0 <= args.knee <= 255:
+        sys.exit("--knee is 1 to 255")
     raised = {}
     for item in args.raised:
         instrument, _, octaves = item.partition(":")
@@ -210,7 +213,7 @@ def main():
     out += struct.pack("<I", round(ticks_ms))
     # The order to start over from, for the alarm, which plays the tune
     # round and round.
-    out += struct.pack("<BB5hB3x", args.passes, args.rate // 16000 | (2 if args.bits == 16 else 0), *section, restart if restart < len(orders) else 0)
+    out += struct.pack("<BB5hBB2x", args.passes, args.rate // 16000 | (2 if args.bits == 16 else 0), *section, restart if restart < len(orders) else 0, args.knee)
     out += bytes(orders)
     tables = len(out) + 6 * len(patterns) + 80 * len(instruments)
     body = bytearray()

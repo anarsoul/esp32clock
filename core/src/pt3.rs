@@ -370,7 +370,7 @@ impl<'a> Tune<'a> {
             looping: false,
             ended: byte(m, POSITIONS) == 0,
             chip: Chip::new(byte(data, 4) & FINE != 0),
-            shaper: Shaper::new(byte(data, 5), byte(data, 6), true, core::array::from_fn(|i| word(data, 28 + 2 * i) as i16), byte(data, 7), true),
+            shaper: Shaper::new(byte(data, 5), byte(data, 6), true, core::array::from_fn(|i| word(data, 28 + 2 * i) as i16), byte(data, 7), true, 0),
         };
         tune.start();
         tune

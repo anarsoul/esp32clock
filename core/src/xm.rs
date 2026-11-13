@@ -54,8 +54,8 @@ pub const MAGIC: &[u8; 4] = b"XMC2";
 /// 8-bit step, `Tune::next_sample`), and its
 /// second-order section as five `i16` in Q14, b0 b1 b2 a1 a2, which
 /// the converter works out since the chip has no tangent; the order to
-/// start over from when the tune is played round and round; three
-/// spare.
+/// start over from when the tune is played round and round; the
+/// limiter's knee (0 for the shaper's own); two spare.
 const HEADER: usize = 32;
 
 /// Whether `data` is a converted module of the first layout, which
@@ -334,7 +334,7 @@ impl<'a> Tune<'a> {
             last: false,
             ended: false,
             channel: [Channel::default(); MAX_CHANNELS],
-            shaper: Shaper::new(byte(data, 10), byte(data, 11), byte(data, 17) & 1 != 0, core::array::from_fn(|i| word(data, 18 + 2 * i) as i16), byte(data, 16), byte(data, 17) & 2 != 0),
+            shaper: Shaper::new(byte(data, 10), byte(data, 11), byte(data, 17) & 1 != 0, core::array::from_fn(|i| word(data, 18 + 2 * i) as i16), byte(data, 16), byte(data, 17) & 2 != 0, byte(data, 29)),
             oversample: if byte(data, 17) & 1 == 0 { 4 } else { 2 },
         };
         tune.enter(0, 0);
@@ -1135,6 +1135,21 @@ mod tests {
             peak = peak.max((s as i32 / STEP).abs());
         }
         assert!((58..=64).contains(&peak), "{peak}");
+        // The header may put the limiter's knee above the mix: then the
+        // gain is a plain one, and the note at a quarter of the volume
+        // comes out at a quarter.
+        let peak_of = |d: &[u8]| {
+            let mut t = Tune::new(d);
+            let mut peak = 0;
+            while let Some(s) = t.next_sample() {
+                peak = peak.max((s as i32 / STEP).abs());
+            }
+            peak
+        };
+        let (mut loud, mut soft) = (data.clone(), quiet.clone());
+        (loud[29], soft[29]) = (64, 64);
+        let (loud, soft) = (peak_of(&loud), peak_of(&soft));
+        assert!(loud < 127 && (loud - 4 * soft).abs() <= 4, "{loud} {soft}");
         // With no high-pass asked for the fundamental stays: the output
         // is the square itself, at its 261 Hz and not above.
         let crossings = |d: &[u8]| {
