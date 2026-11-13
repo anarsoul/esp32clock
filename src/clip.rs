@@ -241,8 +241,13 @@ impl Sampler {
         player.rest(slot(SLOTS as u32 - 1));
         // The chunk the clip's last bit is in, once it has been written.
         let mut last = None;
+        // Time spent making the stream, for the log: a player's share
+        // of the processor.
+        let mut busy_us = 0u64;
         let mut write = |chunk: u32, last: &mut Option<u32>| {
+            let from = Instant::now();
             player.fill(slot(chunk));
+            busy_us += from.elapsed().as_micros();
             if last.is_none() && player.done() {
                 *last = Some(chunk);
             }
@@ -329,9 +334,10 @@ impl Sampler {
         release(pin);
         let (_, ring) = transfer.stop();
         self.ring = Some(ring);
+        let (busy, whole) = (busy_us / 1000, started.elapsed().as_millis());
         match cancelled {
-            Some(_) => info!("clip: cut short, {} underruns, {} stray positions", pacer.underruns(), pacer.strays()),
-            None => info!("clip: {chunks} chunks, {} underruns, {} stray positions", pacer.underruns(), pacer.strays()),
+            Some(_) => info!("clip: cut short, {} underruns, {} stray positions, {busy} of {whole} ms filling", pacer.underruns(), pacer.strays()),
+            None => info!("clip: {chunks} chunks, {} underruns, {} stray positions, {busy} of {whole} ms filling", pacer.underruns(), pacer.strays()),
         }
         cancelled
     }

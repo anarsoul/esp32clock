@@ -323,8 +323,9 @@ pub const JINGLE_BELLS: Melody = Melody {
 // and `CLIP_LOOPS` (whether a ringing alarm plays the clip round and
 // round with no gap), written by `build.rs` from `ALARM_CLIP`: the files named
 // there, in order. Each is raw PCM (8 bits unsigned, mono,
-// `clip::PCM_HZ` samples a second) or a beeper clip's run lengths behind
-// `clip::BEEPER_MAGIC`.
+// `clip::PCM_HZ` samples a second), a beeper clip's run lengths behind
+// `clip::BEEPER_MAGIC`, a tracker module (`xm::MAGIC`) or a SID tune
+// (`sid::MAGIC`).
 // The data is a `static`, so the image holds it once.
 include!(concat!(env!("OUT_DIR"), "/clips.rs"));
 
@@ -437,7 +438,7 @@ mod tests {
                 assert_eq!(m.duration_ms(), crate::clip::duration_ms(CLIP_DATA[k]));
                 assert!(!m.label.is_empty());
                 // Clips with a header are made from music written to loop.
-                let made_to = CLIP_DATA[k].starts_with(b"BPR") || CLIP_DATA[k].starts_with(b"XMC");
+                let made_to = CLIP_DATA[k].starts_with(b"BPR") || CLIP_DATA[k].starts_with(b"XMC") || CLIP_DATA[k].starts_with(b"SID");
                 assert!(CLIP_LOOPS[k] == made_to || std::env::var("ALARM_CLIP").is_ok_and(|v| v.contains(":loop") || v.contains(":once")), "{}", m.name);
                 continue;
             }

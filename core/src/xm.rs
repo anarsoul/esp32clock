@@ -42,6 +42,7 @@
 //! a jump back.
 
 use crate::clip::PCM_HZ;
+use crate::shape::Shaper;
 
 /// The first bytes of a converted module.
 pub const MAGIC: &[u8; 4] = b"XMC2";
@@ -111,24 +112,8 @@ const KEY_OFF: u8 = 97;
 /// The fade's full level.
 const FADE_FULL: u32 = 32768;
 
-/// The limiter: a level under this gets the full gain, one over it is
-/// brought down to it. One channel at full volume peaks at 32768
-/// before the filter, so this is 20 dB of drive, as the host's
-/// conversion gives a PCM clip.
-const LIMIT: i32 = 3000;
-/// The limiter lets go by a 128th a sample at `PCM_HZ`, 16 ms.
-const RELEASE_SHIFT: u32 = 7;
-/// What the limiter aims a peak at, of a full scale of 127: just that.
-/// With these two the test modules come out at the RMS the host's
-/// conversion of them has, 0.42 of full scale. A release of 4 ms and
-/// peaks aimed a quarter over full scale, the excess clipped, are 3 dB
-/// more (0.60, a sixth of the samples at the rails) and were the
-/// default while the tunes ran at 8 kHz; at 16 kHz the user's ear
-/// took the cleaner one (2026-11-12). A clip may still ask for its own.
-const DRIVE: i32 = 127;
-
 /// What one 8-bit step is in the samples the tune gives.
-pub const STEP: i32 = 256;
+pub use crate::shape::STEP;
 
 /// Whether `data` is a converted module.
 pub const fn is_tune(data: &[u8]) -> bool {
@@ -286,24 +271,6 @@ struct Channel {
     auto_depth: u32,
 }
 
-/// A second-order section, transposed direct form II.
-#[derive(Clone, Copy, Default)]
-struct Biquad {
-    z1: i64,
-    z2: i64,
-}
-
-impl Biquad {
-    /// `k` is b0, b1, b2, a1, a2 in Q14.
-    fn run(&mut self, k: &[i64; 5], x: i32) -> i32 {
-        let x = x as i64;
-        let y = (k[0] * x + self.z1) >> 14;
-        self.z1 = k[1] * x - k[3] * y + self.z2;
-        self.z2 = k[2] * x - k[4] * y;
-        y as i32
-    }
-}
-
 /// A module being played.
 pub struct Tune<'a> {
     d: &'a [u8],
@@ -333,18 +300,10 @@ pub struct Tune<'a> {
     last: bool,
     ended: bool,
     channel: [Channel; MAX_CHANNELS],
-    /// The high-pass: its section, how many of them, and their states.
-    highpass: [i64; 5],
-    passes: usize,
-    filter: [Biquad; 2],
-    envelope: i32,
-    drive: i32,
-    release: u32,
+    /// The high-pass and the limiter the mix ends in.
+    shaper: Shaper,
     /// Mixed samples an output sample: 4 at `PCM_HZ`, 2 at twice it.
     oversample: u32,
-    /// Whether the samples keep what the limiter's division leaves
-    /// under the 8-bit step.
-    wide: bool,
 }
 
 impl<'a> Tune<'a> {
@@ -375,22 +334,8 @@ impl<'a> Tune<'a> {
             last: false,
             ended: false,
             channel: [Channel::default(); MAX_CHANNELS],
-            highpass: core::array::from_fn(|i| word(data, 18 + 2 * i) as i16 as i64),
-            passes: (byte(data, 16) as usize).min(2),
-            filter: [Biquad::default(); 2],
-            envelope: 0,
-            drive: match byte(data, 10) {
-                0 => DRIVE,
-                d => d as i32,
-            },
-            // The release is given for `PCM_HZ`: a shift more at twice the
-            // rate is the same time.
-            release: match byte(data, 11) {
-                0 => RELEASE_SHIFT,
-                r => (r as u32).min(14),
-            } + (byte(data, 17) & 1) as u32,
+            shaper: Shaper::new(byte(data, 10), byte(data, 11), byte(data, 17) & 1 != 0, core::array::from_fn(|i| word(data, 18 + 2 * i) as i16), byte(data, 16), byte(data, 17) & 2 != 0),
             oversample: if byte(data, 17) & 1 == 0 { 4 } else { 2 },
-            wide: byte(data, 17) & 2 != 0,
         };
         tune.enter(0, 0);
         tune
@@ -423,7 +368,7 @@ impl<'a> Tune<'a> {
             self.pool -= self.tempo as i32;
             sum += self.mix();
         }
-        Some(self.shape(sum / self.oversample as i32))
+        Some(self.shaper.run(sum / self.oversample as i32))
     }
 
     fn instrument(&self, number: u8) -> Option<Instrument<'a>> {
@@ -812,21 +757,6 @@ impl<'a> Tune<'a> {
             }
         }
         sum
-    }
-
-    /// The high-pass, as often as the clip asks, and the limiter.
-    fn shape(&mut self, x: i32) -> i16 {
-        let mut y = x;
-        for filter in &mut self.filter[..self.passes] {
-            y = filter.run(&self.highpass, y);
-        }
-        self.envelope = (self.envelope - (self.envelope >> self.release)).max(y.abs());
-        let gain = self.envelope.max(LIMIT);
-        if self.wide {
-            (y as i64 * (self.drive * STEP) as i64 / gain as i64).clamp(-127 * STEP as i64, 127 * STEP as i64) as i16
-        } else {
-            ((y * self.drive / gain).clamp(-127, 127) * STEP) as i16
-        }
     }
 }
 

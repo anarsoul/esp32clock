@@ -26,8 +26,10 @@ from `http://<ip>/update`; its settings survive the update.
   authors'; see `clips/README.md`.
 - `ALARM_CLIP` at build time chooses other clips, or none: raw PCM
   (`scripts/wav2pcm.sh`), a ZX Spectrum beeper recording
-  (`scripts/zxbeeper.py`) or a FastTracker 2 module
-  (`scripts/xm2clip.py`).
+  (`scripts/zxbeeper.py`), a FastTracker 2 module
+  (`scripts/xm2clip.py`) or a Commodore 64 tune (`scripts/sid2clip.py`,
+  from a PSID file: the firmware has a SID chip of its own to play the
+  tune's register writes through).
 
 ### Changed
 

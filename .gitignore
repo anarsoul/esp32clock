@@ -47,3 +47,6 @@ wav/
 
 # ZX Spectrum tapes for the beeper clip, and the clips made from them
 tap/
+
+# Commodore 64 tunes for the SID player, and the clips made from them
+sid/

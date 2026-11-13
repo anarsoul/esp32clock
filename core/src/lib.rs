@@ -30,6 +30,8 @@ pub mod ota;
 pub mod panel;
 pub mod sensors;
 pub mod settings;
+pub mod shape;
+pub mod sid;
 pub mod tz;
 pub mod ui;
 pub mod xm;

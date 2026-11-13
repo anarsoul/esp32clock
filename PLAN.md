@@ -7332,3 +7332,160 @@ this day's hearings (the 16-bit samples, the bit rates, the converter
 and its level), not the 3.2 k of 2026-11-12 that these entries first
 said; the user put it right, and the entries and `config.rs` now say
 5.1 k. That is the README's optional mod as written.
+
+### Commodore 64 tunes: a SID on the chip — built 2026-11-13; heard on martin-clock, 4 steps a sample chosen by the user
+
+The user's next source: `.sid` files, with one to start from in
+`sid/`: "Donkey Kong" by Sascha Zeidler (Linus), 2016 Oxyron. A PSID
+v2, 3608 bytes: 6502 code loaded at $8900, init there and play at
+$8903, one song, called once a frame (PAL), written for the 8580.
+
+**What a `.sid` is.** Not notes but the program that played them: the
+C64's own player routine and its data, to be called fifty times a
+second, each call writing some of the SID chip's 25 registers. So two
+things are needed, a 6502 to run the routine and a SID to make sound
+of the registers.
+
+**The 6502 runs on the host, the SID on the chip.** As the beeper
+clips are made (`scripts/zxbeeper.py` runs the Spectrum's code in an
+emulator and keeps what reached the speaker), `scripts/sid2clip.py`
+runs the tune's code in a 6502 of its own (Python, no dependency: the
+documented instructions and the undocumented ones players use) and
+keeps what reached the SID: the register writes of each frame, in
+order, less the ones that change nothing. The clock gets that record
+and a SID to play it through. Not a 6502 on the chip: it would want
+the tune's 64 KB address space in RAM (or a paged copy of what the
+code writes), a routine of unknown length on the interrupt executor,
+and it buys nothing a record does not have but endlessness, which the
+converter gives back: it hashes the machine's memory after every call
+and, when a state comes round again, marks where the tune loops. A
+record is 1 or 2 bytes a write; a few hundred bytes a second.
+
+**The clip, `SID1`.** A 40-byte header: the magic, the chip's model
+(6581 or 8580, for the filter's curve), the limiter's drive and
+release and the high-pass as a module has them, the C64's clock in Hz
+(985 248 PAL, 1 022 727 NTSC), the length in ms, the clock cycles a
+frame (19 656 for a PAL screen; a tune on a CIA timer has the
+timer's), the frame count, and where in the file the loop starts over.
+Then the frames: pairs of register and value, then a byte with the top
+bit set that says how many frames pass before the next writes (1 to
+128, so rests cost nothing). The writes of a frame are applied
+together at its start; a routine does them within a few hundred
+microseconds. A tune with no loop found is cut at `--seconds` and
+ends with a frame that zeroes the registers, so going round to the
+start finds the chip as the first pass did.
+
+**The SID, `core/src/sid.rs`.** Written for the clock from the chip's
+published behaviour, not cycle by cycle: the oscillators and envelopes
+are stepped at 64 kHz (15.4 clock cycles a step) and four steps are
+averaged to a 16 kHz sample, which then gets the bass cut and the
+limiter the modules get. Per voice: the 24-bit phase accumulator;
+triangle (with ring modulation), sawtooth, pulse with its width, noise
+from the 23-bit shift register clocked off accumulator bit 19, and
+combined waveforms as the AND of their parts (the 8580 is near that;
+a 6581's are quieter); hard sync; the test bit; the envelope with the
+chip's sixteen rate periods, the exponential decay in its six steps,
+and the rate counter's wrap at 32 768 that makes a note come late when
+a slower rate is swapped for a faster one (players' "hard restart"
+exists because of it, so it is kept). The filter is the two-integrator
+loop with the register's resonance and low, band and high-pass taps,
+the voices routed into or past it and voice 3's mute; the cutoff is
+linear to 12.5 kHz for an 8580 and a typical 6581's curve from a
+17-point table, held under 10 kHz, where the loop at 64 kHz is stable
+and the output, 8 kHz wide, has nothing anyway. The master volume.
+Not played: samples through the volume register (the record keeps a
+frame's writes, not their timing), the paddles, and reads of voice 3
+(`OSC3`, `ENV3`: a routine that modulates with them gets zero on the
+host; the converter says when one reads them).
+
+*Why 64 kHz.* Point-sampling a sawtooth or a pulse aliases: at 64 kHz
+a 2 kHz note's fold-back is some 30 dB down, under what the buzzer
+does to it. The cost is about a module's (three voices and a filter
+at 64 kHz against four to eight channels at 32); `OVERSAMPLE` is one
+constant should the ear or the underrun count ask for another figure.
+
+**Shared with the modules.** The high-pass and limiter move out of
+`xm.rs` into `core/src/shape.rs` (`Shaper`), unchanged, and both
+players end in it. `clip::Player` gets a third body, the build takes
+`SID` for a clip made to loop, `melody.rs` needs nothing.
+
+**The converter.** `scripts/sid2clip.py tune.sid out.sidc [--song N]
+[--seconds S] [--model 6581|8580] [--highpass 300 --passes 1]
+[--drive N --release N]`. PSID only: an RSID needs the whole machine
+(its interrupts, the KERNAL), and a PSID with no play address the
+interrupt vectors; both are refused with the reason. It prints the
+title, author, model, frame rate, the loop it found and the bytes a
+second, and what the tune does that the clock will not play.
+
+**Tests (`core/`).** A register's frequency comes out at its pitch;
+the pulse's duty is its width; the triangle is one, and ring
+modulation inverts it by the other voice; sync restarts the cycle;
+noise is noise at the rate bit 19 gives; the envelope's attack, decay
+to the sustain level and release take the chip's times, and the late
+note of the rate-counter wrap; the filter passes and stops what its
+mode says and stays bounded at every cutoff and resonance; the frames
+land on their times, a rest costs a byte, the loop goes round where
+the header says and a tune played once ends on its last frame; the
+shaping is the modules'. The built-in clip, when a build has one,
+plays to its length within range.
+
+**To hear.** Donkey Kong as a fourth clip on white-clock beside the
+three. The file stays in `sid/` and the clip under `target/` until the
+user says whether it is to be a default clip: it is someone else's
+music, as the others are, and would need its entry in
+`clips/README.md`.
+
+**Built, 2026-11-13.** As planned, with two changes. The envelopes
+step once an output sample, not once a chip step, and the steps a
+sample are the clip's to say (header byte 38, `--steps 2`; 4 without).
+
+*The converter.* Donkey Kong: 4162 frames, 83.0 s, going round from
+37.1 s (the state after frame 1860 comes again after the last); 62 KB,
+748 bytes a second, most of it the pulse widths, which the tune sweeps
+every frame. More than the estimate; a record of differences would
+pack it, if the size comes to matter.
+
+*Against libsidplayfp* (3.1.2 on the host, reSIDfp, through a
+throwaway C++ program in the scratchpad; not in the repository). The
+registers it shows after each stretch of 19 656 cycles are the
+record's frames, in order, over the whole tune (its `play` runs a
+little short of what it is asked, so a state repeats every dozen
+samples; compared with a two-pointer walk). Its 16 kHz render and the
+clock's mix before the shaping: loudness envelopes in 10 ms steps
+correlate at 0.71 with a lag of 10 ms and no stretch, and the energy
+in seven bands from 50 Hz to 8 kHz agrees within 1 dB up to 2.4 kHz
+and is 1.5 dB under the reference above (the four-step average's
+droop).
+
+*On the bench* (test-clock, no buzzer, `/play`, the serial log's
+`clip:` line, which now ends with the time spent filling the ring):
+
+| clip | filling | share |
+| --- | --- | --- |
+| Halftime, a module of four channels | 5.1 of 43.5 s | 12 % |
+| Donkey Kong, 4 steps a sample, envelopes every step | 23.1 of 83.0 s | 28 % |
+| the same, envelopes every sample | 21.6 s | 26 % |
+| Donkey Kong, 2 steps a sample | 14.2 s | 17 % |
+
+No underruns or stray positions in any. The chip runs this code at
+some five cycles an instruction, modules included, so the estimate of
+"about a module's" cost was out by two. At 26 % a chunk is 8 ms on
+the interrupt executor every 32; HTTP answered through it.
+
+*To hear.* Martin-clock and test-clock have `v0.4-17-gd9830a5-dirty`
+with Trantor, Halftime, Keygen, Futurama, and Donkey Kong twice: A at
+4 steps a sample, B at 2 (half the time, more aliasing on high
+notes). Stack 50.5 KB, image 1609 KB with Futurama (the slot is 1920).
+Owed: the user's ear on A against B and on the tune at all; whether it
+becomes a default clip; a 6581 tune and one that uses ring modulation
+or sync against the reference; white-clock.
+
+**Heard, 2026-11-13: "A is better".** Four steps of the chip a sample
+stays the default, at 26 % of the processor while a tune plays;
+`--steps 2` remains the clip's way to halve that. Still owed: whether
+Donkey Kong becomes a default clip, a 6581 tune and one with ring
+modulation or sync against the reference, white-clock.
+
+**Donkey Kong stays local** (the user, 2026-11-13): the tune and its
+clip are in `sid/`, ignored by git as `wav/` and `tap/` are, and the
+user's `.env` names `sid/donkey_kong.sidc` after Futurama.

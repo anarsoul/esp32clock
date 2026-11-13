@@ -38,6 +38,7 @@
 use core::ops::Range;
 
 use crate::config;
+use crate::sid;
 use crate::xm;
 
 /// Samples per second of a clip.
@@ -117,6 +118,8 @@ enum Body<'a> {
     Pcm(&'a [u8]),
     /// A tracker module, played as it goes (`xm::Tune`).
     Tune(xm::Tune<'a>),
+    /// A Commodore 64 tune, the same (`sid::Tune`).
+    Sid(sid::Tune<'a>),
 }
 
 pub struct Player<'a> {
@@ -164,6 +167,11 @@ impl<'a> Player<'a> {
         Self::with(Body::Tune(tune), None)
     }
 
+    /// A player of a SID tune.
+    pub fn sid(tune: sid::Tune<'a>) -> Self {
+        Self::with(Body::Sid(tune), None)
+    }
+
     /// Write the stream as samples for the chip's PCM-to-PDM converter
     /// (`fill_samples`), which makes `ratio` bits of each, or as bits.
     pub fn for_converter(mut self, ratio: Option<u32>) -> Self {
@@ -185,6 +193,7 @@ impl<'a> Player<'a> {
             Body::Pcm(pcm) if looping && !pcm.is_empty() => self.len = None,
             Body::Pcm(_) => {}
             Body::Tune(tune) => tune.set_looping(looping),
+            Body::Sid(tune) => tune.set_looping(looping),
         }
         self
     }
@@ -204,6 +213,7 @@ impl<'a> Player<'a> {
                 Body::Pcm(pcm) if self.looping && !pcm.is_empty() => Some(pcm_level(pcm[(k - RAMP) % pcm.len()])),
                 Body::Pcm(pcm) => pcm.get(k - RAMP).copied().map(pcm_level),
                 Body::Tune(tune) => tune.next_sample().map(|s| s as i32 * step / xm::STEP),
+                Body::Sid(tune) => tune.next_sample().map(|s| s as i32 * step / xm::STEP),
             };
             match level {
                 Some(level) => return Some(level),
@@ -219,6 +229,7 @@ impl<'a> Player<'a> {
         match &self.body {
             Body::Pcm(_) => self.pcm_hz,
             Body::Tune(tune) => tune.rate(),
+            Body::Sid(tune) => tune.rate(),
         }
     }
 
@@ -450,6 +461,8 @@ pub const fn duration_ms(data: &[u8]) -> u32 {
         (ticks as u64 * 1000 / BEEPER_TICK_HZ as u64) as u32
     } else if xm::is_tune(data) {
         xm::duration_ms(data)
+    } else if sid::is_tune(data) {
+        sid::duration_ms(data)
     } else {
         (pcm_samples(data).len() as u64 * 1000 / pcm_rate(data) as u64) as u32
     }
@@ -569,7 +582,7 @@ impl RunSource for Beeper<'_> {
 /// A clip of any kind as the line's bitstream.
 #[allow(clippy::large_enum_variant, reason = "there is no heap to box the tune's state in, and one clip plays at a time")]
 pub enum Stream<'a> {
-    /// PCM, or a tracker module through the same modulator.
+    /// PCM, or a tracker module or a SID tune through the same modulator.
     Pcm(Player<'a>),
     Beeper(Runs<Beeper<'a>>),
 }
@@ -582,6 +595,8 @@ impl<'a> Stream<'a> {
             Self::Beeper(Runs::new(Beeper::new(data).looped(looping)))
         } else if xm::is_tune(data) {
             Self::Pcm(Player::tune(xm::Tune::new(data)).looped(looping).for_converter(CONVERTER))
+        } else if sid::is_tune(data) {
+            Self::Pcm(Player::sid(sid::Tune::new(data)).looped(looping).for_converter(CONVERTER))
         } else {
             Self::Pcm(Player::pcm(data).looped(looping).for_converter(CONVERTER))
         }
@@ -1058,7 +1073,7 @@ mod tests {
     }
 
     /// Not a test either: with `CLIP_PCM_DUMP=file`, writes the samples a
-    /// built-in tracker module gives the modulator, 8 bits unsigned at
+    /// built-in tracker module or SID tune gives the modulator, 8 bits unsigned at
     /// `PCM_HZ`, to compare the player with another's render.
     #[test]
     #[ignore]
@@ -1068,13 +1083,21 @@ mod tests {
         let data = crate::melody::CLIP_DATA[index];
         // `CLIP_RAW` asks for the mix before the shaping, as `i16`.
         if std::env::var("CLIP_RAW").is_ok() {
-            let out: Vec<u8> = xm::raw_mix(data).iter().flat_map(|s| s.to_le_bytes()).collect();
+            let mix = if sid::is_tune(data) { sid::raw_mix(data) } else { xm::raw_mix(data) };
+            let out: Vec<u8> = mix.iter().flat_map(|s| s.to_le_bytes()).collect();
             return std::fs::write(path, out).unwrap();
         }
-        let mut tune = xm::Tune::new(data);
         let mut out = Vec::new();
-        while let Some(s) = tune.next_sample() {
-            out.push((128 + s as i32 / xm::STEP) as u8);
+        if sid::is_tune(data) {
+            let mut tune = sid::Tune::new(data);
+            while let Some(s) = tune.next_sample() {
+                out.push((128 + s as i32 / xm::STEP) as u8);
+            }
+        } else {
+            let mut tune = xm::Tune::new(data);
+            while let Some(s) = tune.next_sample() {
+                out.push((128 + s as i32 / xm::STEP) as u8);
+            }
         }
         std::fs::write(path, out).unwrap();
     }
