@@ -115,16 +115,16 @@ const FADE_FULL: u32 = 32768;
 /// before the filter, so this is 20 dB of drive, as the host's
 /// conversion gives a PCM clip.
 const LIMIT: i32 = 3000;
-/// The limiter lets go by a 32nd a sample, 4 ms: fast enough that the
-/// level is back at the top between a note's peaks, which is where the
-/// loudness is.
-const RELEASE_SHIFT: u32 = 5;
-/// What the limiter aims a peak at, of a full scale of 127: a quarter
-/// over it, the excess clipped. With a release of 16 ms and no excess
-/// the test module came out at the RMS the host's conversion of it has,
-/// 0.42 of full scale; the user asked for more (2026-11-12), and this
-/// is 0.59, 3 dB, with a sixth of the samples at the rails.
-const DRIVE: i32 = 160;
+/// The limiter lets go by a 128th a sample at `PCM_HZ`, 16 ms.
+const RELEASE_SHIFT: u32 = 7;
+/// What the limiter aims a peak at, of a full scale of 127: just that.
+/// With these two the test modules come out at the RMS the host's
+/// conversion of them has, 0.42 of full scale. A release of 4 ms and
+/// peaks aimed a quarter over full scale, the excess clipped, are 3 dB
+/// more (0.60, a sixth of the samples at the rails) and were the
+/// default while the tunes ran at 8 kHz; at 16 kHz the user's ear
+/// took the cleaner one (2026-11-12). A clip may still ask for its own.
+const DRIVE: i32 = 127;
 
 /// Whether `data` is a converted module.
 pub const fn is_tune(data: &[u8]) -> bool {

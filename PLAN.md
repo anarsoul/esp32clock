@@ -6990,3 +6990,12 @@ a header, made from music that loops), false for PCM, and
 The buzzer task asks for the gapless loop only for those; the others
 ring as the note melodies do, a pass, `repeat_gap_ms` (1.5 s), a pass.
 Flashed to white-clock with the three default clips and Futurama.
+
+**The modules' volume, heard again at 16 kHz, 2026-11-12.** Side by
+side on white-clock, both tunes with the limiter as it was first
+(peaks at full scale, 16 ms release: RMS 0.42, 2 to 3 % of samples at
+the rails) and raised (a quarter over, 4 ms: 0.60, 15 %): the user
+takes the first now that the rate is higher. `xm::DRIVE` is 127 and
+`RELEASE_SHIFT` 7 again; the clips in `clips/` name neither and so
+follow, unchanged as files. `--drive 160 --release 5` is the louder
+one for a clip that wants it.
