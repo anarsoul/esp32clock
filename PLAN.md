@@ -8086,3 +8086,56 @@ the clocks' buzzers have heard. Owed: a clock's own S8550 and buzzer
 at 256, which only the breadboard stage has had, and the sixth build
 above (Silence at 128 with the base resistor in, the four limiter
 settings), which was built and not flashed.
+
+**8 MHz and 31 250 samples a second: built 2026-11-13, not heard**
+("Let's try bumping bitrate to 8MHz and sampling rate accordingly for
+pt3, sid and MODs", the user). At 256 bits a sample the converter's
+whole dividers give 8 MHz exactly, 160 MHz over 2 and 10, for 31 250
+samples a second; 32 000 is not among them (the nearest is 34 722,
+8.5 % sharp), so the rate is `clip::FAST_HZ`, 31 250, and the players
+work at it, not at a nominal 32 kHz the line would miss.
+
+The rate is the clip's, in its header, so a clip converted before
+plays as before and both can be in one firmware for the ear:
+
+| clip | where | player |
+| --- | --- | --- |
+| module | byte 17 bit 2 | mixes at 62 500 and averages two, as 16 kHz does at 32 000: twice the work |
+| SID tune | byte 39 = 1 | the chip stepped `steps` times a sample; the converter writes 2 unless told, 62 500 a second, the work of 16 kHz at four |
+| PT3 module | flags bit 2 | the chip's mean over each sample's ticks, as before |
+
+Each converter takes `--rate 31250` and works out the high-pass (and
+`pt32clip.py` the noise's low-pass) for it; the limiter's release is
+two shifts on from 8 kHz's for the same time (`Shaper::new`'s
+`octaves`). The ring's chunk is 512 samples, 16.4 ms, as a 16 kHz
+clip's is 32: half the time ahead of the DMA, 230 ms. A build at
+`CLIP_PDM_BITS=384` cannot make 12 MHz and refuses such a clip with a
+line in the log; at 128 the line is 4 MHz.
+
+To look for on the clock: the `clip:` line's share of the processor
+(a four-channel module took 12 % at 16 kHz) and its underruns, pitch
+against the 16 kHz clip of the same tune, and whether the stage
+passes pulses of 125 ns at all: the breadboard's needed its base
+resistor at 4 MHz.
+
+PCM clips take the rate too (the user: "re-create all local clips in
+pt3 wav and sid"): `PCM1` with 31 250 in its header, `scripts/wav2pcm.sh
+… 31250`, 31 KB of flash a second. Re-created in place at 31 250, with
+the options each was made with (the three tunes' old files were the
+converters' output byte for byte, checked first): `sid/donkey_kong.sidc`
+(`--mute 2`), `pt3/hibernation.pt3c` and `pt3/synchronization.pt3c`
+(`--restart`), `pt3/ppk.pt3c`, `wav/futurama.pcm` (the whole of
+`futurama_theme.wav`, 864 KB). Not re-created: the other files in
+`wav/`, experiments whose commands are not on record, and `clips/`,
+which stay at 16 kHz; `mods/halftime-31k.xmc` and `mods/keygen-31k.xmc`
+are the two modules at the new rate. The build with all seven is
+1818 KB of the slot's 1920.
+
+**Heard and kept, 2026-11-13** ("Sounds good, both bench with
+headphones and white clock. Keeping it as the default", the user).
+The three converters make a clip at 31 250 unless told `--rate 16000`
+(`sid2clip.py` then steps the chip twice a sample unless told
+`--steps 4`), and `clips/halftime.xmc` and `clips/keygen.xmc` are
+re-made with them. `scripts/wav2pcm.sh` stays at 16 000 unless told:
+PCM at 31 250 is 31 KB of flash a second. Not read off the clock: the
+`clip:` line's share of the processor for a module at this rate.

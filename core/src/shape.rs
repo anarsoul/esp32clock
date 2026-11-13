@@ -66,8 +66,9 @@ pub struct Shaper {
 impl Shaper {
     /// As a clip's header gives them: the limiter's `drive` and
     /// `release` (0 for the defaults; the release is given for
-    /// `clip::PCM_HZ`, and `twice` says the samples come at twice that,
-    /// where a shift more is the same time), the high-pass's section in
+    /// `clip::PCM_HZ`, and `octaves` says how many times the samples'
+    /// rate is twice that, or about, where a shift more each is the
+    /// same time), the high-pass's section in
     /// Q14 (b0 b1 b2 a1 a2, worked out by the converter since the chip
     /// has no tangent) and how many times it is applied (0 to 2), and
     /// whether the samples are to be finer than the 8-bit step; and
@@ -75,7 +76,7 @@ impl Shaper {
     /// 32 is one voice at full level, and a knee above a tune's own
     /// peak is the limiter off, a plain gain, for a speaker, where the
     /// buzzer's 20 dB of drive is heard as overdrive.
-    pub fn new(drive: u8, release: u8, twice: bool, section: [i16; 5], passes: u8, wide: bool, knee: u8) -> Self {
+    pub fn new(drive: u8, release: u8, octaves: u32, section: [i16; 5], passes: u8, wide: bool, knee: u8) -> Self {
         Self {
             highpass: section.map(|k| k as i64),
             passes: (passes as usize).min(2),
@@ -88,7 +89,7 @@ impl Shaper {
             release: match release {
                 0 => RELEASE_SHIFT,
                 r => (r as u32).min(14),
-            } + twice as u32,
+            } + octaves,
             knee: match knee {
                 0 => LIMIT,
                 k => k as i32 * 1024,

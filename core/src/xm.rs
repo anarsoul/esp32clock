@@ -41,7 +41,7 @@
 //! The tune is played through once: the order list to its end, or to
 //! a jump back.
 
-use crate::clip::PCM_HZ;
+use crate::clip::{FAST_HZ, PCM_HZ};
 use crate::shape::Shaper;
 
 /// The first bytes of a converted module.
@@ -72,12 +72,16 @@ const ENVELOPE_POINTS: usize = 12;
 /// Channels played; the converter refuses a module with more.
 pub const MAX_CHANNELS: usize = 8;
 
-/// The mixing rate, whatever the output's: four times the PCM clips'
-/// 8 kHz, and twice the 16 kHz a clip may ask for instead.
+/// The mixing rate: four times the PCM clips' 8 kHz, and twice the
+/// 16 kHz a clip may ask for instead.
 const MIX_HZ: u32 = PCM_HZ * 4;
-/// A tick is 2.5 / tempo seconds: each mixed sample takes `tempo` out
-/// of a pool this large.
-const TICK_POOL: i32 = (MIX_HZ * 5 / 2) as i32;
+/// And for a clip at `FAST_HZ`: twice that.
+const FAST_MIX_HZ: u32 = FAST_HZ * 2;
+/// The header's byte 17: the samples at twice `PCM_HZ`, finer than the
+/// 8-bit step, at `FAST_HZ`.
+const TWICE: u8 = 1;
+const WIDE: u8 = 2;
+const FAST: u8 = 4;
 
 /// Period units a semitone, and the period of the lowest note.
 const SEMITONE: i32 = 64;
@@ -293,6 +297,9 @@ pub struct Tune<'a> {
     /// A jump or a break read on this row: the order and row to go to.
     go: Option<(usize, u16)>,
     pool: i32,
+    /// Mixed samples a second. A tick is 2.5 / tempo seconds: each
+    /// mixed sample takes `tempo` out of a pool of 2.5 times this.
+    mix_hz: u32,
     /// Whether the tune goes round and round: it follows a jump back,
     /// and from the end of the order list it starts over.
     looping: bool,
@@ -312,6 +319,9 @@ impl<'a> Tune<'a> {
         let order_len = byte(data, 7) as usize;
         let patterns = byte(data, 8) as usize;
         let patterns_at = HEADER + order_len;
+        let flags = byte(data, 17);
+        // How many times the rate is twice the PCM clips', for the limiter.
+        let octaves = if flags & FAST != 0 { 2 } else { (flags & TWICE) as u32 };
         let mut tune = Self {
             d: data,
             channels: (byte(data, 4) as usize).min(MAX_CHANNELS),
@@ -334,8 +344,9 @@ impl<'a> Tune<'a> {
             last: false,
             ended: false,
             channel: [Channel::default(); MAX_CHANNELS],
-            shaper: Shaper::new(byte(data, 10), byte(data, 11), byte(data, 17) & 1 != 0, core::array::from_fn(|i| word(data, 18 + 2 * i) as i16), byte(data, 16), byte(data, 17) & 2 != 0, byte(data, 29)),
-            oversample: if byte(data, 17) & 1 == 0 { 4 } else { 2 },
+            mix_hz: if flags & FAST != 0 { FAST_MIX_HZ } else { MIX_HZ },
+            shaper: Shaper::new(byte(data, 10), byte(data, 11), octaves, core::array::from_fn(|i| word(data, 18 + 2 * i) as i16), byte(data, 16), flags & WIDE != 0, byte(data, 29)),
+            oversample: if flags & (TWICE | FAST) == 0 { 4 } else { 2 },
         };
         tune.enter(0, 0);
         tune
@@ -346,10 +357,15 @@ impl<'a> Tune<'a> {
         self.looping = looping;
     }
 
-    /// Samples a second `next_sample` gives: `PCM_HZ`, or twice it for a
-    /// clip that asks.
+    /// What a tick's pool holds; see `mix_hz`.
+    fn tick_pool(&self) -> i32 {
+        (self.mix_hz * 5 / 2) as i32
+    }
+
+    /// Samples a second `next_sample` gives: `PCM_HZ`, or twice it or
+    /// `FAST_HZ` for a clip that asks.
     pub fn rate(&self) -> u32 {
-        MIX_HZ / self.oversample
+        self.mix_hz / self.oversample
     }
 
     /// The next sample, signed, in `STEP`ths of the 8-bit step a PCM
@@ -360,7 +376,7 @@ impl<'a> Tune<'a> {
         for _ in 0..self.oversample {
             if self.pool <= 0 {
                 self.step_tick();
-                self.pool += TICK_POOL;
+                self.pool += self.tick_pool();
             }
             if self.ended {
                 return None;
@@ -700,6 +716,7 @@ impl<'a> Tune<'a> {
     fn settle(&mut self, c: usize) {
         let instrument = self.instrument(self.channel[c].instrument);
         let global = self.global as u32;
+        let mix_hz = self.mix_hz;
         let ch = &mut self.channel[c];
         let level = match instrument {
             Some(i) => Self::envelope(ch, i),
@@ -724,7 +741,7 @@ impl<'a> Tune<'a> {
         let (octave, rest) = (exponent.div_euclid(OCTAVE), exponent.rem_euclid(OCTAVE));
         // Hz in Q15, then a step in 16.16 at the mixing rate.
         let hz = C4_HZ as u64 * POW[rest as usize] as u64;
-        let step = (hz << 1) / MIX_HZ as u64;
+        let step = (hz << 1) / mix_hz as u64;
         ch.step = (if octave >= 0 { step << octave.min(16) } else { step >> (-octave).min(16) }).min(u32::MAX as u64) as u32;
     }
 
@@ -772,7 +789,7 @@ pub fn raw_mix(data: &[u8]) -> Vec<i16> {
         for _ in 0..t.oversample {
             if t.pool <= 0 {
                 t.step_tick();
-                t.pool += TICK_POOL;
+                t.pool += t.tick_pool();
             }
             if t.ended {
                 return out;
@@ -903,7 +920,7 @@ mod tests {
         loop {
             if t.pool <= 0 {
                 t.step_tick();
-                t.pool += TICK_POOL;
+                t.pool += t.tick_pool();
             }
             if t.ended {
                 return out;
@@ -1179,6 +1196,18 @@ mod tests {
         let ups = out[4000..].windows(2).filter(|w| w[0] <= 0 && w[1] > 0).count() as f64 * 2.0 * PCM_HZ as f64 / (out.len() - 4000) as f64;
         assert!((ups - 261.3).abs() < 3.0, "{ups}");
         assert!(out[4000..].iter().map(|s| s.abs()).max().unwrap() >= 120);
+        // At the fast rate: 625 samples a tick, the same pitch and level.
+        fast[17] = FAST;
+        let mut t = Tune::new(&fast);
+        assert_eq!(t.rate(), FAST_HZ);
+        let mut out = Vec::new();
+        while let Some(s) = t.next_sample() {
+            out.push(s as i32 / STEP);
+        }
+        assert_eq!(out.len(), 16 * 6 * 625);
+        let ups = out[8000..].windows(2).filter(|w| w[0] <= 0 && w[1] > 0).count() as f64 * FAST_HZ as f64 / (out.len() - 8000) as f64;
+        assert!((ups - 261.3).abs() < 3.0, "{ups}");
+        assert!(out[8000..].iter().map(|s| s.abs()).max().unwrap() >= 120);
         // A tune of rests is silence, exactly.
         let rests = module(2, 6, 125, &[0], &[vec![vec![EMPTY, EMPTY]; 8]], &[square(32)]);
         let mut t = Tune::new(&rests);

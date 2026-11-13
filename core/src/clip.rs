@@ -44,6 +44,10 @@ use crate::xm;
 
 /// Samples per second of a clip.
 pub const PCM_HZ: u32 = 8_000;
+/// The rate a tune's clip may ask for beyond twice that: what the
+/// chip's converter makes of 8 Mbit/s at 256 bits a sample, 160 MHz
+/// over whole dividers (`converter_clock`), which 32 kHz is not.
+pub const FAST_HZ: u32 = 31_250;
 /// Bits per second on the line.
 pub const BIT_RATE: u32 = config::CLIP_KBPS * 1000;
 /// Bits per PCM sample.
@@ -447,7 +451,7 @@ pub const fn converter_clock(sample_rate: u32, ratio: u32) -> (u32, u32) {
 
 /// The first bytes of a PCM clip at another rate than `PCM_HZ`: the
 /// magic, then the samples a second as a little-endian `u32`, which
-/// must be `PCM_HZ` or twice it. PCM with no header is at `PCM_HZ`.
+/// must be `PCM_HZ`, twice it or `FAST_HZ`. PCM with no header is at `PCM_HZ`.
 /// The modulator writes the same bits a sample either way, so the line
 /// runs twice as fast for the higher rate (`Stream::bit_rate`).
 pub const PCM_MAGIC: &[u8; 4] = b"PCM1";
@@ -455,10 +459,12 @@ const PCM_HEADER: usize = 8;
 
 /// Samples a second of the PCM clip `data`.
 pub const fn pcm_rate(data: &[u8]) -> u32 {
-    if has_magic(data, PCM_MAGIC, PCM_HEADER) && u32::from_le_bytes([data[4], data[5], data[6], data[7]]) == 2 * PCM_HZ {
-        2 * PCM_HZ
-    } else {
-        PCM_HZ
+    if !has_magic(data, PCM_MAGIC, PCM_HEADER) {
+        return PCM_HZ;
+    }
+    match u32::from_le_bytes([data[4], data[5], data[6], data[7]]) {
+        rate if rate == 2 * PCM_HZ || rate == FAST_HZ => rate,
+        _ => PCM_HZ,
     }
 }
 
@@ -1073,6 +1079,8 @@ mod tests {
         let mut odd = clip.clone();
         odd[4..8].copy_from_slice(&11_025u32.to_le_bytes());
         assert_eq!(pcm_rate(&odd), PCM_HZ);
+        odd[4..8].copy_from_slice(&FAST_HZ.to_le_bytes());
+        assert_eq!((pcm_rate(&odd), Stream::new(&odd, false).bit_rate()), (FAST_HZ, ring_rate(FAST_HZ)));
     }
 
     #[test]
@@ -1225,6 +1233,11 @@ mod tests {
         // More bits a sample are a smaller master divider, the same rate.
         assert_eq!(converter_clock(16_000, 256), (13, 256_410));
         assert_eq!(converter_clock(16_000, 384), (13, 256_410));
+        // The fast rate is 8 Mbit/s exactly at 256 bits a sample and
+        // 4 at 128; 12 is out of the dividers' reach.
+        assert_eq!(converter_clock(FAST_HZ, 256), (10, 16 * FAST_HZ));
+        assert_eq!(converter_clock(FAST_HZ, 128).1, 16 * FAST_HZ);
+        assert_eq!(converter_clock(FAST_HZ, 384), (0, 0));
     }
 
     #[test]

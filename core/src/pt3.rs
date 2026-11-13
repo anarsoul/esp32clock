@@ -26,7 +26,7 @@
 //! module does, so a broken module is wrong notes and never a hang.
 
 use crate::ay::{Chip, Parts, TICK};
-use crate::clip::PCM_HZ;
+use crate::clip::{FAST_HZ, PCM_HZ};
 use crate::shape::Shaper;
 
 /// The first bytes of a converted tune.
@@ -46,8 +46,11 @@ const FINE: u8 = 1;
 /// Played round and round, the tune starts over from its top with the
 /// player and the chip as new, and not from the module's loop position.
 const AFRESH: u8 = 2;
+/// The samples come at `FAST_HZ` and not at `RATE`.
+const FAST: u8 = 4;
 
-/// Samples a second a tune gives: twice the PCM clips' 8 kHz.
+/// Samples a second a tune gives, unless its flags say `FAST_HZ`:
+/// twice the PCM clips' 8 kHz.
 pub const RATE: u32 = 2 * PCM_HZ;
 
 /// Where things are in a module: the version's digit in its first
@@ -311,9 +314,10 @@ pub struct Tune<'a> {
     frame_part: u32,
     frame: u32,
     /// Clock cycles a second, and what a sample's ticks left over, in
-    /// cycles times `RATE`.
+    /// cycles times the samples a second; those.
     clock: u32,
     sample_part: u32,
+    rate: u32,
     /// The low-pass over the noise: its step in 256ths, and where it
     /// is, 65536 for the noise's bit set all the time.
     noise_step: i32,
@@ -333,6 +337,7 @@ impl<'a> Tune<'a> {
             _ => 6,
         };
         let old = version <= 3;
+        let fast = byte(data, 4) & FAST != 0;
         let mut tune = Self {
             d: data,
             m,
@@ -365,12 +370,13 @@ impl<'a> Tune<'a> {
             frame: long(data, 16).clamp(1024, 1 << 24),
             clock: long(data, 8).clamp(500_000, 4_000_000),
             sample_part: 0,
+            rate: if fast { FAST_HZ } else { RATE },
             noise_step: byte(data, 39) as i32,
             noise_mean: 0,
             looping: false,
             ended: byte(m, POSITIONS) == 0,
             chip: Chip::new(byte(data, 4) & FINE != 0),
-            shaper: Shaper::new(byte(data, 5), byte(data, 6), true, core::array::from_fn(|i| word(data, 28 + 2 * i) as i16), byte(data, 7), true, 0),
+            shaper: Shaper::new(byte(data, 5), byte(data, 6), 1 + fast as u32, core::array::from_fn(|i| word(data, 28 + 2 * i) as i16), byte(data, 7), true, 0),
         };
         tune.start();
         tune
@@ -414,7 +420,7 @@ impl<'a> Tune<'a> {
 
     /// Samples a second `next_sample` gives.
     pub fn rate(&self) -> u32 {
-        RATE
+        self.rate
     }
 
     /// The next sample, as `xm::Tune::next_sample` gives them; `None`
@@ -427,8 +433,8 @@ impl<'a> Tune<'a> {
     /// over the sample's ticks.
     fn next_mix(&mut self) -> Option<i32> {
         self.sample_part += self.clock;
-        let ticks = self.sample_part / (TICK * RATE);
-        self.sample_part %= TICK * RATE;
+        let ticks = self.sample_part / (TICK * self.rate);
+        self.sample_part %= TICK * self.rate;
         let (mut sum, mut left) = (Parts::default(), ticks);
         while left > 0 {
             if self.frame_left == 0 {
@@ -457,7 +463,7 @@ impl<'a> Tune<'a> {
             // drum's noise keeps its edges.
             let set = (sum.noise * 65_536 / ticks) as i32;
             self.noise_mean += ((set - self.noise_mean) * self.noise_step) >> 8;
-            noisy = ((sum.open / ticks) as i64 * self.noise_mean as i64 >> 16) as i32;
+            noisy = (((sum.open / ticks) as i64 * self.noise_mean as i64) >> 16) as i32;
         }
         Some((sum.plain / ticks) as i32 + noisy)
     }
@@ -1148,6 +1154,23 @@ mod tests {
         let (first, second) = (pitch(&out[2000..half - 10]), pitch(&out[half + 10..]));
         assert!((first - CLOCK as f64 / 16.0 / 0xF9 as f64).abs() < 3.0, "{first}");
         assert!((second - CLOCK as f64 / 16.0 / 0x7C as f64).abs() < 3.0, "{second}");
+        // At the fast rate: the same notes for the same time.
+        let mut fast = data.clone();
+        fast[4] |= FAST;
+        let mut t = Tune::new(&fast);
+        assert_eq!(t.rate(), FAST_HZ);
+        let mut quick = Vec::new();
+        while let Some(s) = t.next_sample() {
+            quick.push(s as i32);
+        }
+        let frame = FRAME as f64 * FAST_HZ as f64 / CLOCK as f64;
+        assert!(quick.len().abs_diff((60.0 * frame) as usize) <= 1, "{}", quick.len());
+        let pitch = |part: &[i32]| part.windows(2).filter(|w| w[0] <= 0 && w[1] > 0).count() as f64 * FAST_HZ as f64 / part.len() as f64;
+        let half = (30.0 * frame) as usize;
+        let (first, second) = (pitch(&quick[4000..half - 20]), pitch(&quick[half + 20..]));
+        assert!((first - CLOCK as f64 / 16.0 / 0xF9 as f64).abs() < 3.0, "{first}");
+        assert!((second - CLOCK as f64 / 16.0 / 0x7C as f64).abs() < 3.0, "{second}");
+        assert_eq!(quick[4000..].iter().map(|s| s.abs()).max().unwrap(), 127 * crate::shape::STEP);
         // With no high-pass the square wave is nought and full scale,
         // and between the 8-bit steps only where an edge falls in a sample.
         let peak = out[2000..].iter().map(|s| s.abs()).max().unwrap();
@@ -1201,7 +1224,7 @@ mod tests {
                 energy += (s as i64 * s as i64) as u64;
                 n += 1;
             }
-            let ms = n * 1000 / RATE as u64;
+            let ms = n * 1000 / t.rate() as u64;
             assert!(ms.abs_diff(duration_ms(data) as u64) <= 25, "{ms} for {}", duration_ms(data));
             assert_eq!(registers(data).len(), long(data, 20) as usize);
             // Music, not silence: a tenth of full scale at least.

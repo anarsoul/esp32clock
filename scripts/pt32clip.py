@@ -10,7 +10,7 @@ written on, how long it plays, and how the clock is to shape it.
 
     scripts/pt32clip.py tune.pt3 tune.pt3c [--machine pentagon|spectrum] [--clock HZ]
                         [--chip ay|ym] [--restart] [--noise N] [--noise-lowpass HZ]
-                        [--highpass HZ] [--passes N] [--drive N] [--release N]
+                        [--highpass HZ] [--passes N] [--drive N] [--release N] [--rate 16000]
 
 A module does not say what clocked its chip or how often its player
 ran. A Pentagon has 1 750 000 Hz and 48.83 frames a second, a Spectrum
@@ -46,7 +46,8 @@ from collections import Counter
 MAGIC = b"PT31"  # pt3::MAGIC
 HEADER = 40
 RATE = 16000  # pt3::RATE
-FINE, AFRESH = 1, 2  # the header's flags
+FAST_HZ = 31250  # clip::FAST_HZ
+FINE, AFRESH, FAST = 1, 2, 4  # the header's flags
 # The chip's clock in Hz and its cycles a frame: the processor's are
 # twice both.
 MACHINES = {"pentagon": (1_750_000, 71680 // 2), "spectrum": (1_773_400, 70908 // 2)}
@@ -147,6 +148,7 @@ def main():
     parser.add_argument("--noise-lowpass", type=float, default=0, metavar="HZ", help="low-pass the noise at this corner (default: none)")
     parser.add_argument("--drive", type=int, default=0, help="what the limiter aims a peak at, full scale being 127 (default: the player's, 127)")
     parser.add_argument("--release", type=int, default=0, help="the limiter lets go by 1/2^N a sample at 8 kHz (default: the player's, 7)")
+    parser.add_argument("--rate", type=int, default=FAST_HZ, choices=(RATE, FAST_HZ), help="samples a second the player makes of it (default 31250, 8 Mbit/s through the chip's converter; or 16000)")
     parser.add_argument("--highpass", type=float, default=300, help="the high-pass's corner in Hz (default 300)")
     parser.add_argument("--passes", type=int, default=1, choices=(1, 2), help="how many times it is applied, 12 dB an octave each (default 1; the chip's output is all above nought, so there is no doing without)")
     args = parser.parse_args()
@@ -156,13 +158,13 @@ def main():
         sys.exit("--clock is 500000 to 4000000")
     # The high-pass as a second-order Butterworth section at the
     # output rate, in Q14: b0 b1 b2 a1 a2.
-    w = 2 * math.pi * args.highpass / RATE
+    w = 2 * math.pi * args.highpass / args.rate
     alpha = math.sin(w) / math.sqrt(2)
     section = [(1 + math.cos(w)) / 2, -(1 + math.cos(w)), (1 + math.cos(w)) / 2, -2 * math.cos(w), 1 - alpha]
     section = [round(k / (1 + alpha) * 16384) for k in section]
 
     # The noise's low-pass, one pole: the part of the way it moves a sample.
-    lowpass = max(1, min(255, round(256 * (1 - math.exp(-2 * math.pi * args.noise_lowpass / RATE))))) if args.noise_lowpass else 0
+    lowpass = max(1, min(255, round(256 * (1 - math.exp(-2 * math.pi * args.noise_lowpass / args.rate))))) if args.noise_lowpass else 0
 
     d = open(args.module, "rb").read()
     if len(d) <= ORDER or not (d.startswith(b"ProTracker 3.") or d.startswith(b"Vortex Tracker II")):
@@ -186,7 +188,7 @@ def main():
     # The frame is the machine's, in the chip's cycles as its clock is given.
     cycles = round(cycles * clock / MACHINES[machine][0])
 
-    flags = (FINE if args.chip == "ym" else 0) | (AFRESH if args.restart else 0)
+    flags = (FINE if args.chip == "ym" else 0) | (AFRESH if args.restart else 0) | (FAST if args.rate == FAST_HZ else 0)
     out = bytearray(MAGIC)
     out += struct.pack("<BBBBIIIII5hBB", flags, args.drive, args.release, args.passes, clock, ms, cycles, frames, loop_frame, *section, args.noise % 16, lowpass)
     assert len(out) == HEADER

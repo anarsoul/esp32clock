@@ -237,6 +237,13 @@ impl Sampler {
             None => (0, player.bit_rate()),
             Some(ratio) => converter_clock(sample_rate, ratio),
         };
+        // A rate the converter's dividers cannot make: `clip::FAST_HZ`
+        // at 384 bits a sample would be 12 Mbit/s.
+        if bit_rate == 0 {
+            warn!("clip: no clock for {sample_rate} Hz at {converter:?} bits a sample");
+            self.ring = Some(ring);
+            return None;
+        }
         // The ring is topped up twice a chunk.
         let tick = Duration::from_micros(chunk_us(bit_rate) / 2);
         player.rest(slot(SLOTS as u32 - 1));

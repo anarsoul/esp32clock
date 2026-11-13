@@ -12,7 +12,7 @@ that change nothing.
 
     scripts/sid2clip.py tune.sid tune.sidc [--song N] [--seconds S] [--mute FRAMES]
                         [--model 6581|8580] [--highpass HZ] [--passes N]
-                        [--drive N] [--release N] [--steps 2]
+                        [--drive N] [--release N] [--steps 4] [--rate 16000]
 
 A tune goes on for ever, so the memory is hashed after every call: when
 a state comes round again the tune has looped, the clip ends there and
@@ -44,6 +44,7 @@ MAGIC = b"SID1"  # sid::MAGIC
 HEADER = 40
 REGISTERS = 25  # sid::REGISTERS
 RATE = 16000  # sid::RATE
+FAST = 31250  # clip::FAST_HZ
 # Clock in Hz and cycles a screen.
 PAL = (985248, 312 * 63)
 NTSC = (1022727, 263 * 65)
@@ -472,14 +473,16 @@ def main():
     parser.add_argument("--drive", type=int, default=0, help="what the limiter aims a peak at, full scale being 127; over that clips (default: the player's, 127)")
     parser.add_argument("--release", type=int, default=0, help="the limiter lets go by 1/2^N a sample at 8 kHz (default: the player's, 7)")
     parser.add_argument("--highpass", type=float, default=300, help="the high-pass's corner in Hz (default 300)")
-    parser.add_argument("--steps", type=int, default=4, choices=(2, 4), help="steps of the chip a sample (default 4; 2 is half the processor's time for more aliasing)")
+    parser.add_argument("--steps", type=int, choices=(2, 4), help="steps of the chip a sample (default 2, or 4 at --rate 16000, 62 500 or 64 000 steps a second; 4 at the default rate is twice the processor's time for less aliasing)")
+    parser.add_argument("--rate", type=int, default=FAST, choices=(RATE, FAST), help="samples a second the player makes of it (default 31250, 8 Mbit/s through the chip's converter; or 16000)")
     parser.add_argument("--passes", type=int, default=1, choices=(0, 1, 2), help="how many times it is applied, 12 dB an octave each (default 1)")
     args = parser.parse_args()
     if not (0 <= args.drive <= 255 and 0 <= args.release <= 15):
         sys.exit("--drive is 1 to 255, --release 1 to 15")
     # The high-pass as a second-order Butterworth section at the
     # output rate, in Q14: b0 b1 b2 a1 a2.
-    w = 2 * math.pi * args.highpass / RATE
+    steps = args.steps or (2 if args.rate == FAST else 4)
+    w = 2 * math.pi * args.highpass / args.rate
     alpha = math.sin(w) / math.sqrt(2)
     section = [(1 + math.cos(w)) / 2, -(1 + math.cos(w)), (1 + math.cos(w)) / 2, -2 * math.cos(w), 1 - alpha]
     section = [round(k / (1 + alpha) * 16384) for k in section]
@@ -583,7 +586,7 @@ def main():
         body.append(0x80)
     ms = round(len(frames) * cycles * 1000 / clock)
     out = bytearray(MAGIC)
-    out += struct.pack("<BBBBIIIII5hBx", int(model == "8580"), args.drive, args.release, args.passes, clock, ms, cycles, len(frames), loop_at, *section, args.steps)
+    out += struct.pack("<BBBBIIIII5hBB", int(model == "8580"), args.drive, args.release, args.passes, clock, ms, cycles, len(frames), loop_at, *section, steps, int(args.rate == FAST))
     assert len(out) == HEADER
     out += body
     open(args.out, "wb").write(out)

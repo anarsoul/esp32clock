@@ -30,7 +30,7 @@
 //! The steps are averaged down to `RATE` and shaped as a tracker
 //! module is (`shape::Shaper`).
 
-use crate::clip::PCM_HZ;
+use crate::clip::{FAST_HZ, PCM_HZ};
 use crate::shape::Shaper;
 
 /// The first bytes of a converted tune.
@@ -41,10 +41,12 @@ pub const MAGIC: &[u8; 4] = b"SID1";
 /// length in ms, played once; the clock cycles a frame; the frames;
 /// the file offset the tune starts over from when it is played round
 /// and round; the high-pass's section as five `i16` in Q14; the steps
-/// of the chip a sample (2 or 4; 0 for `OVERSAMPLE`); one spare.
+/// of the chip a sample (2 or 4; 0 for `OVERSAMPLE`); 1 for a tune at
+/// `FAST_HZ` and not at `RATE`.
 const HEADER: usize = 40;
 
-/// Samples a second a tune gives: twice the PCM clips' 8 kHz.
+/// Samples a second a tune gives, unless its header says `FAST_HZ`:
+/// twice the PCM clips' 8 kHz.
 pub const RATE: u32 = 2 * PCM_HZ;
 /// Steps of the chip an output sample, unless the clip says 2. A
 /// waveform's edge lands on a step, so its harmonics past half the
@@ -326,8 +328,8 @@ struct Chip {
 }
 
 impl Chip {
-    fn new(clock_hz: u32, new_model: bool, oversample: u32) -> Self {
-        let mix_hz = RATE * oversample;
+    fn new(clock_hz: u32, new_model: bool, oversample: u32, rate: u32) -> Self {
+        let mix_hz = rate * oversample;
         let mut chip = Self {
             voice: [Voice::RESET; 3],
             cutoff: 0,
@@ -338,7 +340,7 @@ impl Chip {
             low: 0,
             new_model,
             phase_step: ((clock_hz as u64) << 16) / mix_hz as u64,
-            cycles: (((clock_hz as u64) << 8) / RATE as u64) as u32,
+            cycles: (((clock_hz as u64) << 8) / rate as u64) as u32,
             envelope_in: 0,
             oversample,
             mix_hz,
@@ -466,18 +468,20 @@ impl<'a> Tune<'a> {
         let clock = long(data, 8).clamp(500_000, 2_000_000);
         let loop_at = long(data, 24) as usize;
         let oversample = if byte(data, 38) == 2 { 2 } else { OVERSAMPLE };
+        let fast = byte(data, 39) == 1;
+        let rate = if fast { FAST_HZ } else { RATE };
         Self {
             d: data,
             cursor: HEADER,
             wait: 0,
             pool: 0,
-            frame: long(data, 16).clamp(256, 1 << 24) as i64 * (RATE * oversample) as i64,
+            frame: long(data, 16).clamp(256, 1 << 24) as i64 * (rate * oversample) as i64,
             clock: clock as i64,
             loop_at: if (HEADER..data.len()).contains(&loop_at) { loop_at } else { HEADER },
             looping: false,
             ended: data.len() <= HEADER,
-            chip: Chip::new(clock, byte(data, 4) & 1 != 0, oversample),
-            shaper: Shaper::new(byte(data, 5), byte(data, 6), true, core::array::from_fn(|i| word(data, 28 + 2 * i) as i16), byte(data, 7), true, 0),
+            chip: Chip::new(clock, byte(data, 4) & 1 != 0, oversample, rate),
+            shaper: Shaper::new(byte(data, 5), byte(data, 6), 1 + fast as u32, core::array::from_fn(|i| word(data, 28 + 2 * i) as i16), byte(data, 7), true, 0),
         }
     }
 
@@ -489,7 +493,7 @@ impl<'a> Tune<'a> {
 
     /// Samples a second `next_sample` gives.
     pub fn rate(&self) -> u32 {
-        RATE
+        self.chip.mix_hz / self.chip.oversample
     }
 
     /// The next sample, as `xm::Tune::next_sample` gives them; `None`
@@ -563,7 +567,7 @@ mod tests {
     const FRAME: u32 = 19_656;
 
     fn chip() -> Chip {
-        let mut c = Chip::new(PAL, true, OVERSAMPLE);
+        let mut c = Chip::new(PAL, true, OVERSAMPLE, RATE);
         c.write(24, 0x0F);
         c
     }
@@ -642,7 +646,7 @@ mod tests {
             }
         }
         // The same on an NTSC machine's clock is that much higher.
-        let mut c = Chip::new(1_022_727, false, OVERSAMPLE);
+        let mut c = Chip::new(1_022_727, false, OVERSAMPLE, RATE);
         c.write(24, 0x0F);
         voice(&mut c, 1, 0x1CD6, SAWTOOTH);
         let out = run(&mut c, MIX_HZ as usize);
@@ -841,7 +845,7 @@ mod tests {
     /// at `cutoff`, over its level past the filter.
     fn through(new_model: bool, mode: u8, cutoff: u16, resonance: u8, freq: u16) -> f64 {
         let level = |filtered: bool| {
-            let mut c = Chip::new(PAL, new_model, OVERSAMPLE);
+            let mut c = Chip::new(PAL, new_model, OVERSAMPLE, RATE);
             c.write(21, cutoff as u8 & 7);
             c.write(22, (cutoff >> 3) as u8);
             c.write(23, resonance << 4 | filtered as u8);
@@ -892,7 +896,7 @@ mod tests {
             for cutoff in [0u16, 1, 100, 512, 1024, 1500, 2047] {
                 for resonance in [0u8, 8, 15] {
                     for mode in [0x10u8, 0x20, 0x40, 0x70] {
-                        let mut c = Chip::new(PAL, new_model, steps);
+                        let mut c = Chip::new(PAL, new_model, steps, RATE);
                         c.write(21, cutoff as u8 & 7);
                         c.write(22, (cutoff >> 3) as u8);
                         c.write(23, resonance << 4 | 7);
@@ -982,6 +986,19 @@ mod tests {
         let ups = half[2000..].windows(2).filter(|w| w[0] <= 0 && w[1] > 0).count() as f64 * RATE as f64 / (half.len() - 2000) as f64;
         assert!((ups - hz(0x1CD6)).abs() < 3.0, "{ups}");
         assert!(half[2000..].iter().map(|s| s.abs()).max().unwrap() >= 120 * crate::shape::STEP);
+        // At the fast rate, two steps a sample: the same time, pitch and level.
+        let mut fast = coarse.clone();
+        fast[39] = 1;
+        let mut t = Tune::new(&fast);
+        assert_eq!(t.rate(), FAST_HZ);
+        let mut quick = Vec::new();
+        while let Some(s) = t.next_sample() {
+            quick.push(s as i32);
+        }
+        assert!(quick.len().abs_diff((out.len() as u64 * FAST_HZ as u64 / RATE as u64) as usize) <= 2, "{}", quick.len());
+        let ups = quick[4000..].windows(2).filter(|w| w[0] <= 0 && w[1] > 0).count() as f64 * FAST_HZ as f64 / (quick.len() - 4000) as f64;
+        assert!((ups - hz(0x1CD6)).abs() < 3.0, "{ups}");
+        assert!(quick[4000..].iter().map(|s| s.abs()).max().unwrap() >= 120 * crate::shape::STEP);
         // A tune that writes nothing is silence, exactly.
         let quiet = clip(&[(&[], 10)], 0);
         let mut t = Tune::new(&quiet);
@@ -1003,7 +1020,7 @@ mod tests {
                 energy += (s as i64 * s as i64) as u64;
                 n += 1;
             }
-            let ms = n * 1000 / RATE as u64;
+            let ms = n * 1000 / t.rate() as u64;
             assert!(ms.abs_diff(duration_ms(data) as u64) <= 25, "{ms} for {}", duration_ms(data));
             // Music, not silence: a tenth of full scale at least.
             assert!((energy / n).isqrt() > 12 * crate::shape::STEP as u64);
