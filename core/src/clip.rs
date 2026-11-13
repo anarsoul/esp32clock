@@ -115,8 +115,10 @@ enum Body<'a> {
 pub struct Player<'a> {
     body: Body<'a>,
     /// Samples in the body: known for PCM, and for a tune once it has
-    /// ended.
+    /// ended; never, for a clip played round and round.
     len: Option<usize>,
+    /// Whether the body starts over when it ends, with no ramp between.
+    looping: bool,
     /// Index of the next point of the level sequence: the up ramp, the
     /// samples, the down ramp.
     next: usize,
@@ -139,7 +141,20 @@ impl<'a> Player<'a> {
     }
 
     const fn with(body: Body<'a>, len: Option<usize>) -> Self {
-        Self { body, len, next: 1, cur: -FULL, s1: 0, s2: 0, fb: if SIGMA_DELTA { -FULL * OSR as i32 } else { -FB } }
+        Self { body, len, looping: false, next: 1, cur: -FULL, s1: 0, s2: 0, fb: if SIGMA_DELTA { -FULL * OSR as i32 } else { -FB } }
+    }
+
+    /// Play the body round and round, or once. For the alarm: PCM goes
+    /// straight from its last sample to its first, and a tune follows
+    /// its own loop.
+    pub fn looped(mut self, looping: bool) -> Self {
+        self.looping = looping;
+        match &mut self.body {
+            Body::Pcm(pcm) if looping && !pcm.is_empty() => self.len = None,
+            Body::Pcm(_) => {}
+            Body::Tune(tune) => tune.set_looping(looping),
+        }
+        self
     }
 
     /// The level at point `k`, `None` past the end. Point 0 is the
@@ -151,6 +166,7 @@ impl<'a> Player<'a> {
         }
         if self.len.is_none_or(|n| k < RAMP + n) {
             let sample = match &mut self.body {
+                Body::Pcm(pcm) if self.looping && !pcm.is_empty() => Some(pcm[(k - RAMP) % pcm.len()]),
                 Body::Pcm(pcm) => pcm.get(k - RAMP).copied(),
                 Body::Tune(tune) => tune.next_sample(),
             };
@@ -374,20 +390,36 @@ impl<S: RunSource> Runs<S> {
 /// Spectrum program's port writes). A run of nothing is allowed, for a
 /// clip that starts on or a run too long for one count.
 pub struct Beeper<'a> {
+    /// The clip's runs, and those still to play.
+    all: &'a [u8],
     runs: &'a [u8],
     on: bool,
+    /// Whether the clip starts over when it ends.
+    looping: bool,
 }
 
 impl<'a> Beeper<'a> {
     /// `data` must be a beeper clip (`is_beeper`).
     pub fn new(data: &'a [u8]) -> Self {
+        let all = &data[BEEPER_HEADER.min(data.len())..];
         // The first run read is an off one.
-        Self { runs: &data[BEEPER_HEADER.min(data.len())..], on: true }
+        Self { all, runs: all, on: true, looping: false }
+    }
+
+    /// Play the clip round and round, or once.
+    pub fn looped(mut self, looping: bool) -> Self {
+        self.looping = looping;
+        self
     }
 }
 
 impl RunSource for Beeper<'_> {
     fn next_run(&mut self) -> Option<(bool, u32)> {
+        if self.runs.is_empty() && self.looping && !self.all.is_empty() {
+            // Round again: the first run is an off one once more.
+            self.runs = self.all;
+            self.on = true;
+        }
         let mut ticks = 0u32;
         let mut shift = 0;
         loop {
@@ -415,13 +447,15 @@ pub enum Stream<'a> {
 }
 
 impl<'a> Stream<'a> {
-    pub fn new(data: &'a [u8]) -> Self {
+    /// The clip `data` as a stream, played once or, `looping`, round
+    /// and round with no gap, which never ends.
+    pub fn new(data: &'a [u8], looping: bool) -> Self {
         if is_beeper(data) {
-            Self::Beeper(Runs::new(Beeper::new(data)))
+            Self::Beeper(Runs::new(Beeper::new(data).looped(looping)))
         } else if xm::is_tune(data) {
-            Self::Pcm(Player::tune(xm::Tune::new(data)))
+            Self::Pcm(Player::tune(xm::Tune::new(data)).looped(looping))
         } else {
-            Self::Pcm(Player::new(data))
+            Self::Pcm(Player::new(data).looped(looping))
         }
     }
 
@@ -745,7 +779,7 @@ mod tests {
         let per = 1;
         let total = runs.iter().sum::<u32>() as usize * per;
         let mut out = vec![0xAAu8; total / 8 + 40];
-        let mut s = Stream::new(&data);
+        let mut s = Stream::new(&data, false);
         let mut at = 0;
         let mut piece = 1;
         while at < out.len() {
@@ -770,9 +804,49 @@ mod tests {
         let mut buf = [0xFFu8; 4];
         empty.fill(&mut buf);
         assert!(empty.done() && buf == [0; 4]);
-        assert!(matches!(Stream::new(&[128; 100]), Stream::Pcm(_)));
-        assert_eq!((Stream::new(&data).bit_rate(), Stream::new(&[128; 100]).bit_rate()), (BEEPER_BIT_RATE, BIT_RATE));
+        assert!(matches!(Stream::new(&[128; 100], false), Stream::Pcm(_)));
+        assert_eq!((Stream::new(&data, false).bit_rate(), Stream::new(&[128; 100], false).bit_rate()), (BEEPER_BIT_RATE, BIT_RATE));
         assert!(is_old_beeper(b"BPR1\0\0\0\0") && !is_old_beeper(&data));
+    }
+
+    #[test]
+    fn a_looping_clip_goes_round_with_no_gap() {
+        // A beeper clip: the bits of one pass, then the same again at
+        // once, and never done.
+        let runs = [3, 5, 200, 7, 11, 130];
+        let data = beeper_clip(&runs);
+        let pass = runs.iter().sum::<u32>() as usize;
+        let mut s = Stream::new(&data, true);
+        let mut out = vec![0u8; (3 * pass).div_ceil(8) + 8];
+        for piece in out.chunks_mut(5) {
+            s.fill(piece);
+        }
+        assert!(!s.done());
+        for i in 0..3 * pass {
+            assert_eq!(bit(&out, i), bit(&out, i % pass), "bit {i}");
+        }
+        assert!((0..pass).any(|i| bit(&out, i) > 0.0));
+        // PCM: from the last sample to the first with no ramp between,
+        // so the levels go round with the clip's length.
+        let pcm: Vec<u8> = (0..50u8).map(|i| 100 + i).collect();
+        let mut p = Player::new(&pcm).looped(true);
+        let levels: Vec<i32> = (RAMP..RAMP + 175).map(|k| p.level(k).unwrap()).collect();
+        assert!((0..125).all(|i| levels[i] == levels[i + 50]) && levels[49] != levels[50]);
+        assert_eq!(levels[50], (100 - 128) * LEVEL);
+        let mut buf = [0u8; 64 * BYTES_PER_SAMPLE];
+        for _ in 0..20 {
+            p.fill(&mut buf);
+        }
+        assert!(!p.done());
+        // Played once it still ends, and a clip of nothing ends at once
+        // looping or not.
+        let mut once = Stream::new(&data, false);
+        once.fill(&mut out);
+        assert!(once.done());
+        let header = beeper_clip(&[]);
+        let mut nothing = Stream::new(&header, true);
+        nothing.fill(&mut out[..4]);
+        assert!(nothing.done());
     }
 
     /// Not a test: with `CLIP_DUMP=file` in the environment and a clip
@@ -784,7 +858,7 @@ mod tests {
     fn dump_the_clip() {
         let Ok(path) = std::env::var("CLIP_DUMP") else { return };
         let index = std::env::var("CLIP_INDEX").map_or(0, |i| i.parse().unwrap());
-        let mut s = Stream::new(crate::melody::CLIP_DATA[index]);
+        let mut s = Stream::new(crate::melody::CLIP_DATA[index], false);
         let mut out = Vec::new();
         let mut buf = [0u8; CHUNK];
         while !s.done() {

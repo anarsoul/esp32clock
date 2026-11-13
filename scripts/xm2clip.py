@@ -94,7 +94,7 @@ def main():
     d = open(args.module, "rb").read()
     if d[:17] != b"Extended Module: ":
         sys.exit(f"{args.module}: not an XM module")
-    header, orders_n, _restart, channels, patterns_n, instruments_n, flags, speed, tempo = struct.unpack_from("<IHHHHHHHH", d, 60)
+    header, orders_n, restart, channels, patterns_n, instruments_n, flags, speed, tempo = struct.unpack_from("<IHHHHHHHH", d, 60)
     if channels > MAX_CHANNELS:
         sys.exit(f"{channels} channels; the player has {MAX_CHANNELS}")
     if not flags & 1:
@@ -207,7 +207,9 @@ def main():
     out = bytearray(MAGIC)
     out += bytes([channels, speed, tempo, len(orders), len(patterns), len(instruments), args.drive, args.release])
     out += struct.pack("<I", round(ticks_ms))
-    out += struct.pack("<BB5h4x", args.passes, args.rate // 16000, *section)
+    # The order to start over from, for the alarm, which plays the tune
+    # round and round.
+    out += struct.pack("<BB5hB3x", args.passes, args.rate // 16000, *section, restart if restart < len(orders) else 0)
     out += bytes(orders)
     tables = len(out) + 6 * len(patterns) + 80 * len(instruments)
     body = bytearray()

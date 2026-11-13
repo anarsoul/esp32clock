@@ -23,7 +23,13 @@ const DEFAULT_CLIPS: &str = "clips/trantor.bpr,clips/halftime.xmc,clips/keygen.x
 /// A clip's API name is its file's name without the extension, in lower
 /// case with everything but letters turned into `_`; its label is the
 /// same in words, or the entry of `ALARM_CLIP_LABEL`, also separated by
-/// commas, at the same place. `melody.rs` includes what this writes.
+/// commas, at the same place.
+///
+/// A ringing alarm plays a clip round and round with no gap if the clip
+/// is made to go round, and with a pause between passes, as the note
+/// melodies have, if it is not. A beeper clip and a module are taken to
+/// be, PCM not; `:loop` or `:once` after a file's name says otherwise.
+/// `melody.rs` includes what this writes.
 fn clips() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().expect("core/ has a parent");
     let files = std::env::var("ALARM_CLIP").unwrap_or_else(|_| DEFAULT_CLIPS.to_string());
@@ -31,8 +37,14 @@ fn clips() {
     let labels: Vec<&str> = labels.split(',').map(str::trim).collect();
     let mut names = String::new();
     let mut data = String::new();
+    let mut loops = String::new();
     let mut count = 0;
     for (i, file) in files.split(',').map(str::trim).filter(|f| !f.is_empty()).enumerate() {
+        let (file, asked) = match file.rsplit_once(':') {
+            Some((file, "loop")) => (file, Some(true)),
+            Some((file, "once")) => (file, Some(false)),
+            _ => (file, None),
+        };
         let mut path = PathBuf::from(file);
         if path.is_relative() {
             path = root.join(path);
@@ -53,12 +65,18 @@ fn clips() {
         };
         writeln!(names, "    ({name:?}, {label:?}),").unwrap();
         writeln!(data, "    include_bytes!({:?}),", path.display().to_string()).unwrap();
+        // The clips with a header are the ones made from music written
+        // to loop: `clip::BEEPER_MAGIC` and `xm::MAGIC`.
+        let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("ALARM_CLIP {}: {e}", path.display()));
+        let made_to = bytes.starts_with(b"BPR") || bytes.starts_with(b"XMC");
+        writeln!(loops, "    {},", asked.unwrap_or(made_to)).unwrap();
         count += 1;
     }
     let out = format!(
         "pub const CLIP_COUNT: usize = {count};\n\
          pub const CLIP_NAMES: [(&str, &str); CLIP_COUNT] = [\n{names}];\n\
-         pub static CLIP_DATA: [&[u8]; CLIP_COUNT] = [\n{data}];\n"
+         pub static CLIP_DATA: [&[u8]; CLIP_COUNT] = [\n{data}];\n\
+         pub const CLIP_LOOPS: [bool; CLIP_COUNT] = [\n{loops}];\n"
     );
     let dir = std::env::var("OUT_DIR").expect("cargo sets OUT_DIR");
     std::fs::write(Path::new(&dir).join("clips.rs"), out).expect("write clips.rs");

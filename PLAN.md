@@ -6963,3 +6963,30 @@ at its worst 5679 of 6016 bytes, discovery payload 4204 of 4608.
 at 512 and 256 kbit/s. Futurama stays on the user's clocks only
 (`wav/`, ignored). The stock buzzer circuit (no diode, R5 at 10 k)
 has not been listened to with these defaults.
+
+**The alarm loops a clip with no gap — built 2026-11-12, flashed, not
+yet heard.** Trantor and both modules are written to go round, and
+the alarm played each pass as its own clip, 1.5 s apart, through the
+ramps and a fresh start of the line. Now a ringing alarm asks for the
+clip `looping` (`clip::play(index, looping, cancel)`,
+`Stream::new(data, looping)`) and the stream never ends: a beeper
+clip starts its runs over at once; a module follows its jump back as
+a tracker does (both of Orion's end on `B01`, round to the second
+order, past the intro) or, with none, starts over from the order the
+header names (the module's restart position, a spare byte of `XMC2`
+that `scripts/xm2clip.py` now fills; both clips came out byte for
+byte as they were); PCM goes from its last sample to its first with
+no ramp between. A press, `Stop` or the alarm's five minutes end it as
+before, the line released first. A preview still plays once, and the
+note melodies keep their gaps. 111 host tests: three passes of a
+beeper clip bit for bit, PCM's levels going round, a module following
+its jump and its restart order.
+
+**Which clips loop, 2026-11-12.** Futurama is not written to go round
+and should not; Trantor is. `core/build.rs` now writes `CLIP_LOOPS`
+beside the clips: true for a beeper clip or a module (the files with
+a header, made from music that loops), false for PCM, and
+`ALARM_CLIP=file:loop` or `file:once` says otherwise for one file.
+The buzzer task asks for the gapless loop only for those; the others
+ring as the note melodies do, a pass, `repeat_gap_ms` (1.5 s), a pass.
+Flashed to white-clock with the three default clips and Futurama.

@@ -51,7 +51,9 @@ pub const MAGIC: &[u8; 4] = b"XMC2";
 /// how many times it is applied (0 to 2), the output rate (0 for
 /// `PCM_HZ`, 1 for twice that), and its
 /// second-order section as five `i16` in Q14, b0 b1 b2 a1 a2, which
-/// the converter works out since the chip has no tangent; four spare.
+/// the converter works out since the chip has no tangent; the order to
+/// start over from when the tune is played round and round; three
+/// spare.
 const HEADER: usize = 32;
 
 /// Whether `data` is a converted module of the first layout, which
@@ -320,6 +322,9 @@ pub struct Tune<'a> {
     /// A jump or a break read on this row: the order and row to go to.
     go: Option<(usize, u16)>,
     pool: i32,
+    /// Whether the tune goes round and round: it follows a jump back,
+    /// and from the end of the order list it starts over.
+    looping: bool,
     /// The tick being played is the tune's last.
     last: bool,
     ended: bool,
@@ -359,6 +364,7 @@ impl<'a> Tune<'a> {
             tick: 0,
             go: None,
             pool: 0,
+            looping: false,
             last: false,
             ended: false,
             channel: [Channel::default(); MAX_CHANNELS],
@@ -384,6 +390,11 @@ impl<'a> Tune<'a> {
 
     /// The next sample, unsigned with 128 for silence; `None` when the
     /// tune has ended.
+    /// Play the tune round and round, as a tracker does, or once.
+    pub fn set_looping(&mut self, looping: bool) {
+        self.looping = looping;
+    }
+
     /// Samples a second `next_sample` gives: `PCM_HZ`, or twice it for a
     /// clip that asks.
     pub fn rate(&self) -> u32 {
@@ -414,6 +425,11 @@ impl<'a> Tune<'a> {
     /// Go to `row` of the pattern at `order`; the end of the list is
     /// the end of the tune, once the tick being played is over.
     fn enter(&mut self, order: usize, row: u16) {
+        let mut order = order;
+        if order >= self.order_len && self.looping {
+            // Round again, from where the module says, if that is anywhere.
+            order = Some(byte(self.d, 28) as usize).filter(|&o| o < self.order_len).unwrap_or(0);
+        }
         let pattern = byte(self.d, HEADER + order) as usize;
         if order >= self.order_len || pattern >= self.patterns {
             self.last = true;
@@ -497,7 +513,7 @@ impl<'a> Tune<'a> {
             self.tick = 0;
             match self.go.take() {
                 // A jump to where the tune has been is its loop: the end.
-                Some((order, _)) if order <= self.order => self.last = true,
+                Some((order, _)) if order <= self.order && !self.looping => self.last = true,
                 Some((order, row)) => self.enter(order, row),
                 None if self.row >= self.rows => self.enter(self.order + 1, 0),
                 None => {}
@@ -1078,6 +1094,22 @@ mod tests {
         assert_eq!(rows(&module(1, 3, 125, &[0, 1, 1], &[on, b.clone()], &[square(32)])), (1 + 8) * 3);
         let back = pattern(4, &[note(C4), (2, (0, 0, 0, 0xB, 0))]);
         assert_eq!(rows(&module(1, 3, 125, &[1, 0, 1], &[back, b.clone()], &[square(32)])), (8 + 3) * 3);
+        // Played round and round, the jump back is followed and the end
+        // of the list goes to the order the header names: no end.
+        let rounds = |data: &[u8], ticks: usize| {
+            let mut t = Tune::new(data);
+            t.set_looping(true);
+            (0..ticks).map(|_| { t.step_tick(); assert!(!t.ended); t.channel[0].sounding }).collect::<Vec<_>>()
+        };
+        let back = pattern(4, &[note(C4), (2, (0, 0, 0, 0xB, 0))]);
+        let data = module(1, 3, 125, &[1, 0, 1], &[back, b.clone()], &[square(32)]);
+        let seen = rounds(&data, 3 * (8 + 3) * 3);
+        assert_eq!(seen[..33], seen[33..66]);
+        assert_eq!((seen[0], seen[24], seen[33]), (PERIOD_C4 - 2 * SEMITONE, PERIOD_C4, PERIOD_C4 - 2 * SEMITONE));
+        let mut data = module(1, 3, 125, &[1, 0], &[a.clone(), b.clone()], &[square(32)]);
+        data[28] = 1;
+        let seen = rounds(&data, (8 + 4 + 4) * 3 + 1);
+        assert_eq!((seen[0], seen[24], seen[36], seen[47]), (PERIOD_C4 - 2 * SEMITONE, PERIOD_C4, PERIOD_C4, PERIOD_C4));
         // F sets the speed below 0x20 and the tempo from there on.
         let fast = pattern(4, &[(0, (C4, 1, 0, 0xF, 2)), (2, (0, 0, 0, 0xF, 250))]);
         let data = module(1, 6, 125, &[0], &[fast], &[square(32)]);

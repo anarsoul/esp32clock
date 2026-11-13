@@ -87,11 +87,14 @@ fn resolve(index: usize, last: &mut Option<usize>, what: &str) -> &'static Melod
 }
 
 /// Play `m` once. Returns early with the interrupting command if one
-/// arrives, checked after every note, or twice a chunk in the clip.
-async fn play_once(ledc: &Ledc<'static>, pin: &mut GPIO5<'static>, m: &Melody) -> Option<Command> {
+/// arrives, checked after every note, or twice a chunk in the clip. A
+/// clip asked to go `round` that is made to (`melody::CLIP_LOOPS`) does
+/// not end by itself: it loops with no gap, as its tune is written to,
+/// until a command arrives.
+async fn play_once(ledc: &Ledc<'static>, pin: &mut GPIO5<'static>, m: &Melody, round: bool) -> Option<Command> {
     if let Some(k) = m.clip {
         // The clip task has the pin until this returns.
-        return clip::play(k, &COMMAND).await;
+        return clip::play(k, round && melody::CLIP_LOOPS[k], &COMMAND).await;
     }
     for note in m.notes {
         let total = note.ms(m.bpm) as u64;
@@ -129,7 +132,7 @@ pub async fn buzzer_task(ledc: Ledc<'static>, pin: GPIO5<'static>) -> ! {
             Command::Stop => COMMAND.wait().await,
             Command::Preview(i) => {
                 let m = resolve(i, &mut last_random, "preview");
-                match play_once(&ledc, &mut pin, m).await {
+                match play_once(&ledc, &mut pin, m, false).await {
                     Some(c) => c,
                     None => COMMAND.wait().await,
                 }
@@ -137,7 +140,7 @@ pub async fn buzzer_task(ledc: Ledc<'static>, pin: GPIO5<'static>) -> ! {
             Command::Ring(i) => {
                 let m = resolve(i, &mut last_random, "ring");
                 loop {
-                    if let Some(c) = play_once(&ledc, &mut pin, m).await {
+                    if let Some(c) = play_once(&ledc, &mut pin, m, true).await {
                         break c;
                     }
                     let gap = Timer::after(Duration::from_millis(m.repeat_gap_ms as u64));

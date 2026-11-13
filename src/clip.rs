@@ -66,7 +66,7 @@ static DESCRIPTORS: ConstStaticCell<InternalMemory<[DmaDescriptor; SLOTS]>> =
     ConstStaticCell::new(InternalMemory::new([DmaDescriptor::EMPTY; SLOTS]));
 /// From the buzzer task to the clip task: play this clip, and stop.
 /// And back: the clip has ended, the line released.
-static START: Signal<CriticalSectionRawMutex, usize> = Signal::new();
+static START: Signal<CriticalSectionRawMutex, (usize, bool)> = Signal::new();
 static STOP: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 static DONE: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
@@ -128,18 +128,19 @@ unsafe impl DmaTxBuffer for Ring {
     }
 }
 
-/// Play clip `index` of `melody::CLIP_DATA` once, on the clip task.
+/// Play clip `index` of `melody::CLIP_DATA` on the clip task: once,
+/// or `looping`, round and round with no gap until cancelled.
 /// Returns early with what `cancel` was signalled with, the line
 /// released by then; `None` when the clip has ended, or could not be
 /// started. For the buzzer task, which must leave the pin alone until
 /// this returns.
-pub async fn play<T: Send>(index: usize, cancel: &Signal<CriticalSectionRawMutex, T>) -> Option<T> {
+pub async fn play<T: Send>(index: usize, looping: bool, cancel: &Signal<CriticalSectionRawMutex, T>) -> Option<T> {
     if !melody::HAS_CLIP {
         return None;
     }
     STOP.reset();
     DONE.reset();
-    START.signal(index);
+    START.signal((index, looping));
     match select(DONE.wait(), cancel.wait()).await {
         Either::First(()) => None,
         Either::Second(c) => {
@@ -157,9 +158,9 @@ pub async fn clip_task(hw: Hardware, pin: GPIO5<'static>) -> ! {
     let mut sampler = Sampler::new(hw);
     let mut pin = pin;
     loop {
-        let index = START.wait().await;
+        let (index, looping) = START.wait().await;
         if let Some(data) = melody::CLIP_DATA.get(index) {
-            sampler.play(&mut pin, data, &STOP).await;
+            sampler.play(&mut pin, data, looping, &STOP).await;
         }
         DONE.signal(());
     }
@@ -186,6 +187,7 @@ impl Sampler {
         &mut self,
         pin: &mut GPIO5<'static>,
         data: &'static [u8],
+        looping: bool,
         cancel: &Signal<CriticalSectionRawMutex, T>,
     ) -> Option<T> {
         // A constant in a build without a clip, so none of this is in its image.
@@ -202,7 +204,7 @@ impl Sampler {
         let first = ring.descriptors.as_ptr() as usize;
         let slot = |chunk: u32| unsafe { core::slice::from_raw_parts_mut((base as *mut u8).add(chunk as usize % SLOTS * CHUNK), CHUNK) };
 
-        let mut player = Stream::new(data);
+        let mut player = Stream::new(data, looping);
         // A beeper clip has its own; see `clip::BEEPER_BIT_RATE`.
         let bit_rate = player.bit_rate();
         // The ring is topped up twice a chunk.
