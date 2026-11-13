@@ -10,7 +10,7 @@ runs the code here, in a 6502 of its own, and the clip is what reached
 the chip: the register writes of each frame, in order, less the ones
 that change nothing.
 
-    scripts/sid2clip.py tune.sid tune.sidc [--song N] [--seconds S]
+    scripts/sid2clip.py tune.sid tune.sidc [--song N] [--seconds S] [--mute FRAMES]
                         [--model 6581|8580] [--highpass HZ] [--passes N]
                         [--drive N] [--release N] [--steps 2]
 
@@ -26,6 +26,9 @@ cut (300 Hz at 12 dB an octave by default), --drive and --release the
 limiter (scripts/xm2clip.py has the same four). --steps 2 steps the
 chip 32 000 times a second and not 64 000: half the processor's time on
 the clock, and more aliasing in high notes.
+
+Some routines sound a short burst as they start, before the music;
+--mute keeps every voice's gate closed for that many frames.
 
 Says what the tune does that the clock will not play.
 Then: ALARM_CLIP=tune.sidc ALARM_CLIP_LABEL='…' cargo build --release
@@ -464,6 +467,7 @@ def main():
     parser.add_argument("out", help="the clip to write")
     parser.add_argument("--song", type=int, default=0, help="which of the file's songs, from 1 (default: the one the file names)")
     parser.add_argument("--seconds", type=float, default=0, help="cut the tune here, loop or not (default: at its loop, looked for over 600 s)")
+    parser.add_argument("--mute", type=int, default=0, metavar="FRAMES", help="keep the voices' gates closed for this many frames from the start: for a routine that clicks as it starts up")
     parser.add_argument("--model", choices=("6581", "8580"), help="the chip, for the filter's curve (default: what the file asks for, else 6581)")
     parser.add_argument("--drive", type=int, default=0, help="what the limiter aims a peak at, full scale being 127; over that clips (default: the player's, 127)")
     parser.add_argument("--release", type=int, default=0, help="the limiter lets go by 1/2^N a sample at 8 kHz (default: the player's, 7)")
@@ -541,6 +545,29 @@ def main():
     if loop >= len(frames):
         sys.exit("the tune stops changing at once; nothing to play")
 
+    if args.mute:
+        # The routine runs as it does, but no voice is gated before
+        # frame `mute`; there the control registers get what it meant
+        # them to have.
+        if not 0 < args.mute <= (loop or len(frames) - 1):
+            sys.exit(f"--mute {args.mute}: the tune goes round to frame {loop}, and has {len(frames)}")
+        controls = (4, 11, 18)
+        meant, written = bytearray(REGISTERS), bytearray(REGISTERS)
+        for n, writes in enumerate(frames[: args.mute + 1]):
+            kept = []
+            if n == args.mute:
+                kept = [(r, meant[r]) for r in controls if written[r] != meant[r]]
+                for r, value in kept:
+                    written[r] = value
+            for r, value in writes:
+                meant[r] = value
+                if n < args.mute and r in controls:
+                    value &= 0xFE
+                if written[r] != value:
+                    written[r] = value
+                    kept.append((r, value))
+            frames[n] = kept
+
     body = bytearray()
     loop_at = HEADER
     rest = None  # where the last frame's count of frames is
@@ -564,6 +591,8 @@ def main():
     print(f'{args.out}: "{name}" by {author} ({released}), song {song} of {songs}, {model}, {"NTSC" if system == NTSC else "PAL"}, {clock / cycles:.2f} frames a second')
     looped = f"goes round from {loop * cycles / clock:.1f} s" if loop or not args.seconds else "cut, starts over from the top"
     print(f"  {ms / 1000:.1f} s, {looped}; {len(out)} bytes, {len(body) * 1000 // max(ms, 1)} a second (the file is {len(d)})")
+    if args.mute:
+        print(f"  the gates closed for the first {args.mute} frames")
     if args.passes:
         print(f"  high-pass {args.highpass:g} Hz, {12 * args.passes} dB an octave")
     for what, count in sorted(cpu.notes.items()):

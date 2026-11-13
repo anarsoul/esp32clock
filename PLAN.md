@@ -7489,3 +7489,16 @@ modulation or sync against the reference, white-clock.
 **Donkey Kong stays local** (the user, 2026-11-13): the tune and its
 clip are in `sid/`, ignored by git as `wav/` and `tap/` are, and the
 user's `.env` names `sid/donkey_kong.sidc` after Futurama.
+
+**The click at the start, 2026-11-13.** The user heard one as Donkey
+Kong begins. It is the tune's: its routine gates all three voices in
+frame 0 and closes them in frame 1, 160 ms before the first note, and
+libsidplayfp's render has the same burst; the limiter, starting from
+full gain, makes it as loud as the music. `scripts/sid2clip.py --mute
+FRAMES` keeps the gate bit out of the control registers' writes for
+that many frames and gives the registers what the routine meant at the
+frame after; refused past the loop's start. The local clip is now
+`scripts/sid2clip.py sid/Donkey_Kong.sid sid/donkey_kong.sidc --mute 2`:
+silence for 150 ms, then the tune, same length. Heard on the clock,
+2026-11-13: "Sounds good now" (the user). Martin-clock and white-clock
+have it, with Trantor, Halftime, Keygen and Futurama.
