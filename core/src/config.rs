@@ -167,7 +167,7 @@ pub const MAX_CURRENT_STEP: u8 = {
 
 /// Bit rate of a PCM clip's or a module's stream on the buzzer line
 /// under a software modulator (`CLIP_MODULATOR=sd` or `pwm`; the
-/// default build's converter makes 128 bits of a sample whatever this
+/// default build's converter makes `CLIP_PDM_BITS` of a sample whatever this
 /// says), in kbit/s, from `CLIP_KBPS` at build time: 128, 256 or 512; a module
 /// or PCM at 16 kHz runs at twice it. The default is 512, 64 bits a
 /// sample and 1.024 Mbit/s for a 16 kHz clip: with the modules'
@@ -216,14 +216,19 @@ pub const CLIP_PDM: bool = match option_env!("CLIP_MODULATOR") {
 };
 
 /// Bits the chip's converter makes of a sample, from `CLIP_PDM_BITS` at
-/// build time: 128 (the default, 2.048 Mbit/s for 16 kHz), 256 or 384,
-/// the converter's ratios of two, four and six. At 64 it gives noise.
-/// More bits a sample are less of the modulator's own noise in the
-/// audio band and shorter pulses for the transistor to follow.
+/// build time: 128 (2.048 Mbit/s for 16 kHz), 256 (the default,
+/// 4.096 Mbit/s) or 384, the converter's ratios of two, four and six.
+/// At 64 it gives noise. More bits a sample are less of the modulator's
+/// own noise in the audio band and shorter pulses for the transistor
+/// to follow. 128 was the first default, heard on a clock's buzzer;
+/// 256 is the user's choice of 2026-11-13, from a breadboard copy of
+/// the stage with headphones, where a silent clip hissed at 128 and
+/// not at 256. No clock's own transistor has had 256 yet: 128 is the
+/// way back.
 pub const CLIP_PDM_BITS: u32 = {
     let bits = match option_env!("CLIP_PDM_BITS") {
         Some(s) => parse_i32(s),
-        None => 128,
+        None => 256,
     };
     assert!(bits == 128 || bits == 256 || bits == 384, "CLIP_PDM_BITS must be 128, 256 or 384");
     bits as u32

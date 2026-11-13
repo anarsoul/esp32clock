@@ -18,7 +18,7 @@ from `http://<ip>/update`; its settings survive the update.
   Spectrum's speaker played it, and two chiptunes by Orion, "Halftime"
   and "Keygen", played from their tracker modules by a player in the
   firmware. They go out of the buzzer pin as a bitstream from I2S (the
-  modules and PCM clips through its PCM-to-PDM converter, at 128 bits
+  modules and PCM clips through its PCM-to-PDM converter, at 256 bits
   a sample; `CLIP_MODULATOR=sd` at build time is a software
   sigma-delta at a lower rate, for a buzzer circuit that asks for
   one), and are in the random draw, and a ringing alarm plays them round and
@@ -34,7 +34,7 @@ from `http://<ip>/update`; its settings survive the update.
   module: the firmware has the player and an AY-3-8910 of its own).
 - A Stop button beside Play on the settings page (`POST /stop`): it
   ends a preview, and a ringing alarm as a button press would.
-- `CLIP_PDM_BITS` at build time (128, the default, 256 or 384) sets
+- `CLIP_PDM_BITS` at build time (128, 256, the default, or 384) sets
   how many bits the PDM converter makes of a sample, and
   `scripts/xm2clip.py --knee` where a module's limiter starts, up to
   off: for a speaker in the buzzer's place, where the buzzer's hard

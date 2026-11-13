@@ -396,8 +396,8 @@ impl<'a> Player<'a> {
 
 /// Bits the chip's PCM-to-PDM converter makes of a sample, in a build
 /// that sends PCM clips and modules through it (`CLIP_MODULATOR=pdm`,
-/// the default) and not through a modulator here: `CLIP_PDM_BITS`, 128
-/// unless the build says otherwise, its ratio of two; at 64, a ratio
+/// the default) and not through a modulator here: `CLIP_PDM_BITS`, 256
+/// unless the build says otherwise, its ratio of four; at 64, a ratio
 /// of one, the line carried white noise (2026-11-13).
 pub const CONVERTER: Option<u32> = if config::CLIP_PDM { Some(config::CLIP_PDM_BITS) } else { None };
 /// One step of the 8-bit sample for the chip's converter, in the

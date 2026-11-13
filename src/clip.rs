@@ -7,9 +7,9 @@
 //! A PCM clip or a tracker module goes out through the transmitter's
 //! PDM mode and its PCM-to-PDM converter (`clip::CONVERTER`, the
 //! default build): the ring holds the clip's samples, 16 bits, one
-//! channel, and the chip makes 128 bits of each, 2.048 Mbit/s at
-//! 16 kHz. That was heard against the software sigma-delta at half the
-//! rate and kept (2026-11-13). Two things about it are not esp-hal's
+//! channel, and the chip makes `CLIP_PDM_BITS` of each: 256 by
+//! default, 4.096 Mbit/s at 16 kHz. At 128 it was heard against the
+//! software sigma-delta at half that rate and kept (2026-11-13). Two things about it are not esp-hal's
 //! defaults. The driver (1.2.2) clears `tx_pcm_bypass` in PDM mode,
 //! which puts the A-law compander before the converter and white noise
 //! on the line; `play` sets the bit again. And in PDM mode the master

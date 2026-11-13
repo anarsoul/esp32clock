@@ -8078,3 +8078,11 @@ coil, or the 32 Ω speaker at about 156 mA, which 0.84 mA of base
 current may not saturate at all); a scope on the collector with the
 speaker in will say, and if it does saturate, 2.2 k from base to
 emitter is a third part for the buzzer mod.
+
+**256 bits a sample is the default, 2026-11-13** ("I meant make 4MHz
+default", the user). `config::CLIP_PDM_BITS` is 256 with no variable
+set, 4.096 Mbit/s for a 16 kHz clip; `CLIP_PDM_BITS=128` is the rate
+the clocks' buzzers have heard. Owed: a clock's own S8550 and buzzer
+at 256, which only the breadboard stage has had, and the sixth build
+above (Silence at 128 with the base resistor in, the four limiter
+settings), which was built and not flashed.
