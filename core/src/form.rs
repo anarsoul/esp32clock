@@ -854,7 +854,7 @@ pub fn write_page(
     }
     write!(
         out,
-        "<option value={}{}>Random tune</option></select></label><button formaction=/play id=p>Play</button></fieldset>\
+        "<option value={}{}>Random tune</option></select></label><button formaction=/play id=p>Play</button> <button formaction=/stop id=q>Stop</button></fieldset>\
 <fieldset><legend>Display</legend><label>Colour <select name=color>",
         melody::RANDOM_NAME,
         if s.melody == melody::RANDOM { " selected" } else { "" }
@@ -886,8 +886,8 @@ pub fn write_page(
 <label>Password, empty keeps the stored one for the same broker <input type=password name=mqtt_password maxlength={pmax} autocomplete=new-password></label></fieldset>\
 <button>Save</button> <b id=u hidden>Changes not saved yet.</b></form>\
 <script>var m=document.getElementById('m'),f=document.forms[0],u=document.getElementById('u');\
-document.getElementById('p').onclick=function(e){{e.preventDefault();\
-fetch('/play',{{method:'POST',redirect:'manual',headers:{{'Content-Type':'application/x-www-form-urlencoded'}},body:'melody='+m.value}})}};\
+for(let i of'pq')document.getElementById(i).onclick=function(e){{e.preventDefault();\
+fetch(this.formAction,{{method:'POST',redirect:'manual',headers:{{'Content-Type':'application/x-www-form-urlencoded'}},body:'melody='+m.value}})}};\
 f.oninput=function(){{var d=false;for(var e of f.elements)if(e.name&&(e.type=='checkbox'?e.checked!=e.defaultChecked:\
 e.options?!e.options[e.selectedIndex].defaultSelected:e.value!=e.defaultValue))d=true;u.hidden=!d}}</script>",
         Tenths(s.temp_offset_dc),
@@ -1451,6 +1451,10 @@ mod tests {
         println!("settings page: {} bytes of {PAGE_MAX}", out.len());
         assert!(out.len() <= PAGE_MAX, "{} bytes", out.len());
         assert!(out.ends_with("</html>"));
+        // Play and Stop, each posted by the script to its own address
+        // without leaving the page.
+        assert!(out.contains("<button formaction=/play id=p>Play</button> <button formaction=/stop id=q>Stop</button>"));
+        assert!(out.contains("for(let i of'pq')") && out.contains("fetch(this.formAction,"));
         assert!(out.contains(&format!("Wi-Fi <b>{}</b>, -100 dBm.", "&quot;".repeat(SSID_MAX))), "{out}");
     }
 

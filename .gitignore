@@ -50,3 +50,6 @@ tap/
 
 # Commodore 64 tunes for the SID player, and the clips made from them
 sid/
+
+# ZX Spectrum modules for the PT3 player, and the clips made from them
+pt3/

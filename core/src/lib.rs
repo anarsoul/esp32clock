@@ -16,6 +16,7 @@
 #![cfg_attr(not(test), no_std)]
 
 pub mod aip33628;
+pub mod ay;
 pub mod auth;
 pub mod buttons;
 pub mod carry;
@@ -28,6 +29,7 @@ pub mod melody;
 pub mod mqtt;
 pub mod ota;
 pub mod panel;
+pub mod pt3;
 pub mod sensors;
 pub mod settings;
 pub mod shape;

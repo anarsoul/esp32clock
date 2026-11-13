@@ -217,7 +217,7 @@ enum NoRequest {
 
 /// Whether a `POST` to `path` carries a body the server reads, so that a
 /// missing `Content-Length` is a request it cannot serve. The other
-/// posts (`/reload`, `/ap`, `/pin`, `/scan`) are commands with nothing
+/// posts (`/reload`, `/ap`, `/pin`, `/scan`, `/stop`) are commands with nothing
 /// to read, sent as a bare `curl -X POST` by the scripts, and a missing
 /// length there means none (found on the bench, 2026-11-08, when the
 /// first `411` rule refused `scripts/reload.sh`).
@@ -447,6 +447,16 @@ fn respond(out: &mut Response, req: &Request<'_>, body: &[u8]) -> Result<Then, c
                 warn!("http: play form rejected: {e:?}");
             }
             buzzer::preview(trial.melody);
+            redirect_home(out, None)?;
+        }
+        (Method::Post, "/stop") => {
+            // The page's Stop button: an end to a preview, and to a ring
+            // as a press would end it, so the panel does not go on
+            // ringing in silence. Whatever body came with it is ignored.
+            buzzer::stop();
+            if display::ringing() {
+                display::silence();
+            }
             redirect_home(out, None)?;
         }
         (Method::Get, "/favicon.ico") => {

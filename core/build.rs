@@ -18,8 +18,9 @@ const DEFAULT_CLIPS: &str = "clips/trantor.bpr,clips/halftime.xmc,clips/keygen.x
 
 /// `ALARM_CLIP` names the clips to build in as the last melodies, files
 /// separated by commas: raw PCM (`scripts/wav2pcm.sh`), a beeper clip
-/// (`scripts/zxbeeper.py`), a tracker module (`scripts/xm2clip.py`) or a
-/// Commodore 64 tune (`scripts/sid2clip.py`).
+/// (`scripts/zxbeeper.py`), a tracker module (`scripts/xm2clip.py`), a
+/// Commodore 64 tune (`scripts/sid2clip.py`) or a ZX Spectrum one
+/// (`scripts/pt32clip.py`).
 /// A relative path is taken from the workspace root, where cargo is run.
 /// A clip's API name is its file's name without the extension, in lower
 /// case with everything but letters turned into `_`; its label is the
@@ -28,8 +29,8 @@ const DEFAULT_CLIPS: &str = "clips/trantor.bpr,clips/halftime.xmc,clips/keygen.x
 ///
 /// A ringing alarm plays a clip round and round with no gap if the clip
 /// is made to go round, and with a pause between passes, as the note
-/// melodies have, if it is not. A beeper clip, a module and a SID tune
-/// are taken to be, PCM not; `:loop` or `:once` after a file's name says otherwise.
+/// melodies have, if it is not. A beeper clip, a module, a SID tune and
+/// a PT3 module are taken to be, PCM not; `:loop` or `:once` after a file's name says otherwise.
 /// `melody.rs` includes what this writes.
 fn clips() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().expect("core/ has a parent");
@@ -67,9 +68,10 @@ fn clips() {
         writeln!(names, "    ({name:?}, {label:?}),").unwrap();
         writeln!(data, "    include_bytes!({:?}),", path.display().to_string()).unwrap();
         // The clips with a header are the ones made from music written
-        // to loop: `clip::BEEPER_MAGIC`, `xm::MAGIC` and `sid::MAGIC`.
+        // to loop: `clip::BEEPER_MAGIC`, `xm::MAGIC`, `sid::MAGIC` and
+        // `pt3::MAGIC`.
         let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("ALARM_CLIP {}: {e}", path.display()));
-        let made_to = bytes.starts_with(b"BPR") || bytes.starts_with(b"XMC") || bytes.starts_with(b"SID");
+        let made_to = bytes.starts_with(b"BPR") || bytes.starts_with(b"XMC") || bytes.starts_with(b"SID") || bytes.starts_with(b"PT3");
         writeln!(loops, "    {},", asked.unwrap_or(made_to)).unwrap();
         count += 1;
     }

@@ -7502,3 +7502,351 @@ frame after; refused past the loop's start. The local clip is now
 silence for 150 ms, then the tune, same length. Heard on the clock,
 2026-11-13: "Sounds good now" (the user). Martin-clock and white-clock
 have it, with Trantor, Halftime, Keygen and Futurama.
+
+### ZX Spectrum tunes: an AY-3-8910 and a PT3 player on the chip — built 2026-11-13, on white-clock to be heard; the register comparison with a reference player owed
+
+The user's next source: `.pt3` files, two to start from in `pt3/`:
+"Hibernation" by MmcM (5870 bytes, 20 positions) and
+"synchronization" by nq (11 147 bytes, 98 positions), both Vortex
+Tracker II modules on the ASM tone table. "Similar to what we did for
+SID."
+
+**What a `.pt3` is.** Unlike a `.sid` it is notes, not a program: Pro
+Tracker 3's compiled module, three channels of patterns, up to 32
+samples (a line a frame: level, tone offset, noise or envelope offset,
+the mixer's bits) and 16 ornaments (a note offset a frame), a position
+list with the position to go round to. The Spectrum's player routine
+reads it fifty times a second and writes the AY-3-8910's fourteen
+registers. So again two things: the player and the chip.
+
+**Both on the clock.** A SID tune's player is 6502 code, which is why
+it runs on the host and the clip is a record of writes, 750 bytes a
+second. A PT3's player is one fixed routine, a few hundred lines with
+no memory of its own to speak of, and the module is 6 to 11 KB for
+three minutes where a record of the registers would be 100 KB or
+more (three tone periods and three levels change nearly every frame).
+So the clip is the module as it is behind a header, as a tracker
+module's is, and the clock interprets it: `core/src/pt3.rs`. The chip
+is `core/src/ay.rs`, by itself so that another AY format (PT2, STC,
+ASC, a `.psg` record) is a second player and not a second chip.
+
+**The clip, `PT31`.** A 40-byte header as `SID1` has: the magic; flags
+(bit 0 a YM2149's 32 levels and not an AY's 16, bit 1 start the tune
+afresh at its end and not from the module's loop position); the
+limiter's drive and release and the high-pass's passes; the chip's
+clock in Hz (1 750 000 on a Pentagon, 1 773 400 on a Spectrum 128);
+the length in ms played once; the clock cycles a frame (35 840 on a
+Pentagon, 48.83 frames a second; 35 454 on a 128, 50.02); the frames;
+the frame the tune goes round to; the high-pass's section. Then the
+module, untouched, its offsets its own.
+
+**The player, `pt3::Tune`.** Pro Tracker 3.x and Vortex Tracker II
+modules, one chip: the header's version digit chooses the tone table
+(four, in an older and a newer cut) and the volume table (3.3/3.4 or
+3.5); the pattern codes (note, rest, sample, ornament, volume, noise
+base, envelope with its period, rows to skip), the effects (tone
+slide, portamento, sample and ornament offset, the on/off vibrato,
+envelope slide, tempo), and the per-frame sample and ornament walk
+with the tone and level accumulators. Written for the clock from the
+format's behaviour; joric/libpt3's C port of the Ay_Emul player (no
+licence stated, so read and not copied) is the reference to compare
+registers with, frame by frame, on the host. Every read of the module
+is bounds-checked and answers 0, and a row's interpreter stops at the
+module's end, so a broken module is wrong notes and not a hang. Not
+played: TurboSound (two chips; the converter refuses it).
+
+**The chip, `ay::Chip`.** Exact, and cheap for being so: the chip's
+generators only ever change on a tick of clock/8 (218 750 a second),
+and between changes the output is a constant, so a 16 kHz sample is
+the output's mean over its 13 or 14 ticks, found by going from change
+to change rather than tick by tick: a few steps a sample where a SID
+needs four of everything. Three tone counters (period 12 bits, toggle
+each period), noise from the 17-bit shift register stepped every 2·NP
+ticks, the envelope's 32 positions a ramp with the sixteen shapes of
+continue, attack, alternate and hold and its restart on a write of
+R13, the mixer's six bits, the levels 1.5 dB a step (an AY uses every
+other one). A generator nothing listens to (its channel silent or its
+mixer bit off) is not a reason to stop: it is moved on in one go when
+the span ends. No oversampling constant: there is nothing to alias.
+Expected cost a fraction of a module's.
+
+*Why the mean and not SID's steps.* A square wave point-sampled
+aliases; the SID got 64 kHz steps for that and 26 % of the processor.
+An AY's output is piecewise constant on a coarse grid, so its mean
+over a sample is exact with integer arithmetic, and is what a chip
+through a box filter gives.
+
+**Shared.** `shape::Shaper` after the chip, as the other two players.
+`clip::Player` gets a fourth body, `core/build.rs` and the melody
+table take `PT3` for a clip made to loop.
+
+**Going round.** Both tunes name their last position as the one to go
+round to (an ending that repeats). For an alarm that is the wrong
+thing to ring with for five minutes, so the converter's `--restart`
+sets the header's flag and the tune starts over from its top, chip
+and player as new.
+
+**The converter.** `scripts/pt32clip.py tune.pt3 out.pt3c [--machine
+pentagon|spectrum] [--clock HZ] [--chip ay|ym] [--restart]
+[--highpass 300 --passes 1] [--drive N --release N]`. It checks the
+module, walks the patterns for the length (rows times the tempo, with
+the tempo's changes) and where the loop begins, and writes header and
+module. The machine defaults by the tone table: the ASM and "real"
+tables are tuned for a Pentagon's 1.75 MHz, the Pro Tracker and Sound
+Tracker ones for 1.7734 MHz.
+
+**Tests (`core/`).** The chip: a period is its pitch; the mixer's
+bits gate tone and noise; noise is noise at its rate; each of the
+sixteen envelope shapes level by level and R13's restart; the level
+table against its formula; and the change-to-change `run` against a
+tick-by-tick model of the chip over random registers and spans, sum
+for sum. The player, on modules built in the test: a note's period
+from its table, rows and tempo on their frames, the sample's levels
+and loop through the volume table, an ornament's notes, slide and
+portamento to its target, the envelope and noise registers, the
+position list, the loop, `--restart` and the end; a truncated module.
+A built-in clip plays to its header's length, which checks the
+converter's walk against the player's.
+
+**To hear.** Both tunes as clips on white-clock beside the others,
+from `pt3/`, which stays out of git with `sid/` until the user says
+whether either becomes a default clip.
+
+**Built, 2026-11-13.** As planned. `core/src/ay.rs`, `core/src/pt3.rs`,
+`scripts/pt32clip.py`; 138 host tests (15 new).
+
+*What the tests found.* The chip's change-to-change `run` against the
+tick-by-tick model caught two things in the first hour: a counter must
+not be clamped to a shortened period at the register write (a period
+is two registers, and is short for the moment between the two writes),
+only when the next tick comes; and a run of no ticks must touch
+nothing. The player's tests are on modules built in the test.
+
+*The converter.* Hibernation: 20 positions, 4724 frames, 96.7 s,
+5910 bytes. Synchronization: 98 positions, 25 088 frames, 513.8 s,
+11 187 bytes. Both go round to their last position only (0.5 s and
+5.2 s of ending), so both are converted with `--restart`; Hibernation
+with `--chip ym`, as its title line says "ABC YM". The converter's
+walk and the player agree on the frame count of both
+(`a_built_in_tune_plays_to_its_length` with `ALARM_CLIP` naming them).
+
+```
+scripts/pt32clip.py pt3/MmcM-Hibernation.pt3 pt3/hibernation.pt3c --restart --chip ym
+scripts/pt32clip.py pt3/nq-synchronization.pt3 pt3/synchronization.pt3c --restart
+```
+
+*Against a reference: owed.* joric/libpt3's `pt3_reader_zxssk.c` was
+read and is in agreement with the player line by line, with one
+difference on purpose: it adds a sample line's envelope offset as an
+unsigned byte (`int AddToEnv += uint8_t`), where the Spectrum's
+routine and Ay_Emul sign-extend it, as `pt3.rs` does. Building it on
+the host to compare registers frame by frame (`CLIP_REG_DUMP=file
+CLIP_INDEX=n cargo host-test dump_the_registers -- --ignored` writes
+the clock's side, fourteen bytes a frame) was declined by the
+session's permission check, since it is downloaded code; the user's
+to run or to waive. Until then the player's notes are checked by its
+own tests and by ear only.
+
+*A stack overflow, found on the clocks.* The first image played
+Trantor and panicked on every module, SID tune and PT3 (a load fault
+in esp-rtos's task list, then `lock is not reentrant`): nothing in
+the new player, but `clip::Stream::new` inlined into the clip task's
+`poll`, where the fourth kind of player took the frame from about
+5 KB to 6016 bytes, each kind built in a slot of its own and moved.
+The clip task runs on the interrupt executor, so that frame lands on
+whatever task's stack the interrupt found, the Wi-Fi task's included.
+Now `Stream::new` is never inlined and builds the player in the
+stream, each kind through its own `Player::take_*`: `poll` is 240
+bytes, `Stream::new` 880, and the deepest of the three, a module's,
+1648 under it, 2.8 KB at the worst and only while a clip starts. The
+main stack is unchanged (50.5 KB with clips).
+
+*On the bench* (test-clock, `/play`, 25 s of each, the serial log's
+`clip:` line):
+
+| clip | filling | share |
+| --- | --- | --- |
+| Halftime, a module of four channels | 2978 of 25 055 ms | 12 % |
+| Donkey Kong, the SID at 4 steps a sample | 7169 of 25 102 ms | 29 % |
+| Hibernation, the AY | 3249 of 25 041 ms | 13 % |
+
+No underruns or stray positions. The AY is half the SID's cost and a
+module's, not the fraction of one the plan guessed: the shaper and the
+ring's 16-bit samples are a floor all three share.
+
+*To hear.* White-clock and test-clock have `v0.4-19-g619d234-dirty`
+(the second image of that name, with the stack fix) with Trantor,
+Halftime, Keygen, Futurama, Donkey Kong, Hibernation and
+Synchronization; 1572 KB of the slot's 1920. Owed: the user's ear on
+both tunes (pitch and tempo against a Pentagon's, AY against YM for
+Hibernation's envelope bass, the 300 Hz cut), whether either becomes
+a default clip, the register comparison.
+
+### A Stop button beside Play — built 2026-11-13, to be tried on white-clock
+
+The user, with an eight-minute tune in the list: a preview could only
+be ended by starting another. `POST /stop` silences the buzzer
+(`buzzer::stop`) and, if the alarm is ringing, ends the ring as a
+press would (`display::silence`, what MQTT's `silence` does), so the
+panel and the state do not go on ringing in silence. No token, as
+`/play` has none and the settings form can disarm the alarm anyway; a
+command post with nothing to read, so a bare `curl -X POST` works and
+a form's body, sent by a browser without script, is ignored. The page
+gets `Stop` after `Play`, posted by script as Play is, so the form is
+not reloaded: one handler for both buttons, which posts to the
+button's own `formaction` (Stop gets the melody too, and ignores it),
+because the page at its worst was 5865 bytes of 6016 with the nine
+clips of the user's build and a second handler would not fit.
+
+**Stop, on the bench, 2026-11-13.** Test-clock: a preview of
+Synchronization, `curl -X POST /stop` eight seconds in, and the serial
+log has `http: L1 Post /stop` and `clip: cut short` 2 ms after it.
+The page's button and a ringing alarm are the user's to try.
+
+**AY against YM, to hear.** White-clock has Hibernation twice, the one
+module with the header's chip flag the only byte that differs:
+"Hibernation A (AY)", sixteen levels in the envelope, and "Hibernation
+B (YM)", thirty-two; then Synchronization (AY). The clips are under
+`target/clips/`; the winner replaces `pt3/hibernation.pt3c`.
+
+**Heard, 2026-11-13: "Let's keep AY"** (the user, of Hibernation A
+against B). `pt3/hibernation.pt3c` is the AY one, `--restart` alone;
+`--chip ym` stays the converter's option.
+
+**A third tune, 2026-11-13.** `pt3/nq-ppk.pt3`: "'resurection' (c) ppk
+/rmx" by Nik-O, a Pro Tracker 3.5 module on the Sound Tracker table,
+so a Spectrum 128 by the converter's default (1 773 400 Hz, 50.02
+frames a second): 41 positions, 8650 frames, 172.9 s, 6853 bytes. Its
+loop is a real one, round from position 14 at 56.2 s, so no
+`--restart`; it uses the ornament offset and the envelope slide, which
+the first two did not. `scripts/pt32clip.py pt3/nq-ppk.pt3
+pt3/ppk.pt3c`, labelled PPK. The player's frame count agrees with the
+converter's. White-clock has eight clips: Trantor, Halftime, Keygen,
+Futurama, Donkey Kong, Hibernation, Synchronization, PPK.
+
+### Quieter noise for the AY's drums — built 2026-11-13, an A/B/C on white-clock to be heard
+
+The user, of the PT3 tunes: "Drums sound too aggressive. It is white
+noise, high pitch, naturally more pronounced on the buzzer. Maybe mix
+it in at a lower volume? Again, A/B testing."
+
+An AY drum is a channel with the noise let through its mixer bit. So:
+a channel whose noise bit is open is mixed at a fraction of its level,
+`ay::Chip::set_noise_level` in sixteenths, the clip's to say in header
+byte 38 (0 for all of it), `scripts/pt32clip.py --noise N`. The level
+is scaled, not the noise filtered: the chip's output stays piecewise
+constant, `run` stays exact, and the tick-by-tick model has the same
+rule. A channel with tone and noise both open is scaled too (it is the
+same hit, with a pitch under it); the chip's envelope on such a
+channel likewise.
+
+To hear, on white-clock: Synchronization three times (the user's
+choice of tune), "Sync A" the noise as the chip has it, "Sync B" at
+8/16 (−6 dB), "Sync C" at 4/16 (−12 dB); the clips under
+`target/clips/`. The chip's model in the tests has the same rule and
+`run` still agrees with it sum for sum; 138 host tests pass.
+
+**Heard, 2026-11-13: "B is better"** (the noise at 8/16), and the
+user's question: how does the chip really mix, so that the model is
+right before the player is bent to the buzzer.
+
+**The chip against two emulators' sources** (Ayumi by Peter Sovietov
+and MAME's `ay8910.cpp`, read on 2026-11-13; nothing copied but the
+level tables, which are measurements).
+
+| what | the emulators | `ay.rs` |
+| --- | --- | --- |
+| a channel's gate | (tone or tone off) and (noise or noise off), before the DAC; both off is a steady level | the same |
+| tone | counts up, turns at count >= period, period 0 as 1 | the same |
+| noise | 17 bits, bit 0 xor bit 3 in at the top, bit 0 out, a step every 2·NP ticks of clock/8 | the same |
+| envelope | 16 levels on an AY at 2·EP ticks each, 32 on a YM at EP; the ten shapes | the same; MAME has period 0 as half of 1, here it is 1, as Ayumi has it |
+| levels | measured, uneven: an AY's top steps are 1.9 to 2.4 dB, its low ones 3 to 4.4 | **was the data sheet's even 3 dB** |
+| the three outputs | added up (Ayumi); MAME also models the pins tied together into one load, as a Spectrum 128 has them, where loud channels press each other down | added up |
+| DC | all above nought; a YM has an offset | above nought, the high-pass takes it |
+
+So the logic was right and the levels were not. With 3 dB a level a
+note at level 12 came out at 0.35 of full scale where the chip gives
+0.49, level 10 at 0.18 for 0.29: the tunes' notes, which sit at 10 to
+13, were 3 to 4.4 dB too quiet beside anything at 15, which is where
+drums start. Some of "the drums are too aggressive" was that. `ay.rs`
+now has the measured tables, `LEVELS_AY` and `LEVELS_YM` (Ayumi's,
+scaled to 32767). Not taken: the tied-pins model. It needs a machine's
+load resistor, the tunes here are Pentagon ones (each output buffered,
+ABC stereo), and its effect, loud sums compressed, is what the limiter
+does anyway.
+
+**To hear again, on the measured levels.** The judgment of 8/16 was
+made on the wrong table, so the trial is repeated: white-clock has
+"Sync A" the noise as the chip has it, "Sync B" at 11/16 (−3 dB),
+"Sync C" at 8/16 (−6 dB, the earlier B). What is left for `--noise`
+to do after this is the buzzer's share alone.
+
+**Logarithmic, 2026-11-13** (the user's recollection, checked). It is:
+the data sheet's sixteen levels are 3 dB apart, and openMSX's
+`AY8910.cc` builds its table so (1.5 dB a step over a YM's 32, an AY
+on every other), which is what `ay.rs` had first. Ayumi and MAME use
+chips measured instead, and those are logarithmic too but not evenly:
+from full scale down, in dB,
+
+| level | 14 | 13 | 12 | 11 | 10 | 9 | 8 | 7 | 4 | 1 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| measured AY | −1.9 | −3.9 | −6.2 | −8.6 | −10.7 | −13.8 | −18.0 | −19.4 | −30.3 | −40.0 |
+| even 3 dB | −3.0 | −6.0 | −9.0 | −12.0 | −15.0 | −18.1 | −21.1 | −24.1 | −33.1 | −42.1 |
+| linear, for contrast | −0.6 | −1.2 | −1.9 | −2.7 | −3.5 | −4.4 | −5.5 | −6.6 | −11.5 | −23.5 |
+
+Neither table in `ay.rs`, then or now, was linear. (A PT3's own volume
+table multiplies a sample's level by the channel's volume as plain
+numbers, 0 to 15, and the product is then a level register's value:
+that is the format, and the logarithm comes after it.) The emulators
+disagree on which curve, so the choice between the measured table (in
+now) and the even one is one more thing an A/B could settle.
+
+**Heard, 2026-11-13: "B is still better"** on the measured levels: the
+noise at 11/16 (−3 dB). The next question is the user's: low-pass the
+noise instead, as an A/B.
+
+### A low-pass for the AY's noise — built 2026-11-13, an A/B/C on white-clock to be heard
+
+The chip stays exact: `ay::Chip::run_parts` answers the output in two
+sums, the channels with the noise let through and the rest, and `run`
+is their total. `pt3::Tune` makes a sample's mean of each and, if the
+clip's header byte 39 is not nought, puts the noisy one through a
+one-pole low-pass at the sample rate (y += (x − y)·k/256) before
+adding them. `scripts/pt32clip.py --noise-lowpass HZ` works out k. The
+whole of a drum channel is filtered, a tone under its noise too, and
+its mean level passes, so nothing thumps. 6 dB an octave: white noise
+through 3 kHz keeps about −2 dB of its power and loses its hiss,
+through 1.5 kHz about −5 dB.
+
+To hear, Synchronization three times: "Sync A" the noise at 11/16 and
+no filter (the winner so far), "Sync B" the noise at all of its level
+through 3 kHz, "Sync C" the same through 1.5 kHz.
+
+**The noise only, 2026-11-13** (the user, before judging: "The tone
+under the noise should not be filtered"). The first cut filtered a
+drum channel's whole output. Now `run_parts` answers `ay::Parts`:
+`plain`, `noisy`, and for the channels that listen to the noise `open`,
+what their tones and levels give with the noise's bit always set, and
+`noise`, the ticks its bit was set for. With a low-pass asked for, the
+player filters that fraction, a number from 0 to 1 a sample, and the
+listening channels are `open` times it: the tone's edges are the
+chip's, the noise that gates them is smoothed. (Within one sample the
+tone and the noise are taken as independent, which they are but for
+14 ticks' chance.) Without a low-pass nothing changes and `noisy` is
+used as it was, exact. White-clock has the same three variants built
+this way.
+
+**Heard, 2026-11-13: "Let's keep A".** The noise at 11/16 with no
+low-pass, over both corners of the filter. `scripts/pt32clip.py`
+now has `--noise 11` as its default; `--noise-lowpass` stays in the
+converter and the player as an option nobody's clip uses. The three
+tunes are converted again on the measured levels with the default:
+
+```
+scripts/pt32clip.py pt3/MmcM-Hibernation.pt3 pt3/hibernation.pt3c --restart
+scripts/pt32clip.py pt3/nq-synchronization.pt3 pt3/synchronization.pt3c --restart
+scripts/pt32clip.py pt3/nq-ppk.pt3 pt3/ppk.pt3c
+```
+
+White-clock is back on the eight clips: Trantor, Halftime, Keygen,
+Futurama, Donkey Kong, Hibernation, Synchronization, PPK.

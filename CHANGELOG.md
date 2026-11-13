@@ -27,9 +27,13 @@ from `http://<ip>/update`; its settings survive the update.
 - `ALARM_CLIP` at build time chooses other clips, or none: raw PCM
   (`scripts/wav2pcm.sh`), a ZX Spectrum beeper recording
   (`scripts/zxbeeper.py`), a FastTracker 2 module
-  (`scripts/xm2clip.py`) or a Commodore 64 tune (`scripts/sid2clip.py`,
+  (`scripts/xm2clip.py`), a Commodore 64 tune (`scripts/sid2clip.py`,
   from a PSID file: the firmware has a SID chip of its own to play the
-  tune's register writes through).
+  tune's register writes through) or a ZX Spectrum one
+  (`scripts/pt32clip.py`, from a Pro Tracker 3 or Vortex Tracker II
+  module: the firmware has the player and an AY-3-8910 of its own).
+- A Stop button beside Play on the settings page (`POST /stop`): it
+  ends a preview, and a ringing alarm as a button press would.
 
 ### Changed
 
