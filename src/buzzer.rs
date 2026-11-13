@@ -13,6 +13,11 @@
 //! square wave at the tone frequency. LEDC generates it; a duty of 100 %
 //! holds the line high (released) between notes.
 //!
+//! A clip, in a build that has any, is not LEDC's: `clip.rs`
+//! sends it as a bitstream from I2S0 on the same pin, from a task of
+//! its own, and hands the pin back released, with the GPIO matrix's inverter cleared, which the
+//! `Output` each tone builds would do as well.
+//!
 //! Nothing sounds on its own. The task plays a melody on command, on a
 //! loop for the alarm or once for a preview, and stops within a note when
 //! told to. A command naming `melody::RANDOM` is resolved here, from the
@@ -32,6 +37,7 @@ use esp_hal::rng::Rng;
 use esp_hal::time::Rate;
 use log::{info, warn};
 
+use crate::clip;
 use crate::melody::{self, Melody};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -81,8 +87,12 @@ fn resolve(index: usize, last: &mut Option<usize>, what: &str) -> &'static Melod
 }
 
 /// Play `m` once. Returns early with the interrupting command if one
-/// arrives, checked after every note.
+/// arrives, checked after every note, or twice a chunk in the clip.
 async fn play_once(ledc: &Ledc<'static>, pin: &mut GPIO5<'static>, m: &Melody) -> Option<Command> {
+    if let Some(k) = m.clip {
+        // The clip task has the pin until this returns.
+        return clip::play(k, &COMMAND).await;
+    }
     for note in m.notes {
         let total = note.ms(m.bpm) as u64;
         let sounding = note.sounding_ms(m.bpm) as u64;
@@ -98,7 +108,8 @@ async fn play_once(ledc: &Ledc<'static>, pin: &mut GPIO5<'static>, m: &Melody) -
     None
 }
 
-/// Owns the LEDC peripheral and the buzzer pin.
+/// Owns the LEDC peripheral and the buzzer pin, which it lends to the
+/// clip task for the length of a clip.
 ///
 /// The LEDC channel keeps a shared borrow of its timer, so the timer cannot
 /// be retuned while the channel exists. Each tone therefore builds a fresh

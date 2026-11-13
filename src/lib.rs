@@ -10,6 +10,7 @@ pub use esp32clock_core::{aip33628, auth, config, form, melody, panel, settings,
 pub mod buttons;
 pub mod buzzer;
 pub mod carry;
+pub mod clip;
 pub mod clock;
 pub mod dhcpd;
 pub mod dnsd;

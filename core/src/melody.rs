@@ -54,11 +54,16 @@ pub struct Melody {
     pub notes: &'static [Note],
     /// Silence before the melody repeats while ringing.
     pub repeat_gap_ms: u16,
+    /// A clip: no notes, the sound is `CLIP_DATA` at this index.
+    pub clip: Option<usize>,
 }
 
 impl Melody {
     /// Length of one pass, without the repeat gap.
     pub const fn duration_ms(&self) -> u32 {
+        if let Some(k) = self.clip {
+            return crate::clip::duration_ms(CLIP_DATA[k]);
+        }
         let mut total = 0;
         let mut i = 0;
         while i < self.notes.len() {
@@ -139,6 +144,7 @@ pub const BEEPS: Melody = Melody {
         n(BEEP_HZ, 1), n(REST, 1), n(BEEP_HZ, 1),
     ],
     repeat_gap_ms: 800,
+    clip: None,
 };
 
 /// Twinkle Twinkle Little Star, the whole verse, in G so the top note is
@@ -156,6 +162,7 @@ pub const TWINKLE: Melody = Melody {
         n(C6, Q), n(C6, Q), n(B5, Q), n(B5, Q), n(A5, Q), n(A5, Q), n(G5, H),
     ],
     repeat_gap_ms: 2000,
+    clip: None,
 };
 
 /// Ode to Joy, the first two phrases of the theme, in G so it spans
@@ -172,6 +179,7 @@ pub const ODE_TO_JOY: Melody = Melody {
         n(G5, Q), n(G5, Q), n(A5, Q), n(B5, Q), n(A5, DQ), n(G5, E), n(G5, H),
     ],
     repeat_gap_ms: 2000,
+    clip: None,
 };
 
 /// Frère Jacques, one round, in G for the same reason; the "ding dang
@@ -191,6 +199,7 @@ pub const FRERE_JACQUES: Melody = Melody {
         n(G5, Q), n(D5, Q), n(G5, H),
     ],
     repeat_gap_ms: 2000,
+    clip: None,
 };
 
 /// Morning Mood from Peer Gynt, the first four bars of the theme, in
@@ -210,6 +219,7 @@ pub const MORNING_MOOD: Melody = Melody {
         n(D6, E), n(B5, E), n(A5, E), n(G5, DQ),
     ],
     repeat_gap_ms: 2000,
+    clip: None,
 };
 
 /// The Westminster Quarters, the four changes rung on the hour, each
@@ -226,6 +236,7 @@ pub const WESTMINSTER: Melody = Melody {
         n(G5, Q), n(D6, Q), n(E6, Q), n(C6, H),
     ],
     repeat_gap_ms: 2000,
+    clip: None,
 };
 
 /// Reveille, the US bugle call, from a trombone score in cut time at
@@ -251,6 +262,7 @@ pub const REVEILLE: Melody = Melody {
         n(C6, W),
     ],
     repeat_gap_ms: 2000,
+    clip: None,
 };
 
 /// Für Elise, the first eight bars of the melody in 3/8, with the left
@@ -276,6 +288,7 @@ pub const FUR_ELISE: Melody = Melody {
         n(A5, DQ),
     ],
     repeat_gap_ms: 2000,
+    clip: None,
 };
 
 /// Jingle Bells, the chorus with both endings, in G so it spans G5 to
@@ -303,22 +316,68 @@ pub const JINGLE_BELLS: Melody = Melody {
         n(G5, W),
     ],
     repeat_gap_ms: 2000,
+    clip: None,
 };
+
+// `CLIP_COUNT`, `CLIP_NAMES` (API name and label of each) and
+// `CLIP_DATA`, written by `build.rs` from `ALARM_CLIP`: the files named
+// there, in order. Each is raw PCM (8 bits unsigned, mono,
+// `clip::PCM_HZ` samples a second), a beeper clip's run lengths behind
+// `clip::BEEPER_MAGIC`, or a two-channel tune behind `clip::WHAM_MAGIC`.
+// The data is a `static`, so the image holds it once.
+include!(concat!(env!("OUT_DIR"), "/clips.rs"));
+
+/// Whether any clip was built in (`ALARM_CLIP` at build time).
+pub const HAS_CLIP: bool = CLIP_COUNT != 0;
+
+const fn same(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// The tunes written as notes.
+const TUNES: [Melody; 9] = [BEEPS, TWINKLE, ODE_TO_JOY, FRERE_JACQUES, MORNING_MOOD, WESTMINSTER, REVEILLE, FUR_ELISE, JINGLE_BELLS];
 
 /// Every melody, in the order the page lists them. The settings index
 /// points into this table; `beeps` first so the default is index 0,
 /// and new tunes go at the end so stored indexes keep their meaning.
-pub const MELODIES: [Melody; 9] = [
-    BEEPS,
-    TWINKLE,
-    ODE_TO_JOY,
-    FRERE_JACQUES,
-    MORNING_MOOD,
-    WESTMINSTER,
-    REVEILLE,
-    FUR_ELISE,
-    JINGLE_BELLS,
-];
+/// The clips of a build that has any come last, in `ALARM_CLIP`'s
+/// order: a record that names one, read by a build without it, lands
+/// on the last melody there is.
+pub const MELODIES: &[Melody] = &{
+    let mut all = [BEEPS; TUNES.len() + CLIP_COUNT];
+    let mut i = 0;
+    while i < TUNES.len() {
+        all[i] = TUNES[i];
+        i += 1;
+    }
+    let mut k = 0;
+    // (`!=` and not `<`: clippy calls `k < 0` absurd in a build with no clip.)
+    while k != CLIP_COUNT {
+        let (name, label) = CLIP_NAMES[k];
+        // A second of sound at least, room left in the 1920 KB slot, and
+        // a name of its own, or the API could not pick it.
+        assert!(crate::clip::duration_ms(CLIP_DATA[k]) >= 1000 && CLIP_DATA[k].len() <= 1_000_000, "ALARM_CLIP: a clip must be a second of sound at least and 1 MB at most");
+        let mut j = 0;
+        while j < TUNES.len() + k {
+            assert!(!same(all[j].name, name) && !same(name, RANDOM_NAME), "ALARM_CLIP: two melodies with one name; rename the file");
+            j += 1;
+        }
+        all[TUNES.len() + k] = Melody { name, label, bpm: 120, notes: &[], repeat_gap_ms: 1500, clip: Some(k) };
+        k += 1;
+    }
+    all
+};
 
 /// The setting value for "a different tune each time": one past the
 /// table. `pick` turns it into a tune when the buzzer starts.
@@ -369,6 +428,13 @@ mod tests {
     fn every_tune_is_playable() {
         assert_eq!(MELODIES[0].name, "beeps");
         for (i, m) in MELODIES.iter().enumerate() {
+            assert!(m.name.bytes().all(|b| b.is_ascii_lowercase() || b == b'_'), "{}: the API name", m.name);
+            if let Some(k) = m.clip {
+                assert!(i == TUNES.len() + k && m.notes.is_empty(), "the clips come last, in order");
+                assert_eq!(m.duration_ms(), crate::clip::duration_ms(CLIP_DATA[k]));
+                assert!(!m.label.is_empty());
+                continue;
+            }
             assert!(!m.notes.is_empty());
             for n in m.notes {
                 assert!(n.len > 0, "{}: a note without a length", m.name);
@@ -389,8 +455,9 @@ mod tests {
             } else {
                 assert!((2_000..=40_000).contains(&ms), "{}: {ms} ms", m.name);
             }
-            assert!(m.name.bytes().all(|b| b.is_ascii_lowercase() || b == b'_'), "{}: the API name", m.name);
         }
+        assert_eq!(MELODIES.iter().filter(|m| m.clip.is_some()).count(), CLIP_COUNT);
+        assert_eq!(MELODIES.len(), 9 + CLIP_COUNT);
         let names: Vec<&str> = MELODIES.iter().map(|m| m.name).collect();
         let mut sorted = names.clone();
         sorted.sort_unstable();

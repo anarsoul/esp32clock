@@ -41,3 +41,9 @@ temp-freerouting.dsn
 panelizer.log
 fp-info-cache
 _autosave-*
+
+# Sound for the sampled alarm clip: source files and the PCM built from them
+wav/
+
+# ZX Spectrum tapes for the beeper clip, and the clips made from them
+tap/

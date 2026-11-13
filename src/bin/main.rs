@@ -30,6 +30,7 @@ use log::info;
 use static_cell::StaticCell;
 
 use esp32clock::buzzer;
+use esp32clock::clip;
 use esp32clock::settings::Settings;
 use esp32clock::net::Mode;
 use esp32clock::{buttons, carry, clock, dhcpd, display, dnsd, heal, http, mqtt, net, ota, scan, sensors, settings, storage};
@@ -224,6 +225,18 @@ async fn main(spawner: Spawner) -> ! {
     scan_spawner.spawn(scan::scan_task(hw).expect("spawn scan"));
     spawner.spawn(display::display_task(stack).expect("spawn display"));
     spawner.spawn(buttons::button_task(button_top, button_bottom).expect("spawn buttons"));
+    // The clips, if any are built in, go out of I2S0 on the same pin,
+    // from a task on the interrupt executor beside the scan: a clip's
+    // ring has to be topped up every few tens of milliseconds, and on
+    // the thread executor Wi-Fi work held that off long enough to be
+    // heard as skips. The tones stay with the buzzer task here, whose
+    // LEDC driver is not `Send`.
+    // Safety: a second handle to the buzzer's pin. The clip task uses it
+    // only from a `clip::play` to its end, while the buzzer task, the
+    // other holder, waits in that call with LEDC off the pin.
+    let clip_pin = unsafe { buzzer_pin.clone_unchecked() };
+    let clip_hw = clip::Hardware { i2s: peripherals.I2S0, dma: peripherals.DMA_CH1 };
+    scan_spawner.spawn(clip::clip_task(clip_hw, clip_pin).expect("spawn clip"));
     spawner.spawn(buzzer::buzzer_task(Ledc::new(peripherals.LEDC), buzzer_pin).expect("spawn buzzer"));
     // The room sensors on the adapter: the NTC divider on GPIO0, the LDR
     // divider on GPIO1, both ADC1 (the converter that works with Wi-Fi on).

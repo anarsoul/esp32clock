@@ -6153,3 +6153,491 @@ said `"temp_offset":0.0` with the network and token from the record,
 so a stored 0 stays 0 under the new default. The board was put back
 to −2.5 afterwards. A record of version 7 or older picking up the
 default is covered by the host test only.
+
+### Sampled sound on the buzzer: PCM in flash, modulated on the chip — DONE, heard and accepted by the user on white-clock 2026-11-12
+
+The user's idea (2026-11-12): the buzzer line is a 1-bit speaker, so
+play sampled music on it. Decided the same day: the clip is stored as
+plain PCM and the chip modulates it, rather than a bitstream converted
+on the host, because the DMA needs a RAM window either way and PCM is
+a quarter of the flash.
+
+**Numbers.** The band is 4 kHz, so the PCM is 8 kHz, 8 bits, unsigned,
+mono, raw: 7.8 KB a second, 216 KB for the 27.6 s test clip. In-band
+SNR of a 1-bit stream against the music (first 10 s of the test clip,
+200 Hz to 3.6 kHz, peak 0.6 of full scale, simulated on the host):
+
+| bit rate | 1st order | 2nd order |
+| --- | --- | --- |
+| 64 kbit/s | 6 dB | 15 dB |
+| 128 kbit/s | 14 dB | 27 dB |
+| 256 kbit/s | 22 dB | 35 dB |
+| 512 kbit/s | 29 dB | 34 dB (the measurement's floor) |
+
+So a second-order modulator, at 256 kbit/s by default; `CLIP_KBPS` at
+build time picks 128, 256 or 512 for the bench.
+
+**Peripheral.** I2S0's transmitter in TDM mode, data line only, 8-bit
+stereo at `BIT_RATE / 16` frames a second, so the line carries the
+buffer's bytes MSB first at the bit rate (160 MHz / 39.0625 / 16 at
+256 kbit/s, exact in the fractional divider; 64 kbit/s is out of the
+8-bit divider's reach). GDMA channel 1 loops over a ring of eight
+1 KB descriptors (32 ms each at 256 kbit/s). The C3's GDMA reads
+internal RAM only, so the clip stays in `.rodata` and the buzzer task
+modulates it into the ring a few chunks ahead of the DMA
+(`core::clip::Pacer`: the DMA's descriptor register says which slot,
+the time since the start says which lap; a stall past the ring is an
+underrun, counted and logged, and the audio carries on late).
+
+**Pin.** GPIO5 must never be pushed high. It is made an open-drain
+`Output`, released, turned into a signal (which esp-hal freezes, so
+no driver touches the pad) with the GPIO matrix's output inverter, and
+connected to `I2SO_SD` after the transfer has started on a stream
+that begins with zeros: a 1 bit pulls the line low (buzzer on), a 0
+releases it. Ending, or a command cutting in, takes the pin back as a
+plain released output first and stops the transfer after; that also
+clears the inverter, which LEDC's tones must not inherit (the pin's
+`func_out_sel_cfg` is written whole by both).
+
+**Modulator** (`core/src/clip.rs`, pure, tested on the host). Second
+order, `NTF = (1 - z^-1)^2`, integer, linear interpolation between PCM
+samples, integrators clamped. A sample of 255 is 0.7 of the feedback,
+the loop's stable range. Mid-scale is a 50 % duty, so the clip is
+wrapped in 30 ms ramps from all-zeros and back to keep the step in
+the coil's DC out of the ear.
+
+**Build.** `ALARM_CLIP=<file.pcm>` at build time adds the clip as the
+last melody (`clip`, label from `ALARM_CLIP_LABEL`, default "Sampled
+clip"): on the page, the API, Home Assistant and in the random draw.
+Without it there is no entry, no ring (the 8 KB of statics are sized
+0) and the releases stay as they are; the test clip is someone else's
+music and is not in the repository (`wav/` is ignored).
+`scripts/wav2pcm.sh in.wav out.pcm [seconds]` converts with sox
+(mono, 300 Hz high-pass, 8 kHz, normalised, dithered to 8 bits).
+
+**Not known until the bench.**
+
+- The PNP has 10 k into its base and nothing to pull the base off, so
+  its turn-off may take longer than a bit (3.9 µs at 256 kbit/s). If
+  so the dense stream distorts and 128 kbit/s may sound better than
+  512; a scope on the collector says. The fallback is PWM-shaped bits
+  (one edge pair per carrier period, noise-shaped), which makes the
+  edge error a constant.
+- The byte and bit order of the 8-bit TDM format is from reading the
+  driver, not from a scope; if it is wrong the clip is hiss.
+- The buzzer's resonance near 2 kHz will colour everything.
+- Whether `out_dscr` names the descriptor being read or the next one;
+  the pacer never writes either.
+
+**Verify on a clock.** Build with the clip, pick it on the page and
+press Play: the log says `buzzer: preview clip`, then `clip: N chunks,
+0 underruns` when it ends; the tune is recognisable, starts and ends
+without a thump, and the line is silent after. A press or `Stop`
+during the clip silences it at once. A note melody played after the
+clip sounds as before (the inverter is gone). An alarm on the clip
+loops it with 1.5 s between passes. Try `CLIP_KBPS=128` and `512`.
+
+**Built, 2026-11-12.** `core/src/clip.rs` (`Player`, `Pacer`),
+`src/clip.rs` (`Sampler`), the `clip` entry in `melody.rs`,
+`scripts/wav2pcm.sh`. Host tests, 101: a full-scale 1 kHz sine comes
+back out of the bits with 43, 58 and 73 dB in the band at 128, 256
+and 512 kbit/s (a three-pass moving average as the filter; 8-bit
+samples carry about 50), the ramps start and end on a released line
+with the duty monotonic through them, the integrators stay under half
+their clamp on a full-scale square wave, and the pacer never names
+the slot being read or the one before it over a thousand chunks.
+Sizes against `HEAD`: without a clip the image is 1.4 KB larger and
+the main stack 68.4 KB (68.5); with the test clip (221 100 bytes)
+`.rodata` grows by 222 KB, `.text` by 6.8 KB and the stack is
+60.0 KB. Nothing has been heard yet.
+
+**First hearing, 2026-11-12 (white-clock, over the air).** It played
+and the tune was there, but very quiet, and while it played the clock
+acted on button presses nobody made. Both point at the per-bit stream:
+at 256 kbit/s a mid-scale input is the line toggling every 3.9 µs,
+which is no time for the coil to take current and probably none for
+the transistor to turn off (10 k into the base, nothing pulling it
+off), and it is 128 000 falling edges a second on GPIO5 beside GPIO4,
+a button with only the internal pull-up; the debounce wants four
+samples 10 ms apart, so the line must have read low a good part of the
+time. Whether the coupling is through the board or the supply is not
+known.
+
+**Second version, the same day: pulse-width instead of sigma-delta.**
+The bits are now one pulse per carrier period, centred in it, as long
+as the level at mid-period asks for; `CLIP_CARRIER_KHZ` (8, 16 or 32,
+default 16) and `CLIP_KBPS` (default now 512) give
+`clip::PERIOD_BITS + 1` pulse lengths, 33 by default, up to 62 µs
+long, with 16 000 falling edges a second. The rounding error is fed
+back at the order the carrier leaves room for (`ORDER`: second at
+32 kHz, first at 16, none at 8, where shaping would put it back in
+the band). A pulse grown from the start of the period measured 14 dB
+at 16 kHz, its centre moving with the level; centred, the full-scale
+1 kHz sine comes back at 34.5 dB by default (19 to 25 at 8 kHz, 28 to
+34 at 16, 37 to 42 at 32). Full scale went from 0.7 to 0.95 of the
+rail, which a multi-level loop holds. The converter now pushes the
+level 12 dB into sox's limiter after the first normalise: the test
+clip's RMS went from 0.134 to 0.311 of full scale, 7 dB. `src/clip.rs`
+is unchanged. Flashed to white-clock over the air; not yet heard.
+
+**To hear.** Louder than the first version; no phantom presses while
+it plays; a note melody after it sounds as before. If it is still
+quiet, `CLIP_CARRIER_KHZ=8` doubles the pulses (and may whine at
+8 kHz); if the buttons still fire, the cure is on the board (a
+pull-up of a few kΩ on the button pins) or a longer debounce while a
+clip plays.
+
+**Second hearing, 2026-11-12.** Louder than the first version, still
+quiet, and the buttons still fired, so the number of edges was not
+the whole story. The button poll is 10 ms, 160 periods of the 16 kHz
+carrier on the same crystal: one read per poll lands on the same
+point of every period, and a glitch there is read four polls running.
+`buttons::down` now takes a pin as down only when it reads low ten
+times over 126 µs, a whole period of the slowest carrier. Flashed to
+white-clock with `CLIP_CARRIER_KHZ=8` (pulses to 125 µs, 65 lengths,
+no shaping); neither the loudness nor the buttons heard back yet. The
+aliasing is a hypothesis; if presses still appear the coupling holds
+the line low for a whole period and the cure is a pull-up of a few
+kΩ on the button pins.
+
+**Third hearing, 2026-11-12.** The 8 kHz carrier is an audible whine
+under the music (the user), so 16 kHz stays the default and 8 is not
+worth offering as a way to more volume. White-clock is back on 16 kHz,
+with the button change.
+The converter's limiter drive went from 12 to 20 dB for more volume:
+the test clip's RMS is 0.467 of full scale (0.311 at 12 dB, 0.134
+before any), flashed to white-clock; not yet heard.
+
+**Fourth hearing and the diode, 2026-11-12.** The user fitted a
+1N4148 across the buzzer (the board has no flyback diode) and heard no
+difference, so the coil's current was not what limited the volume; by
+arithmetic the clip's drive was already within about 6 dB of a
+square-wave beep. What is left is the buzzer: a resonator near 2 kHz,
+weak under 1 kHz, where the music has most of its energy. The
+converter now cuts below 900 Hz at 24 dB an octave before the limiter
+(it was 300 Hz at 12), so the line's range goes to the band the buzzer
+plays. Flashed to white-clock; not yet heard. Whether the phantom
+presses are gone, by the button change or the diode, is not yet
+reported either.
+
+**Fifth hearing, 2026-11-12.** The 900 Hz cut changed nothing the
+user could hear, and the clip is "much quieter than the beeps".
+Phantom presses are still there, fewer. Measured from the host: the
+clip played three times by `POST /play` with `/api` polled twice a
+second; in the second pass the colour stepped twice within half a
+second (orange, yellow, lime), nothing else moved. So it is the top
+button, GPIO4, the pin next to GPIO5, taken as down twice, each time
+by ten reads over 126 µs at polls 30 ms apart: the line is really low
+for stretches, not glitching. The alarm had also gone from 07:40 to
+06:40 since the first flash, by whom is not known. Three explanations
+for the volume have now failed (edge density, the coil's current, the
+band); the next step is a scope on GPIO5, the collector and GPIO4
+while the clip plays, or `wav/test_tones.pcm` (six full-scale sines,
+500 Hz to 3 kHz) through the same path against the beeps.
+
+**On the scope, and the buttons explained, 2026-11-12.** The user
+scoped the buzzer while the clip played: 16 kHz pulses to the full
+5 V, about as wide at the buzzer as on GPIO5 (DIP-16 pin 11), so the
+transistor neither stretches nor flattens them; with no diode fitted
+the coil kicks to −10…−15 V at turn-off, a sharp spike. The drive is
+therefore right and the volume is the buzzer's: much quieter than the
+beeps, which are a square wave on its resonance. The phantom presses
+were not interference: pins 9 and 10 of the DIP-16 (the two buttons)
+are shorted on this adapter board. The ten-read button check built on
+the aliasing hypothesis is reverted, `src/buttons.rs` is as it was;
+both of my explanations for the presses (edge coupling, then the poll
+aliasing with the carrier) were wrong. White-clock still runs the
+build with the ten-read check until the next flash.
+
+**After the adapter's rework, 2026-11-12.** The short between DIP-16
+pins 9 and 10 was under the ESP32-C3; the user lifted the module,
+cleaned it and soldered it back. White-clock (10.1.1.58, serial on
+ttyACM1) was updated over the air with the plain button read and
+watched from the host through `/api` twice a second: 30 s idle, three
+whole plays of the clip and one of Twinkle, and no setting moved. The
+serial log has `buzzer: preview clip` and `clip: 1733 chunks, 0
+underruns` for each of the three plays (27.7 s each), the first time
+that line has been read; heap free 54 080 at both heartbeats, MQTT
+connected, no heal. So no phantom presses with the short gone. Not
+checked from the host: that each button still does its own thing when
+pressed. The record was left as found, which is alarm 06:40, armed,
+weekdays, random; at the first flash of the day it was 07:40 and
+disarmed, so some of that may be the short's doing.
+
+### Beeper clips: a ZX Spectrum tune as it was played — DONE, heard and accepted by the user on white-clock 2026-11-12
+
+The PCM clip works but is too quiet and does not sound good (the
+user, 2026-11-12): a resonant buzzer is no speaker. The user's next
+idea is music written for a 1-bit speaker: the title tune of the ZX
+Spectrum game Trantor, which the beeper plays, from a `.tap` put in
+`tap/` (ignored by git, like `wav/`: someone else's music, not for
+the repository or a release). Either grab the music or re-implement
+the player; grabbing it is the one done.
+
+**The tune.** The tape is a BASIC loader, a screen with a 30-byte stub
+behind it and one code block that the stub moves down by 0x600 and
+jumps into at 0x5B00. The music starts at once. The player (around
+0xA980 to 0xAB60 as it runs: two tone channels as interleaved pulses,
+drums out of memory bytes, effects by self-modified operands) was
+read in ucsim's disassembly and not ported: its data format would
+have been days. Run in SkoolKit's simulator (`pipx install skoolkit`)
+the speaker bit flips 865 times a second, in pulses of 47 µs at the
+median, 3.6 % of the time on; a pass is 141.5 s (silences of 0.48 s
+at 15.3 s and 141.8 s) and 59 541 pulses.
+
+**The clip.** `scripts/zxbeeper.py tape out.bpr --seconds N [--skip N]
+[--stretch F]` loads and runs the tape in SkoolKit and writes the
+flips as run lengths: `BPR1`, the total in ticks, then LEB128 counts
+of 1/128 000 s, off and on alternately (`clip::Beeper`). 150 KB for
+the whole pass, each edge within a tick of the Spectrum's. `--stretch`
+widens every pulse, never into the next: at 4 the line is on 9.8 % of
+the time.
+
+**Playing it.** `clip::Stream` is either kind of clip as the line's
+bits, picked by the magic, so `ALARM_CLIP` takes either file and
+`src/clip.rs` plays both through the same ring; a beeper clip needs
+no modulator, each tick is `BIT_RATE / 128 000` bits. `melody::CLIP_PCM`
+became `CLIP_DATA`. Host tests, 102: runs of one, two and three bytes,
+empty runs and the zeros after the end come out bit for bit in uneven
+pieces. With the stretched clip `.rodata` is 254 KB and the stack
+60.0 KB.
+
+**To hear.** `ALARM_CLIP=tap/trantor-x4.bpr ALARM_CLIP_LABEL=Trantor`:
+the tune as the Spectrum plays it, louder than the PCM clip was, the
+line silent after; `clip: N chunks, 0 underruns` in the log. Then the
+same with `tap/trantor-x1.bpr`, the pulses as played, to compare.
+
+### Two-channel tunes: the "Wham! The Music Box" player, re-implemented — DONE, heard and accepted by the user on white-clock 2026-11-12
+
+The Trantor clip played, as recorded and with the pulses widened four
+times, and the user did not like either on the buzzer: a masterpiece
+of beeper music, and no good here. Next (the user, 2026-11-12): the
+tunes of `WHAM.TAP`, Mark Alexander's music editor of 1985, in three
+steps: how it plays, where the tunes are, then into the clock.
+
+**How it plays** (read from the disassembly, 0xCE57 to 0xCFE2 of the
+block loaded at 50000, and checked in SkoolKit). A tune is two
+channels of note bytes, 1000 each, at 60000 and 61000; the byte before
+channel 1 is the tempo if above 220 (else the program's 239 stays);
+0x40 ends a channel. A step takes the next byte of each, adds 12 and
+looks up a period in a table of 53 semitones (255 down to 12; entry
+53 is 1, the rest). Tones: a loop of 96 T-states run `(256 - tempo) *
+256` times, which writes channel 1's level to the speaker, then 48
+T-states on channel 2's, and flips each level every `period` passes,
+so the two square waves share the line by time at 36 kHz; code 24 is
+3.5 MHz / (96 * 2 * 64) = 285 Hz. Both resting: a silent loop,
+`(255 - tempo) * 256` passes of 94. Channel 1 from 0x80 after the
+add is a drum for the whole step: 0xFF noise, 0xC0 a falling sweep
+through the ROM's beeper (cycle pairs of half period 130 + 1020 k
+T-states, the count from a table by tempo), anything else four
+quarters of noise or silence by its low nibble; the noise is bits of
+the ROM from 0x03E9, sampled where channel 2's byte, rotated a bit a
+pass, has a one. 1164 T-states go between steps on the fetch and a
+keyboard scan. A Python model of this matched the emulator flip for
+flip on tone steps and to tens of T-states a step on the rest.
+
+**Where the tunes are.** The tape's block at 30000 is the program's
+memory store, 2000 bytes a tune; names at 65300: Freedom (312 steps,
+37 s), Tropicana (280, 30 s), Young Guns (544, 50 s), Whisper (704,
+84 s), Bad Boys (256, 31 s). Whisper uses the quarter drum 0xF8, Bad
+Boys the sweep. They are arrangements of the pop group's songs, so
+like the clips they stay out of the repository: `scripts/wham2clip.py
+WHAM.TAP [n out.whm] [--octave N] [--tempo N]` writes one as a
+`WHM1` file of 8 bytes and two per step (632 bytes for Freedom).
+
+**In the clock.** `clip::Wham` is a new player after the original's
+behaviour, a `RunSource` (level, bits) written out by `clip::Runs`,
+which the beeper clip now shares; `Stream` picks it by the magic, so
+`ALARM_CLIP` takes it and `src/clip.rs` is untouched. Its timing is
+kept in T-states and turned into bits with the fraction carried.
+Not the original's: a channel that rests beside a playing one is held
+low (the original flips it every pass, 18 kHz), the noise is a shift
+register and not the ROM, and `octave` in the header shifts the
+periods right, for a buzzer with no bass. Host tests, 105: pitch and
+duty of a tone, the octave, rests, the three drums, a tune cut short.
+`CLIP_DUMP=file cargo host-test dump_the_clip -- --ignored` writes a
+built-in clip's bitstream; against the emulator's output Freedom and
+Bad Boys line up over 10 and 20 s with under 0.4 ms of drift, the
+sweep drum included. The image is 2.5 KB larger for the player.
+
+**Owed.** One clip a build: `ALARM_CLIP` names one file. Several
+tunes as several melodies needs a list (`core/build.rs` generating
+the table); to be done when the user has heard one and wants them.
+
+**To hear.** `ALARM_CLIP=tap/freedom-o1.whm ALARM_CLIP_LABEL=Freedom`:
+the tune an octave up, two voices, as loud as the note melodies or
+near; `tap/freedom-o0.whm` and `-o2` for the other octaves.
+
+**First hearing and all five tunes, 2026-11-12.** Freedom played, an
+octave up, and the user wants all five in, with care for the tempo:
+Freedom is too fast.
+
+*Tempo.* Four of the five slots begin with a tempo the program takes
+(above 220): Tropicana 241, Young Guns 243, Whisper 239, Bad Boys 239.
+Freedom's first byte is 62, which the program ignores, so there it
+plays at whatever the tempo cell holds, 239 after loading (read back
+in the emulator at the menu), and that is what was flashed: 120 ms a
+step, the same as on a Spectrum, and too fast to the ear. The tape has
+no better number (the second copy of it the user has is byte for byte
+the same). Its bars are 16 steps; taken as eighth notes at the
+record's 134 beats a minute a step is 224 ms, which is tempo 224, and
+that is what `tap/freedom.whm` is now built with (`--tempo 224`). It
+is an estimate from the song, not something found in the program.
+
+*Several clips.* `ALARM_CLIP` is now a list of files separated by
+commas. `core/build.rs` writes `clips.rs` into `OUT_DIR` (`CLIP_COUNT`,
+`CLIP_NAMES`, `CLIP_DATA`) and `melody.rs` includes it and appends one
+melody a clip to the nine tunes in a `const` block, which also refuses
+a clip under a second, over 1 MB, or with a name already taken. A
+clip's API name is its file's name, letters only (`young_guns`), its
+label the same in words (`Young Guns`) unless `ALARM_CLIP_LABEL` gives
+one at the same place in its own list. `Melody::sampled` became
+`clip: Option<usize>`, and `cfg(alarm_clip)` is gone. With the five
+tunes the settings page's worst case is 5767 of 6016 bytes and the
+discovery payload 4230 of 4608; the five are 4.2 KB of flash.
+
+Flashed to white-clock: Freedom, Tropicana, Young Guns, Whisper and
+Bad Boys after Jingle Bells, all an octave up. Not yet heard.
+
+**Sigma-delta again, on a changed circuit, 2026-11-12.** The user put
+the flyback diode back across the buzzer and lowered R5, the base
+resistor, from 10 k to 3.2 k (three times the base current), and
+asked for Trantor and the sigma-delta Futurama back to hear them on
+it. `CLIP_MODULATOR=sd` at build time brings back the first version's
+modulator (`Player::fill_bits`: second order, a decision a bit, full
+scale 0.7; 43, 58 and 73 dB on the test sine at 128, 256 and
+512 kbit/s, as on the day); `pwm`, the pulse a period, stays the
+default. Flashed to white-clock with `CLIP_KBPS=256`, as the first
+hearing was, and seven clips: the five tunes, `tap/trantor.bpr` (the
+pulses as played) and `wav/futurama.pcm`, converted as on the first
+day (300 Hz high-pass, normalised, no limiter;
+`wav/futurama_theme.pcm` stays the 900 Hz, 20 dB version). At
+256 kbit/s a tick of the beeper clip is two bits and a slot of the
+two-channel player 3.5. Not yet heard.
+
+**Skips under Wi-Fi activity; the clip gets its own task, 2026-11-12.**
+The user heard skips while the Wi-Fi was busy. The ring is 8 KB,
+eight chunks of 1 KB: 256 ms at 256 kbit/s and 128 ms at 512, of
+which six chunks, about 190 and 95 ms, are ahead of the DMA. A skip
+is then the buzzer task not run for that long; it sat on the thread
+executor with the network stack, under the Wi-Fi driver's thread. No
+underrun count was read (the clock is not on USB), so this is the
+likely cause and not a measured one.
+
+Of the three cures offered (a larger ring, the count on `/api`, the
+refill off the thread executor) the user chose the third first. The
+buzzer task cannot move as it is: LEDC's driver holds a reference to
+its register block and is not `Send`, which the interrupt executor's
+spawner demands. So the clip has a task of its own, `clip::clip_task`,
+on the scan's interrupt executor (priority 2), owning I2S0, the DMA
+channel and the ring; `clip::play(index, cancel)` is what the buzzer
+task calls, three `Signal`s between them (start, stop, done). The pin
+is shared by turns: `main.rs` makes a second handle with
+`clone_unchecked` (the one `unsafe` there) and the clip task uses it
+only from a `play` to its end, while the buzzer task waits in that
+call. The slot pointer in `Sampler::play` is kept as an address, since
+a raw pointer across an await is not `Send` either. The seven chunks
+written before the start now have 500 µs between them, each being a
+millisecond or two of work above the threads.
+
+What it costs: a chunk's worth of modulating, a millisecond or two,
+now runs at interrupt priority 2 every 16 to 32 ms, above the Wi-Fi
+driver's interrupts as well as its thread. The driver's own critical
+sections are of that order, so it should not notice; if the probe or
+the association suffers while a clip plays, this is where to look.
+Flashed to white-clock with the eight clips, sigma-delta, 256 kbit/s.
+Not heard, and no log read.
+
+**Crackling tunes, and skips that stayed, 2026-11-12.** With the diode
+back and R5 at 3.2 k the user finds Futurama (sigma-delta, 256 kbit/s)
+and Trantor fine. The five two-channel tunes crackled in that build:
+at 256 kbit/s a channel's 48 T-state slot is three and a half bits, so
+the slots came out three and four bits by turns. The player now has
+its own bit rate, `clip::WHAM_BIT_RATE`, 512 kbit/s whatever
+`CLIP_KBPS` says, with every slot exactly seven bits (0.3 % short of
+the original's, five cents sharp); `Stream::bit_rate` tells
+`src/clip.rs`, which sets I2S and paces by it per clip (`chunk_us` and
+`chunks_in` take the rate).
+
+The skips stayed after the clip moved to the interrupt executor, on
+Trantor and Futurama alike, so starving on the thread executor was not
+the whole of it, if any. Two changes, neither a diagnosis: the ring is
+16 chunks (`SLOTS`; 16 KB, the main stack 51.5 KB with clips), which
+is 450 ms ahead of the DMA at 256 kbit/s and 220 at 512; and the pacer
+no longer believes a DMA position more than two chunks from where the
+clock puts it (`Pacer::STRAY`; the two clocks are one crystal's), since
+acting on one bad read of the descriptor register would write over
+chunks not yet played or skip ones due, which is a skip. Such reads
+are counted and the clip's last log line has them: `clip: N chunks,
+U underruns, S stray positions`. Whether either count is ever above
+nought is what a serial log of a skipping clip will say; none has been
+read. Flashed to white-clock.
+
+**The skips, the crackle and the overlap were one bug: the DMA's
+descriptor register reads two ahead — found and fixed 2026-11-12.**
+With the clock on USB again the log of a skipping clip said `0
+underruns` and 49 stray positions for Futurama, 971 for 25 s of
+Trantor: the ring never ran dry, and the register and the clock did
+not agree. A trace of both at the start of three clips settled it:
+`out_dscr` of the GDMA channel reads slot 2 the moment the transfer
+starts and the clock's chunk plus two from then on, the boundaries
+within a millisecond of each other. It names the descriptor two on
+from the one being read, not that one.
+
+The pacer had taken it for the chunk being read since the first
+version. So it thought the DMA two chunks further than it was and
+wrote the next pieces of the stream up to and over the chunk being
+played: each chunk was replaced, as the DMA entered it, by the one a
+lap later. What came out was the stream a lap ahead with a tear at
+every chunk, and the first lap played partly as written and partly as
+its replacement. That is the user's "overlapping with itself at the
+beginning", and before it the skips under Wi-Fi activity, the
+crackling tunes at least in part, and probably some of what made the
+PCM clip sound poor from its first hearing; none of it was starvation,
+and the underrun count was honestly nought throughout. Yesterday's
+guard (not believing a slot more than two from the clock) put the
+pacing on the clock whenever the two parted by three, which is why it
+"sometimes fixed itself".
+
+Now the clock paces alone (`Pacer::played` returns the estimate; the
+line's bit clock and the timer are one crystal's), and the register is
+only checked against it: a slot not `Pacer::DSCR_AHEAD` (2) on from
+the clock's chunk, give or take one, is a stray, counted and logged.
+Host tests, 106: the playback loop of `src/clip.rs` against a model of
+the DMA, the register anywhere and the clock up to a tick late, feeds
+it the stream in order; a short stall is not heard; a long one leaves
+the stream late and whole a lap after. On white-clock, serial log:
+Futurama whole with the page fetched six times meanwhile, 20 s of
+Trantor, Bad Boys whole: `0 underruns, 0 stray positions` each.
+Not yet heard by the user.
+
+Left as they are, though neither was the cure: the clip task on the
+interrupt executor and the 16-chunk ring (8 KB more of static RAM).
+And to look at: `ring::position`, the scan's heartbeat figure, reads
+the same register of channel 0 and calls it the descriptor being
+read; by this it is two on. Nothing depends on it but the log line.
+
+**The set the user settled on, 2026-11-12,** after hearing the tunes
+with the pacer fixed: Young Guns and the quiet Futurama go, and four
+tempos change by ear. The build, sigma-delta at 256 kbit/s for the
+PCM clip:
+
+```
+scripts/wham2clip.py tap/WHAM.TAP 1 tap/freedom.whm   --octave 1 --tempo 228   # was 224 (my estimate): a bit faster
+scripts/wham2clip.py tap/WHAM.TAP 2 tap/tropicana.whm --octave 1 --tempo 238   # the tape's 241: slower
+scripts/wham2clip.py tap/WHAM.TAP 4 tap/whisper.whm   --octave 1 --tempo 237   # the tape's 239: a bit slower
+scripts/wham2clip.py tap/WHAM.TAP 5 tap/bad_boys.whm  --octave 1 --tempo 238   # the tape's 239: a little slower
+CLIP_MODULATOR=sd CLIP_KBPS=256 \
+ALARM_CLIP=tap/freedom.whm,tap/tropicana.whm,tap/whisper.whm,tap/bad_boys.whm,tap/trantor.bpr,wav/futurama.pcm \
+  cargo build --release
+```
+
+A step is `(256 - tempo)` times 7.0 ms: 197, 126, 133 and 126 ms.
+`wav/futurama.pcm` is now the loud conversion (900 Hz cut, 20 dB into
+the limiter; what `scripts/wav2pcm.sh` writes) and the first day's is
+`wav/futurama_quiet.pcm`. Flashed to white-clock; the tempos not yet
+heard.
+
+**Accepted, 2026-11-12.** With the set and tempos above on white-clock
+(the flyback diode fitted, R5 at 3.2 k) the user's verdict is "all
+good now".

@@ -48,6 +48,11 @@ scripts/ota.sh                          # just the image file, for http://<ip>/u
 API_TOKEN='…' scripts/reload.sh <ip>   # software reset with the carry record, waits for the clock to come back
 scripts/pin.sh <ip> <serial-log>        # POST /pin, then the four digits read back from the monitor's log
 AP_PASSWORD='…' cargo build --release   # optional: the clock's own access point's password (default esp32clock)
+scripts/wav2pcm.sh in.wav wav/tune.pcm [seconds]   # a sound file as the clip's raw PCM (sox): mono, 8 kHz, 8 bits unsigned
+~/.local/pipx/venvs/skoolkit/bin/python scripts/zxbeeper.py game.tap tap/tune.bpr --seconds 60 [--stretch 4]   # what a ZX Spectrum program plays on its beeper, as a clip (needs SkoolKit)
+scripts/wham2clip.py WHAM.TAP [n tap/tune.whm] [--octave 1]   # list, or take, a two-channel tune from "Wham! The Music Box"
+ALARM_CLIP=tap/freedom.whm,wav/tune.pcm cargo build --release   # optional: clips (PCM, beeper or two-channel tune) as the last melodies, named after their files; ALARM_CLIP_LABEL='A,B' for other labels
+CLIP_MODULATOR=sd CLIP_KBPS=256 ALARM_CLIP=… cargo build --release   # a PCM clip as a sigma-delta stream, a decision a bit, instead of the default pulse a period (pwm) (CLIP_KBPS=128|256|512, default 512; CLIP_CARRIER_KHZ=8|16|32, default 16)
 ```
 
 Releases: `CHANGELOG.md` gets the version's section first (the release body points at it), then an annotated tag `v*` (`git tag -a`; `build.rs` runs `git
@@ -353,13 +358,15 @@ answered or an HTTP request served bumps it, and the third such boot
 
 The pure modules live in `core/src/` and the firmware re-exports them
 from `src/lib.rs`, so firmware code says `crate::settings`; inside
-`core` the same `crate::` paths point at its own modules. Five modules
+`core` the same `crate::` paths point at its own modules. Six modules
 are split, the pure half in `core/src/` under the same name and the
 hardware half in `src/`: `buttons` (event types / GPIO task), `clock`
 (calendar arithmetic / the offset and the carry), `carry` (record
 codec / RTC static and reset gate), `http` (head parser and
 `RESPONSE_BUF` / sockets), `ota` (image constants, `Slot`,
-`hash_chunk`, `version_from` / flash and partitions). Each `core`
+`hash_chunk`, `version_from` / flash and partitions), `clip` (the
+pulse-width `Player` and the ring's `Pacer` / I2S0, its DMA ring and
+the pin). Each `core`
 module ends with its `#[cfg(test)] mod tests`.
 
 | file | role |
@@ -382,10 +389,12 @@ module ends with its `#[cfg(test)] mod tests`.
 | `src/http.rs` | HTTP/1.0 server, `LISTENERS` sockets each in its own task: a `POST` without `Content-Length` to a route that reads a body (`/`, `/api`, `/play`, `/token`, `/ota`; `reads_body`) is answered `411` and any `Transfer-Encoding` `400` before a route is looked at (`NoRequest`), since a bodiless post is not an empty form, while the command posts (`/reload`, `/ap`, `/pin`, `/scan`) take a bare `curl -X POST`; `GET`/`POST` on `/` (the settings page, or the setup form on the access point) and `/api`, `POST /play`, `GET /update` and `GET /token` (each issues a PIN), `POST /ota` with the body streamed to `ota::install`, `POST /reload` and `POST /ap` with the token, `POST /token` with the token or the PIN, `POST /pin`, `POST /scan` on the access point, `GET /favicon.ico` and `GET /tz.js` (`src/favicon.ico` and `src/tz.js` embedded, the two cacheable responses; the page loads the script as `/tz.js?v=<version>` so an update is not served the cached one); the settings, update and token pages are titled and headed `Clock: <hostname>`; a refused form redirects to `/?error=…`; per-listener state and counters for the heartbeat |
 | `core/src/buttons.rs` | `Button`, `Kind`, `Event` |
 | `src/buttons.rs` | debounced short/long press events, the two-button long press, and the 10 s two-button `Hold` |
-| `core/src/melody.rs` | alarm tunes as pitch and length data with tempo; `RANDOM` and the pure `pick` that turns it into a tune; pure |
+| `core/src/melody.rs` | alarm tunes as pitch and length data with tempo; `RANDOM` and the pure `pick` that turns it into a tune; `CLIP_COUNT`, `CLIP_NAMES` and `CLIP_DATA` (included from `clips.rs`, which `core/build.rs` writes from `ALARM_CLIP`), `HAS_CLIP`, and one melody a clip (`Melody::clip`) after the nine tunes of `MELODIES`; pure |
 | `core/src/carry.rs` | `Carried`, `MARK` with its layout version, `encode`/`decode` |
 | `src/carry.rs` | RTC-RAM record used only after a software reset (`CoreSw`/`Cpu0Sw`; anything else zeroes it at boot): self-heal count and time, the skip flag, the local second the alarm last rang, the Unix time last written, boots of an unconfirmed OTA image, the access-point flag for the next boot; the mark carries a layout version; `freeze` for a mode switch |
-| `src/buzzer.rs` | LEDC PWM on an open-drain pin; plays a melody on command, looped or once, stops within a note |
+| `src/buzzer.rs` | LEDC PWM on an open-drain pin; plays a melody on command, looped or once, stops within a note; a clip goes to `clip::play`, which hands it to the clip task on the same pin |
+| `core/src/clip.rs` | sampled sound for the 1-bit buzzer line, pure: `Player`, a pulse-width modulator (one pulse per carrier period, centred, its length the level at mid-period with the rounding error fed back as far as the carrier leaves room: `ORDER`; integer, linear interpolation between the 8 kHz samples, a sample of 255 at 0.95 of the rail) that writes a clip's bitstream a buffer at a time, wrapped in 30 ms ramps from and to the released line; `Beeper`, a clip that is the line's level as run lengths (`BPR1`, LEB128 counts of 1/128 000 s, off and on alternately; `scripts/zxbeeper.py`), written out as it is; `Wham`, a two-channel tune (`WHM1`: tempo, octave, steps, two note codes a step) played the way "Wham! The Music Box" does, two square waves sharing the line by time, with its noise and sweep drums; `Runs`, which writes a `RunSource` (those two) out as bytes; `Stream`, any kind by its first bytes; `Pacer`, which says which chunks of the ring to write from the time since the start alone (one crystal clocks the line and the timer), counts underruns, and counts as strays the reads of the DMA's descriptor register that are not two slots on from that; `BIT_RATE` and `CARRIER_HZ` from `config::CLIP_KBPS` and `CLIP_CARRIER_KHZ`, `CHUNK` 1024, `SLOTS` 16; a two-channel tune runs the line at its own `WHAM_BIT_RATE`, 512 kbit/s, and `Stream::bit_rate` says which |
+| `src/clip.rs` | `clip_task`, on the scan's interrupt executor so that Wi-Fi work on the thread executor cannot starve the ring (the buzzer task, whose LEDC driver is not `Send`, stays there and asks with `play`, lending the pin for the clip's length; `main.rs` makes the second pin handle, its one `unsafe`); `Sampler`: I2S0's transmitter (TDM, two 8-bit channels, no clock pins, so the data line is the ring's bytes MSB first at the bit rate) on GDMA channel 1 looping over a sixteen-descriptor ring; `play` writes the clip's bits (`clip::Stream`) from flash into the ring ahead of the DMA, connects GPIO5 as a frozen open-drain signal through the GPIO matrix's inverter once the stream runs, and hands it back released before stopping; reads the DMA's descriptor register through `regs()`, for the pacer's check only |
 | `core/src/sensors.rs` | the NTC table (10 kΩ, B 3950, under the adapter's 10 kΩ pull-up from 3V3) and `temperature_dc` by interpolation, `fahrenheit_tenths`, `ldr_ohms` and `light_pct` (the logarithm of the LDR's resistance, 1 kΩ is 100 and 50 kΩ is 0), `face` (the panel's four characters for a temperature), `Tenths`; pure |
 | `src/sensors.rs` | `sensor_task`: the async `Adc<ADC1>` with `AdcCalCurve` (the scheme that reads straight on the C3) on GPIO0 (NTC) and GPIO1 (LDR), 8 samples a second each into a 10 s exponential average, published as millivolts in two atomics; `room()` for `http::status`, `Report` for the heartbeat |
 | `core/src/tz.rs` | POSIX TZ rules: `parse` (`const`, so a build-time rule is checked by the compiler), `Tz::period_at(unix)` (the offset, the daylight flag and the name in force), `fixed(minutes)` for the old setting, the calendar arithmetic; `TZ_MAX` 48 |
@@ -398,21 +407,44 @@ module ends with its `#[cfg(test)] mod tests`.
 | `src/dhcpd.rs` | DHCP server for the access point: `parse`, `build` and the lease table pure, the socket task around them; every reply broadcast |
 | `src/dnsd.rs` | captive DNS for the access point: `answer` pure (every A question is the clock, anything else an empty answer), the socket task around it |
 | `core/src/config.rs` | build-time env vars and compile-time defaults |
-| `core/build.rs` | `rerun-if-env-changed` for the build-time variables `config.rs` reads |
+| `core/build.rs` | `rerun-if-env-changed` for the build-time variables `config.rs` reads; writes `clips.rs` (count, names, labels and `include_bytes!` of the files in `ALARM_CLIP`) into `OUT_DIR` |
 | `src/bin/main.rs` | pin setup, display wires with their pull-downs, executors, task spawning, panic reset hook, log timestamps, reset reason and carried time at boot, OTA rollback check, minute heartbeat log |
 
 ## Hardware facts that bite
 
 - **Buzzer (GPIO5)** drives a PNP with its emitter at +5 V. Any driven level
   turns it on, including a 3.3 V high. Only a released open-drain line is
-  silent. Never make it push-pull.
+  silent. Never make it push-pull. The sampled clip drives it from
+  I2S0 with the GPIO matrix's inverter on, so a 1 bit is the buzzer
+  on; a peripheral given the bare pin would make it push-pull, so it
+  goes in as an open-drain `Output` turned into a signal, which
+  esp-hal freezes. The inverter is part of the pin's connection:
+  `clip.rs` takes the pin back as a plain `Output` when it ends,
+  which clears it, and a tone's LEDC must never be connected over an
+  inverted pin (its released level would be the buzzer on). The
+  clip's bits come in long pulses: a per-bit sigma-delta stream at
+  256 kbit/s was quieter than one pulse per 16 kHz period
+  (2026-11-12). On the scope the pulses at the buzzer are as wide as
+  GPIO5's, to the full 5 V, and with no diode on the board the coil
+  kicks to −10…−15 V at each turn-off; the clip is still much quieter
+  than the beeps, which sit on the buzzer's resonance. The phantom
+  presses seen while a clip played were the user's adapter, pins 9
+  and 10 of the DIP-16 shorted, not interference.
+- **The GDMA's `out_dscr` is not the descriptor being read.** On the
+  C3 it names the one two further on, from the moment a transfer
+  starts (traced against the clock, 2026-11-12). The clip's pacer took
+  it for the current one and rewrote every chunk as it was played,
+  which was heard as skips, crackle and the clip overlapping itself,
+  with no underrun counted. Pace a DMA ring by time; use the register
+  as a check at most. `ring::position`, the scan heartbeat's figure, is
+  off by the same two.
 - **Display wires (GPIO6–9)** are SPI2 SIO0–3. The SPI builder resets the
   pull of a bare pin it takes, but leaves a `Flex` alone (it arrives as a
   frozen signal), so `main.rs` sets the idle pull-downs on `Flex` pins and
   the scan task builds the bus from those. No PAC access for the pins;
-  `ring.rs` is the one module that touches registers, SPI2's
-  segmented-mode bits and the DMA's current descriptor, through esp-hal's
-  `regs()`.
+  `ring.rs` and `clip.rs` are the modules that touch registers, SPI2's
+  segmented-mode bits and each DMA channel's current descriptor, through
+  esp-hal's `regs()`.
 - **Buttons:** GPIO4 is the upper button, GPIO3 the lower. No board
   pull-ups; the internal ones are used.
 - **Sensors (GPIO0, GPIO1):** the adapter's 10 kΩ pull-ups from 3V3
@@ -547,6 +579,17 @@ module ends with its `#[cfg(test)] mod tests`.
   of buffers, and what the statics leave of DRAM is the main stack,
   66.9 KB on 2026-11-08 (67.1 on 2026-11-07; the ring's descriptors and
   conf words are 160 bytes, the gap statistics and buffer channels went) (`Settings` is a 385-byte record and sits in several task futures: the 49-byte timezone rule cost 2.2 KB of stack); check `.stack` in `llvm-readelf -S` after adding one, and compare with a build of `HEAD` in a worktree when in doubt: one `Response` per listener loop, since a second one in another arm of the same loop was not overlapped by the compiler and cost 6 KB per listener until it was hoisted (2026-11-07). `src/tz.js` (5.8 KB) is sent from one response buffer and a `const` assert in `src/http.rs` keeps it under `RESPONSE_BUF` with its header; it was trimmed to comments of a line each to fit.
+- The sampled clip is 8 KB of flash a second (the 27.6 s test clip is
+  221 KB of `.rodata`, held once: `melody::CLIP_DATA` is a `static`; a beeper clip is about 1 KB a second, a two-channel tune two bytes a step)
+  and must leave the image inside its slot; the ring is 16 KB of
+  static RAM, sized 0 in a build without a clip (2026-11-12: the main
+  stack is 68.4 KB without, 51.5 KB with). A chunk is 16 ms at
+  512 kbit/s and the ring holds fourteen ahead of the DMA, so the clip
+  task not running for about 220 ms (twice that at 256 kbit/s) is an
+  underrun, logged when the clip ends with the count of DMA positions
+  the pacer did not believe; it is on the interrupt
+  executor for that reason, and a chunk's modulating, a millisecond
+  or two, runs there above the Wi-Fi driver.
 - `form::apply` decodes each key into 16 bytes and each value into 64
   (`form::VALUE_MAX`, the password); longer input is reported as a bad
   key or value before parsing. The record is `settings::RECORD_LEN` (385) bytes and the map scratch in `storage.rs` 512, which must hold
@@ -583,12 +626,12 @@ module ends with its `#[cfg(test)] mod tests`.
 
 ## Verifying without a board
 
-`cargo host-test` runs the tests of `core/` on the host (95 on 2026-11-07): the AiP33628 encoder against a behavioural model of the
+`cargo host-test` runs the tests of `core/` on the host (106 on 2026-11-12): the AiP33628 encoder against a behavioural model of the
 chip (shift on CLK rise, latch on DIN rise while CLK high), the panel
 map, the palette and brightness tables, the hostname, password and
 token rules, the record round trip and every older version, the form
 parser and the page sizes against `PAGE_MAX`, the head parser, the
-appended-hash split, the carry codec, the calendar arithmetic, the POSIX TZ parser with its rejects and the 2026 transitions of both hemispheres, the melodies, the UI's alarm, grace, skip and daylight-saving logic, the PIN and token
+appended-hash split, the carry codec, the calendar arithmetic, the POSIX TZ parser with its rejects and the 2026 transitions of both hemispheres, the melodies, the clip's modulator (a sine back out of the bits, one centred pulse a period, the ramps, full-scale stability), the beeper clip's runs bit for bit, the two-channel player (pitch, duty, octave, rests, drums), and the ring's pacer, run against a model of the DMA (`CLIP_KBPS` and `CLIP_CARRIER_KHZ` change what is tested; `ALARM_CLIP=… cargo host-test` covers the table with the clip in it), the UI's alarm, grace, skip and daylight-saving logic, the PIN and token
 header rules, the NTC and LDR tables against their equations, and the
 MQTT topics, routes and discovery payload (parsed with `serde_json`, a
 host-only dev-dependency, and checked key by key against the `/api`
@@ -596,7 +639,7 @@ JSON and the form parser). `cargo clippy -p esp32clock-core --target host-tuple
 --tests` lints the tests. `node scripts/tz-check.mjs` checks the browser half of the timezone field, `src/tz.js`, against zones with known rules under Node, whose `Intl` is a browser's, and against Casablanca, which must throw. `.cargo/config.toml` aims every cargo command at the chip, which is why the alias passes `--target host-tuple`; the `[unstable] build-std` line there is ignored by
 stable cargo. Not under test: `scan.rs`'s
 `build_cycle` (the M1 lit-time check needs it on the host), `ring.rs`
-(descriptors and registers; its layout is `const`-asserted), `dhcpd.rs`
+(descriptors and registers; its layout is `const`-asserted), `src/clip.rs` (the I2S transfer and the pin), `dhcpd.rs`
 and `dnsd.rs` (their pure halves
 use embassy-net's address types), `storage.rs`'s map over the flash,
 `mqtt.rs`'s session loop.

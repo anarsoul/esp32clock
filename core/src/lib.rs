@@ -19,6 +19,7 @@ pub mod aip33628;
 pub mod auth;
 pub mod buttons;
 pub mod carry;
+pub mod clip;
 pub mod clock;
 pub mod config;
 pub mod form;

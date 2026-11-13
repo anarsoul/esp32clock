@@ -165,6 +165,49 @@ pub const MAX_CURRENT_STEP: u8 = {
     step as u8
 };
 
+/// Bit rate of the sampled clip's stream on the buzzer line, in kbit/s,
+/// from `CLIP_KBPS` at build time: 128, 256 or 512. With the carrier
+/// it sets how many lengths a pulse can have (`clip::PERIOD_BITS`), so
+/// the default is the highest.
+pub const CLIP_KBPS: u32 = {
+    let kbps = match option_env!("CLIP_KBPS") {
+        Some(s) => parse_i32(s),
+        None => 512,
+    };
+    assert!(kbps == 128 || kbps == 256 || kbps == 512, "CLIP_KBPS must be 128, 256 or 512");
+    kbps as u32
+};
+
+/// Pulses per second of the clip's stream, in kHz, from
+/// `CLIP_CARRIER_KHZ` at build time: 8, 16 or 32. Lower is longer
+/// pulses, so more current in the buzzer's coil and fewer edges next to
+/// the button pins, and more pulse lengths at a bit rate; but 8 kHz is
+/// a whine in the band of the ear, and only from 32 kHz is there room
+/// to shape the rounding error out of the band. See `clip.rs`.
+pub const CLIP_CARRIER_KHZ: u32 = {
+    let khz = match option_env!("CLIP_CARRIER_KHZ") {
+        Some(s) => parse_i32(s),
+        None => 16,
+    };
+    assert!(khz == 8 || khz == 16 || khz == 32, "CLIP_CARRIER_KHZ must be 8, 16 or 32");
+    khz as u32
+};
+
+/// Whether a PCM clip is sent as a sigma-delta stream, a decision a
+/// bit, and not as a pulse a carrier period: `CLIP_MODULATOR=sd` at
+/// build time (`pwm`, the default, is the other). The first version
+/// of the clip; quieter than the pulses on the stock buzzer circuit,
+/// kept for trying against a changed one.
+pub const CLIP_SIGMA_DELTA: bool = match option_env!("CLIP_MODULATOR") {
+    None => false,
+    Some(m) => {
+        let m = m.as_bytes();
+        let sd = m.len() == 2 && m[0] == b's' && m[1] == b'd';
+        assert!(sd || (m.len() == 3 && m[0] == b'p' && m[1] == b'w' && m[2] == b'm'), "CLIP_MODULATOR must be sd or pwm");
+        sd
+    }
+};
+
 /// Ceiling on Wi-Fi transmit power, in quarter dBm, 8 to 84. esp-radio
 /// starts at 20 (5 dBm), which does not reach a far access point. 34
 /// (8.5 dBm) worked on the bench but not inside the clock's case, which
