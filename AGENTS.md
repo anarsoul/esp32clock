@@ -429,7 +429,7 @@ module ends with its `#[cfg(test)] mod tests`.
   goes in as an open-drain `Output` turned into a signal, which
   esp-hal freezes. A PCM clip or a module is the chip's PDM converter's
   bits, 2.048 Mbit/s for 16 kHz: on white-clock (flyback diode, R5 at
-  3.2 k) that was cleaner than the software sigma-delta at half the
+  5.1 k) that was cleaner than the software sigma-delta at half the
   rate (2026-11-13); a stock board's transistor has not been heard
   there, and `CLIP_MODULATOR=sd` is the way back. The converter at 64
   bits a sample is white noise. The inverter is part of the pin's connection:

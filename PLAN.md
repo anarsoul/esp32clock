@@ -7018,7 +7018,7 @@ converts at 16 kHz unless told 8000; `wav/futurama.pcm` is the 16 kHz
 clip now and the old one `wav/futurama_8k.pcm`. White-clock: Trantor,
 Halftime, Keygen, Futurama.
 
-### Sixteen-bit samples from a module to the modulator — planned 2026-11-13, an A/B to hear
+### Sixteen-bit samples from a module to the modulator — DONE, heard and accepted by the user on white-clock 2026-11-13
 
 **The question.** The user asked whether the I2S transmitter's PDM
 mode (the C3 has the PCM-to-PDM converter, esp-hal 1.2.2 a driver for
@@ -7103,7 +7103,7 @@ log's `clip:` line has the underrun count.
 **Heard, 2026-11-13: "B is now MUCH better".** At 1.024 Mbit/s the
 16-bit clips stand well clear of the 8-bit ones, as the arithmetic
 said they would once the modulator's own noise was out of the way,
-and the transistor (white-clock's, with the diode and R5 at 3.2 k)
+and the transistor (white-clock's, with the diode and R5 at 5.1 k)
 follows bits of a microsecond. No skips were reported; the serial
 log's underrun count has not been read.
 
@@ -7124,7 +7124,7 @@ what the wide clips still had at 256. `CLIP_KBPS` defaults to 512
 white-clock's changed circuit only; the processor's share and the
 underrun count are still unread.
 
-### Hardware PDM for a module: a spike to hear — planned 2026-11-13
+### Hardware PDM for a module: a spike to hear — DONE, heard on white-clock 2026-11-13 (128 bits a sample kept, 64 is noise)
 
 **Why now.** Steps 1 and 2 above both came out for it on white-clock:
 16-bit samples are heard, and the transistor follows 1.024 Mbit/s.
@@ -7198,7 +7198,7 @@ Read against the IDF's `i2s_hal_pdm_set_tx_slot`, esp-hal 1.2.2's
 `pdm::regs_v2::configure_tx` differs in one bit that matters: it
 clears `tx_pcm_bypass`, where the IDF never touches it in PDM mode
 and the TDM path sets it. Cleared, the A-law/µ-law compander
-(`tx_pcm_conf`, 1 at reset: compress) sits between the DMA and the
+(`tx_pcm_conf`, 0 at reset: A-law decompress; the register resets to 0xb200, bypass set) sits between the DMA and the
 converter. `src/clip.rs` now sets the bit and latches it with
 `tx_update` after `I2s::new_pdm`, through `I2S0::regs()`. A
 hypothesis until heard: the bench board has no buzzer.
@@ -7230,13 +7230,13 @@ than A. Sound is cleaner, less noise" (the user). The decision: keep
 PDM, put the PCM clips through it as well, and keep the bit path for
 the beeper clips, which are bits.
 
-### PDM is the modulator for PCM clips and modules — planned 2026-11-13
+### PDM is the modulator for PCM clips and modules — DONE, heard and accepted by the user 2026-11-13
 
 **Design.**
 - The build's choice, not the clip's: `CLIP_MODULATOR` takes `pdm`,
   the default, beside `sd` and `pwm`. The software modulators stay as
   build options because the converter has been heard only on
-  white-clock's circuit (diode, R5 at 3.2 k) and a stock board's
+  white-clock's circuit (diode, R5 at 5.1 k) and a stock board's
   transistor at 2 Mbit/s is unknown; they can go once one has been
   heard. `CLIP_KBPS` and `CLIP_CARRIER_KHZ` then matter to those two
   builds only.
@@ -7319,3 +7319,16 @@ clips (Trantor, Halftime, Keygen, Futurama); on the bench Futurama
 and Keygen run and are cut with 0 underruns and 0 stray positions.
 Martin-clock still has the trial's build with the ten melodies.
 Futurama at 0.85 has not been heard.
+
+**Futurama heard, 2026-11-13: "good".** The PCM clip through the
+converter at 0.85, which closes what this entry owed the ear.
+Martin-clock, the stock buzzer circuit, has the final build as well
+(Trantor, Halftime, Keygen, Futurama; committed as `e658f2f`). Still
+owed: a scope on the line, and esp-hal's `tx_pcm_bypass` reported
+upstream.
+
+**A correction, 2026-11-13.** White-clock's R5 was 5.1 k for all of
+this day's hearings (the 16-bit samples, the bit rates, the converter
+and its level), not the 3.2 k of 2026-11-12 that these entries first
+said; the user put it right, and the entries and `config.rs` now say
+5.1 k. That is the README's optional mod as written.

@@ -173,7 +173,7 @@ pub const MAX_CURRENT_STEP: u8 = {
 /// sample and 1.024 Mbit/s for a 16 kHz clip: with the modules'
 /// samples at 16 bits the user heard far less noise there than at 256,
 /// which was the default before, and no skips (2026-11-13, on a clock
-/// with a flyback diode across the buzzer and R5 at 3.2 k; a stock
+/// with a flyback diode across the buzzer and R5 at 5.1 k; a stock
 /// board's transistor has not been heard at this rate).
 pub const CLIP_KBPS: u32 = {
     let kbps = match option_env!("CLIP_KBPS") {
@@ -204,7 +204,7 @@ pub const CLIP_CARRIER_KHZ: u32 = {
 /// modulated in software. Heard on a clock on 2026-11-13 against the
 /// software sigma-delta at 1.024 Mbit/s: cleaner, less noise, at
 /// 2.048 Mbit/s (128 bits a sample; at 64 the converter gives noise).
-/// That clock has a flyback diode across the buzzer and R5 at 3.2 k; a
+/// That clock has a flyback diode across the buzzer and R5 at 5.1 k; a
 /// stock board's transistor has not been heard at that rate, which is
 /// why `sd` and `pwm` remain.
 pub const CLIP_PDM: bool = match option_env!("CLIP_MODULATOR") {
