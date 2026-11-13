@@ -14,7 +14,7 @@ Says what the module uses that the player does not play.
 
     scripts/xm2clip.py tune.xm tune.xmc [--drive N] [--release N]
                        [--highpass HZ] [--passes N] [--raise INSTRUMENT:OCTAVES]
-                       [--rate 8000]
+                       [--rate 8000] [--bits 8]
 
 The player cuts the bass, which the buzzer does not have, and limits
 hard; how is the clip's to say. --highpass and --passes set the cut
@@ -77,6 +77,7 @@ def main():
     parser.add_argument("--highpass", type=float, default=300, help="the high-pass's corner in Hz (default 300)")
     parser.add_argument("--passes", type=int, default=1, choices=(0, 1, 2), help="how many times it is applied, 12 dB an octave each (default 1)")
     parser.add_argument("--rate", type=int, default=16000, choices=(8000, 16000), help="samples a second the player makes of it (default 16000, at twice the PCM clips' bit rate on the line; 8000 is theirs)")
+    parser.add_argument("--bits", type=int, default=16, choices=(8, 16), help="the width of the samples the player hands the modulator (default 16, which keeps what the mix and the limiter leave between the PCM clips' 8-bit steps, for no more flash; 8 rounds to those)")
     parser.add_argument("--raise", dest="raised", action="append", default=[], metavar="INSTRUMENT:OCTAVES", help="play this instrument that many octaves up; may be repeated")
     args = parser.parse_args()
     if not (0 <= args.drive <= 255 and 0 <= args.release <= 15):
@@ -209,7 +210,7 @@ def main():
     out += struct.pack("<I", round(ticks_ms))
     # The order to start over from, for the alarm, which plays the tune
     # round and round.
-    out += struct.pack("<BB5hB3x", args.passes, args.rate // 16000, *section, restart if restart < len(orders) else 0)
+    out += struct.pack("<BB5hB3x", args.passes, args.rate // 16000 | (2 if args.bits == 16 else 0), *section, restart if restart < len(orders) else 0)
     out += bytes(orders)
     tables = len(out) + 6 * len(patterns) + 80 * len(instruments)
     body = bytearray()
@@ -229,7 +230,7 @@ def main():
     name = d[17:37].decode("latin1").strip("\0 ")
     print(f'{args.out}: "{name}", {channels} channels, {len(orders)} orders, {ticks_ms / 1000:.1f} s, {len(out)} bytes (the module is {len(d)})')
     if args.passes:
-        print(f"  {args.rate} Hz; high-pass {args.highpass:g} Hz, {12 * args.passes} dB an octave" + "".join(f"; instrument {i} up {o} octaves" for i, o in sorted(raised.items())))
+        print(f"  {args.rate} Hz, {args.bits} bits; high-pass {args.highpass:g} Hz, {12 * args.passes} dB an octave" + "".join(f"; instrument {i} up {o} octaves" for i, o in sorted(raised.items())))
     for what, count in sorted(warnings.items()):
         print(f"  not played: {what} ({count} times)")
 

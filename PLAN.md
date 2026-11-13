@@ -7017,3 +7017,305 @@ user, of Futurama Hi against the 8 kHz one). `scripts/wav2pcm.sh`
 converts at 16 kHz unless told 8000; `wav/futurama.pcm` is the 16 kHz
 clip now and the old one `wav/futurama_8k.pcm`. White-clock: Trantor,
 Halftime, Keygen, Futurama.
+
+### Sixteen-bit samples from a module to the modulator — planned 2026-11-13, an A/B to hear
+
+**The question.** The user asked whether the I2S transmitter's PDM
+mode (the C3 has the PCM-to-PDM converter, esp-hal 1.2.2 a driver for
+it, `i2s::pdm`) could replace the software sigma-delta, and pointed
+out that it would take 16-bit samples where the clips are 8. The
+hardware's lowest line rate is 64 bits a sample (1.024 Mbit/s at
+16 kHz, twice today's), and the buzzer's transistor is the doubtful
+part at that rate; the sample width does not need the hardware at
+all. So the steps, cheapest first, each only if the one before is
+heard: (1) wider samples through the software modulator, this entry;
+(2) `CLIP_KBPS=512`, the line at the rate PDM would need; (3) the
+hardware converter.
+
+**Where the eight bits are.** `clip::Player` works at `FULL` = 65536
+and scales an 8-bit sample by `LEVEL`. A PCM clip is 8 bits in flash
+and 16 would double it. A module is not: `xm::Tune` mixes in `i32`
+and `shape`, after the limiter, rounds to 127 steps. That rounding is
+the only place a module loses width, and undoing it costs no flash.
+What it can buy: the 8-bit noise is about 50 dB under full scale and
+the second-order loop at 32 bits a sample measures 58 dB on the test
+sine, so 8 dB on paper, most where the limiter is not working (quiet
+passages, fades).
+
+**Design.**
+- `Tune::next_sample` gives `i16`: signed, in 256ths of the 8-bit
+  step, ±127 × 256 at full scale. A clip that does not ask for width
+  gives whole steps (the same division as today, times 256), so its
+  bitstream is bit for bit what it was; one that asks gets the
+  limiter's quotient at the finer scale (`i64` for the product).
+- The clip asks with bit 1 of header byte 17 (bit 0 is the 16 kHz
+  rate; the player has always masked it, so an older firmware plays a
+  wide clip narrow). `scripts/xm2clip.py --bits 16`; the default
+  stays 8 until heard. `XMC2` stays.
+- `Player::level` takes a tune's sample as `s * LEVEL / 256`; PCM is
+  unchanged.
+- Tests: a narrow tune's samples are multiples of 256 and equal the
+  wide one's rounded toward zero; the wide one uses the steps
+  between; the existing shaping tests read the sample over 256.
+
+**The A/B.** On white-clock, one firmware, the default settings
+(sigma-delta, 256 kbit/s, so 512 for these): Trantor, Futurama, then
+`Halftime A` (8 bits, the clip in `clips/`), `Halftime B` (16),
+`Keygen A`, `Keygen B`. The variant clips go under `target/`.
+
+**To hear.** Whether B differs from A at all: hiss or grit under
+quiet notes and note tails is where it would show. If not, the sample
+width is not what limits the sound and step 3 loses its second
+argument.
+
+**Built, 2026-11-13.** As designed: `xm::STEP` (256) is the 8-bit
+step in a tune's samples, `Tune::next_sample` gives `i16`,
+`scripts/xm2clip.py --bits 16` sets bit 1 of byte 17, which is the
+one byte the B clips differ by from the ones in `clips/`. 112 host
+tests; the shaping test now also plays a clip both ways and finds the
+narrow samples to be the wide ones rounded toward zero, with more
+than half of the wide ones between steps. Flashed to white-clock over
+the air with the six melodies above, the build's defaults otherwise.
+Not yet heard.
+
+**Heard, 2026-11-13.** The 16-bit clips sound "smoother" (the user).
+Not made the default yet: the A and B pairs stay for step 2.
+
+**Step 2: the line at the rate PDM would need, 2026-11-13.** The same
+six melodies built with `CLIP_KBPS=512`: 64 bits a sample, so the
+16 kHz clips (the four tunes and Futurama) run the line at
+1.024 Mbit/s, bits of 0.98 µs, which is the hardware converter's
+lowest rate; Trantor stays at its own 512. Nothing in the code
+changes. On paper the second-order loop gains 15 dB of in-band noise
+for the doubling (73 dB on the 8 kHz test sine at 64 bits a sample),
+so B has room to show its width; against that, twice the edges
+through the transistor. A chunk is now 8 ms and the ring 128 ms, of
+which fourteen chunks, 112 ms, are ahead of the DMA, and the
+modulating is twice the work a second, so underruns are the risk:
+skips while the Wi-Fi is busy would be that, not the modulator.
+
+**To hear.** Against the 256 build from memory, since the rate is the
+build's: whether the tunes are cleaner, the same, or quieter and
+duller (the transistor not following); and whether B against A is a
+larger difference than it was. Skips or crackle: say so, the serial
+log's `clip:` line has the underrun count.
+
+**Heard, 2026-11-13: "B is now MUCH better".** At 1.024 Mbit/s the
+16-bit clips stand well clear of the 8-bit ones, as the arithmetic
+said they would once the modulator's own noise was out of the way,
+and the transistor (white-clock's, with the diode and R5 at 3.2 k)
+follows bits of a microsecond. No skips were reported; the serial
+log's underrun count has not been read.
+
+**Sixteen bits is the converter's default, 2026-11-13.**
+`scripts/xm2clip.py` writes wide clips unless told `--bits 8`, and
+`clips/halftime.xmc` and `clips/keygen.xmc` are converted again: one
+byte each, the files the B melodies were. The line's rate is not
+changed yet: `CLIP_KBPS` still defaults to 256, 512 being heard only
+on white-clock's changed circuit and with its cost in processor time
+and ring depth unmeasured.
+
+**512 is the default, 2026-11-13.** The user, of the two builds: the
+8-bit clips are not much different at 512 than at 256, the 16-bit
+ones "way, way better", less noise and less harsh; no skips. So the
+8-bit step was the floor at either rate and the modulator's noise was
+what the wide clips still had at 256. `CLIP_KBPS` defaults to 512
+(1.024 Mbit/s for a 16 kHz clip); 256 and 128 remain. Heard on
+white-clock's changed circuit only; the processor's share and the
+underrun count are still unread.
+
+### Hardware PDM for a module: a spike to hear — planned 2026-11-13
+
+**Why now.** Steps 1 and 2 above both came out for it on white-clock:
+16-bit samples are heard, and the transistor follows 1.024 Mbit/s.
+What I2S0's PCM-to-PDM converter would add to the software loop at
+that rate: no modulating on the processor (16 000 samples a second
+copied instead of a million decisions), a ring of PCM that is four
+times as deep in time (16 KB is 512 ms at 16 kHz, 16 bits), the
+converter's own interpolation instead of the linear one, and rates
+the software cannot afford, 2.048 Mbit/s first. What it would cost if
+kept: a second path through `src/clip.rs` (the beeper clips are bits
+and stay on TDM), and a modulator no host test can see.
+
+**What is known and what is not.** esp-hal 1.2.2 has the driver
+(`I2s::new_pdm`, `i2s::pdm`), and the C3's metadata says PDM transmit
+and the converter are there. The line's rate is the sample rate × 64
+× fp/fs, the ratio an integer: 2 is the IDF's default (128 bits a
+sample), 1 would be the 64 the software runs at, and whether the
+converter works at 1 is not known. Nor is the order of its
+sigma-delta, how near the rails it stays stable, or its gain: the
+loudness may differ from the software's, and only the ear and a
+scope will say.
+
+**Design.**
+- A clip asks for it, as it asks for its rate and width: bits 2 and 3
+  of header byte 17, 0 for the software loop, 1 for the converter at
+  64 bits a sample, 2 at 128 (`scripts/xm2clip.py --pdm 64|128`).
+  Modules only; a spike's switch, to be replaced by the build's
+  choice if it is kept.
+- `core`: for such a clip `Player::fill` writes the level sequence
+  itself, ramps and all, as `i16` little-endian, half the loop's
+  level (so full scale is the same 0.7 of the rail, to compare
+  loudness like with like, and inside whatever the converter holds),
+  with −32768, the released line, after the end. `Stream::bit_rate`
+  is then the ring's rate, 16 bits a sample, which is what the pacer
+  counts by; `Stream::pdm` gives the ratio and `Stream::idle` fills a
+  slot with the line's rest, zeros or −32768.
+- `src/clip.rs`: `I2s::new_pdm` with the DAC line mode (one channel,
+  no clock needed to tell left from right), mono, the high-pass off
+  (it would take the ramps and the rest level away, and the tune has
+  had its own), fp/fs 480/480 or 960/480, the dividers' minimum. The
+  ring, the pacer, the pin's hand-over and the inverter are as they
+  are. A TDM configuration clears `tx_pdm_en`, so a beeper clip after
+  a PDM one should be itself; Trantor after Halftime B checks that.
+- Host test: a PDM clip's bytes are the ramp from −32768, the tune's
+  samples at the scale above and −32768 after; its ring rate.
+
+**The A/B/C.** White-clock, the defaults (512, so the software tunes
+at 1.024 Mbit/s): Trantor, Futurama, `Halftime A` (software, as
+heard), `Halftime B` (hardware, 64, the same 1.024 Mbit/s),
+`Halftime C` (hardware, 128, 2.048 Mbit/s), and Keygen the same.
+
+**To hear.** B silent or garbled: the ratio of 1 does not work, and C
+is the hardware's voice. A thump at the start or the end of B or C:
+the rest level is not a released line (polarity, or the converter
+idling on pulses). Then loudness and noise of B and C against A, and
+Trantor after them. The serial log's `clip:` line would show a wrong
+guess about the ring's rate as stray positions.
+
+**Built, 2026-11-13.** As designed: `xm::pdm_ratio`,
+`Player::for_converter` and `fill_samples`, `Stream::converter`,
+`sample_rate` and `rest`, `clip::SAMPLE_REST`; in `src/clip.rs` the
+one `match` on the stream's kind between `I2s::new` and
+`I2s::new_pdm`, with a `clip: pdm, … Hz, … bits a sample` line in
+the log. 113 host tests, the new one a module's bytes for the
+converter against its samples. Flashed to white-clock over the air
+with the eight melodies above. Nothing of the hardware path has run
+before this: not heard, no log read, no scope on the line.
+
+**First hearing: white noise from both, 2026-11-13.** B and C alike.
+Read against the IDF's `i2s_hal_pdm_set_tx_slot`, esp-hal 1.2.2's
+`pdm::regs_v2::configure_tx` differs in one bit that matters: it
+clears `tx_pcm_bypass`, where the IDF never touches it in PDM mode
+and the TDM path sets it. Cleared, the A-law/µ-law compander
+(`tx_pcm_conf`, 1 at reset: compress) sits between the DMA and the
+converter. `src/clip.rs` now sets the bit and latches it with
+`tx_update` after `I2s::new_pdm`, through `I2S0::regs()`. A
+hypothesis until heard: the bench board has no buzzer.
+
+**The converter's clock, the same day.** Also from the reading: in
+PDM mode the driver, like the IDF, overwrites the master clock's
+fractional divider with a whole one ("to reduce the noise"), so the
+rate is 160 MHz over integers. With the bit-clock divider at its
+minimum of 8, 16 kHz at 64 bits came out at 16 447 Hz, half a
+semitone sharp and 2.8 % ahead of the pacer's clock, and at 128 bits
+8.5 % sharp. `clip::converter_clock` picks the divider (8 to 20) that
+lands nearest and gives the ring's true rate for the pacer: 12 and 13
+for the two, both 16 026 Hz, 0.16 % or 3 cents sharp.
+
+**On the bench board (test-clock, no buzzer), 2026-11-13.** Over the
+air, the serial log read from the capture an earlier session left
+running. Halftime B and C for 14 s each, then A and Trantor: each
+`clip:` line has 0 underruns and 0 stray positions, so the ring is
+read at the rate assumed (one channel, two bytes a sample) and the
+whole dividers are what was computed; the registers read back
+`tx_conf 0310b220` (mono, bypass set, PDM on), `pcm2pdm 032aa003` and
+`…005` (the ratio 1 and 2), `clkm …0d` and `…06`. What the line
+carries is not known from this. The same image is on white-clock.
+
+**Heard, 2026-11-13.** With the compander bypassed: B (64 bits a
+sample) is still white noise, so the converter does not work at a
+ratio of one; C (128 bits, 2.048 Mbit/s) plays, and "sounds better
+than A. Sound is cleaner, less noise" (the user). The decision: keep
+PDM, put the PCM clips through it as well, and keep the bit path for
+the beeper clips, which are bits.
+
+### PDM is the modulator for PCM clips and modules — planned 2026-11-13
+
+**Design.**
+- The build's choice, not the clip's: `CLIP_MODULATOR` takes `pdm`,
+  the default, beside `sd` and `pwm`. The software modulators stay as
+  build options because the converter has been heard only on
+  white-clock's circuit (diode, R5 at 3.2 k) and a stock board's
+  transistor at 2 Mbit/s is unknown; they can go once one has been
+  heard. `CLIP_KBPS` and `CLIP_CARRIER_KHZ` then matter to those two
+  builds only.
+- `config::CLIP_PDM`; `clip::CONVERTER`, `Some(128)` in such a build:
+  the ratio is fixed, 64 being noise. `Player::fill` writes samples
+  when it is set, for PCM and tune alike (a PCM clip's 8-bit steps at
+  the same scale as before, 0.7 of the rail at full scale; the level
+  is left where it was heard). The per-clip switch goes: header bits
+  2 and 3 of a module are spare again, `xm2clip.py --pdm` is removed.
+- An 8 kHz PCM clip runs the line at 1.024 Mbit/s, still 128 bits a
+  sample; that rate through the converter has not been heard (B's
+  failure was the ratio).
+- `Stream::bit_rate` is the ring's rate for those clips, the beeper's
+  512 kbit/s as before; `src/clip.rs` is as the spike left it, with
+  the register dump cut down to one line.
+- The ring stays 16 KB: half a second of samples now, a quarter of a
+  second of a beeper clip's bits.
+- Tests: the software modulators' tests call them directly and stay
+  whatever the build; the stream tests follow `CONVERTER`.
+
+**Built, 2026-11-13.** As designed: `config::CLIP_PDM` and
+`clip::CONVERTER`; `Stream::new` gives every PCM clip and module to
+the converter in such a build; `xm::pdm_ratio` and `xm2clip.py --pdm`
+are gone, and a module's header bits 2 and 3 are spare (the player
+has never read them otherwise). 113 host tests, run for `pdm`, `sd`
+and `pwm`: the converter's test now takes PCM and a module through
+`fill_samples` and checks the build's choice on the stream. The
+software modulators stay linked into the default image, the stream's
+kind being a field and not a constant; taking them out is for the
+day they go altogether.
+
+On the bench board (test-clock, no buzzer) with Trantor, Halftime,
+Keygen and Futurama: Futurama, the PCM clip, to its end in 866 chunks
+(886 KB of samples, 27.7 s) with 0 underruns and 0 stray positions;
+Halftime, Trantor and Keygen cut short after 6 to 12 s, the same
+zeros, a beeper clip after a PDM one and a PDM one after it. The same
+image is on white-clock. PCM through the converter has not been
+heard.
+
+**To hear.** Futurama: against memory, cleaner or not, and as loud;
+its 8-bit steps are now the floor, as the A clips' were. Trantor
+unchanged. Halftime and Keygen as C was.
+
+**Owed.** A stock buzzer circuit at 2 Mbit/s; a scope on the line
+(the rest level before and after a clip, the pulse train's rate); the
+level, still the software loop's 0.7 of the rail, which the converter
+may not need; esp-hal's `tx_pcm_bypass` reported upstream.
+
+**The converter's level, an A/B — planned 2026-11-13.** Full scale
+under the converter is the software sigma-delta's 0.7 of the rail
+(`LEVEL` 361, 127 steps), which was that loop's stability limit and
+is nothing the chip's modulator is known to need. To hear, in one
+firmware, each module four times: A at 0.70 (as now), B at 0.85
+(+1.7 dB), C at 0.95 (+2.7 dB, the pulse-width modulator's figure),
+D at 1.00 (+3.1 dB, the peaks at the rails themselves). The modules
+are limited hard, 2 to 3 % of their samples at full scale, so a
+modulator that overloads will be heard on them: grit or noise on the
+loud notes. Only the clip's samples are scaled; the ramps and the
+rest level stay. The switch is a trial's again: bits 2 and 3 of a
+module's header byte 17 pick the step (`xm::trial`, `xm2clip.py
+--trial N`), read only under the converter; `Player::with_step`. The
+winner becomes the converter's `LEVEL` for PCM and modules alike and
+the switch goes.
+
+**Built, 2026-11-13.** As planned; the A clips are the ones in
+`clips/` byte for byte. 113 host tests. On the bench board Halftime D
+and Keygen B run and are cut with 0 underruns and 0 stray positions.
+On white-clock over the air: Trantor, Futurama (0.70, PCM has no
+switch), Halftime A to D, Keygen A to D. Not yet heard.
+
+**Heard, 2026-11-13: B.** "B sounds best, still clear, C overloads in
+a few places. D is louder, but at the cost of clipping in quite a few
+places" (the user; martin-clock, the stock buzzer circuit, had the
+same build by then). So the chip's modulator overloads between 0.85
+and 0.95 of the rail. `clip::CONVERTER_LEVEL` is 438, 0.85, for PCM
+clips and modules; the trial's switch, `xm::trial` and `--trial`, is
+gone. 113 host tests.
+White-clock and the bench board have the build with the four usual
+clips (Trantor, Halftime, Keygen, Futurama); on the bench Futurama
+and Keygen run and are cut with 0 underruns and 0 stray positions.
+Martin-clock still has the trial's build with the ten melodies.
+Futurama at 0.85 has not been heard.

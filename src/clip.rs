@@ -2,9 +2,26 @@
 // Copyright (c) 2026 Vasily Khoruzhick
 
 //! Sampled sound on the buzzer line: I2S0's transmitter as a 1-bit
-//! output, fed by DMA from a ring the buzzer task keeps filled.
+//! output, fed by DMA from a ring the clip task keeps filled.
 //!
-//! The transmitter runs in TDM mode with two 8-bit channels and no
+//! A PCM clip or a tracker module goes out through the transmitter's
+//! PDM mode and its PCM-to-PDM converter (`clip::CONVERTER`, the
+//! default build): the ring holds the clip's samples, 16 bits, one
+//! channel, and the chip makes 128 bits of each, 2.048 Mbit/s at
+//! 16 kHz. That was heard against the software sigma-delta at half the
+//! rate and kept (2026-11-13). Two things about it are not esp-hal's
+//! defaults. The driver (1.2.2) clears `tx_pcm_bypass` in PDM mode,
+//! which puts the A-law compander before the converter and white noise
+//! on the line; `play` sets the bit again. And in PDM mode the master
+//! clock's divider is whole, so the sample rate is 160 MHz over
+//! integers: `clip::converter_clock` picks the bit-clock divider that
+//! lands nearest and the ring is paced by what comes out (16 026 Hz
+//! for 16 kHz). A ratio of one, 64 bits a sample, is noise as well,
+//! bypass or no.
+//!
+//! A beeper clip is bits already, and for it, as for every clip in a
+//! build with a software modulator (`CLIP_MODULATOR=sd` or `pwm`), the
+//! transmitter runs in TDM mode with two 8-bit channels and no
 //! clock pins, so its data line carries the ring's bytes MSB first at
 //! the clip's bit rate (`Stream::bit_rate`). The ring is `SLOTS` descriptors of `CHUNK` bytes,
 //! the last pointing at the first, and the DMA goes round it until it
@@ -46,10 +63,10 @@ use embassy_time::{Duration, Instant, Timer};
 use esp_hal::dma::aligned::{DmaAlignedMut, InternalMemory};
 use esp_hal::dma::{BurstConfig, DmaDescriptor, DmaTxBuffer, Owner, Preparation};
 use esp_hal::gpio::{DriveMode, Level, Output, OutputConfig, OutputSignal};
-use esp_hal::i2s::master::{Channels, DataFormat, I2s, TdmConfig};
+use esp_hal::i2s::master::{Channels, DataFormat, I2s, PdmConfig, PdmSlotMode, PdmTxConfig, TdmConfig};
 use esp_hal::peripherals::{DMA, DMA_CH1, GPIO5, I2S0};
 use esp_hal::time::Rate;
-use esp32clock_core::clip::{CHUNK, Pacer, SLOTS, Stream, chunk_us, chunks_in};
+use esp32clock_core::clip::{CHUNK, Pacer, SLOTS, Stream, chunk_us, chunks_in, converter_clock};
 use log::{info, warn};
 use static_cell::ConstStaticCell;
 
@@ -59,6 +76,11 @@ use crate::melody;
 const RING_BYTES: usize = if melody::HAS_CLIP { SLOTS * CHUNK } else { 0 };
 /// Bits in one TDM frame: two channels of eight.
 const FRAME_BITS: u32 = 16;
+/// The converter's up-sampling denominator, the largest the driver
+/// takes and the IDF's default; the numerator over it is the ratio.
+const PDM_FS: u32 = 480;
+/// Bits a sample at a ratio of one.
+const PDM_BASE_RATIO: u32 = 64;
 /// The DMA channel the ring is on, as the register block counts them.
 const DMA_CHANNEL: usize = 1;
 
@@ -205,10 +227,18 @@ impl Sampler {
         let slot = |chunk: u32| unsafe { core::slice::from_raw_parts_mut((base as *mut u8).add(chunk as usize % SLOTS * CHUNK), CHUNK) };
 
         let mut player = Stream::new(data, looping);
-        // A beeper clip has its own; see `clip::BEEPER_BIT_RATE`.
-        let bit_rate = player.bit_rate();
+        // Set for a clip that goes through the chip's converter.
+        let (converter, sample_rate) = (player.converter(), player.sample_rate());
+        // The rate the ring is read at. A beeper clip has its own; see
+        // `clip::BEEPER_BIT_RATE`. The converter's is what its whole
+        // dividers come to.
+        let (bclk_div, bit_rate) = match converter {
+            None => (0, player.bit_rate()),
+            Some(ratio) => converter_clock(sample_rate, ratio),
+        };
         // The ring is topped up twice a chunk.
         let tick = Duration::from_micros(chunk_us(bit_rate) / 2);
+        player.rest(slot(SLOTS as u32 - 1));
         // The chunk the clip's last bit is in, once it has been written.
         let mut last = None;
         let mut write = |chunk: u32, last: &mut Option<u32>| {
@@ -223,13 +253,38 @@ impl Sampler {
             // interrupt executor: let the threads in between chunks.
             Timer::after(Duration::from_micros(500)).await;
         }
-        slot(SLOTS as u32 - 1).fill(0);
 
-        let config = TdmConfig::new_tdm_msb()
-            .with_sample_rate(Rate::from_hz(bit_rate / FRAME_BITS))
-            .with_channels(Channels::STEREO)
-            .with_data_format(DataFormat::Data8Channel8);
-        let tx = match I2s::new(self.hw.i2s.reborrow(), self.hw.dma.reborrow(), config) {
+        let i2s = match converter {
+            None => {
+                let config = TdmConfig::new_tdm_msb()
+                    .with_sample_rate(Rate::from_hz(bit_rate / FRAME_BITS))
+                    .with_channels(Channels::STEREO)
+                    .with_data_format(DataFormat::Data8Channel8);
+                I2s::new(self.hw.i2s.reborrow(), self.hw.dma.reborrow(), config)
+            }
+            // The chip's PCM-to-PDM converter: the ring is then 16-bit
+            // samples, one channel, and the line `ratio` bits a sample. The DAC line mode is
+            // the one channel all the time, with no clock to tell two
+            // apart by. No high-pass: the stream's rest and its ramps
+            // are levels, and the tune has had its own.
+            Some(ratio) => {
+                let mut config = PdmTxConfig::new_dac_default(Rate::from_hz(sample_rate), PdmSlotMode::Mono);
+                config.clock.up_sample_fs = PDM_FS;
+                config.clock.up_sample_fp = PDM_FS * ratio / PDM_BASE_RATIO;
+                config.clock.bclk_div = bclk_div;
+                config.slot = config.slot.with_hp_en(false);
+                let i2s = I2s::new_pdm(self.hw.i2s.reborrow(), self.hw.dma.reborrow(), PdmConfig::tx_only(config));
+                // esp-hal 1.2.2 clears `tx_pcm_bypass` for PDM, which puts
+                // the A-law compander in the samples' way (white noise on
+                // the line, 2026-11-13); the IDF leaves it bypassed.
+                let regs = I2S0::regs();
+                regs.tx_conf().modify(|_, w| w.tx_pcm_bypass().set_bit());
+                regs.tx_conf().modify(|_, w| w.tx_update().set_bit());
+                while regs.tx_conf().read().tx_update().bit_is_set() {}
+                i2s
+            }
+        };
+        let tx = match i2s {
             Ok(i2s) => i2s.i2s_tx.build(),
             Err(e) => {
                 warn!("clip: i2s config failed: {e:?}");

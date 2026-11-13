@@ -165,14 +165,20 @@ pub const MAX_CURRENT_STEP: u8 = {
     step as u8
 };
 
-/// Bit rate of a PCM clip's or a module's stream on the buzzer line, in
-/// kbit/s, from `CLIP_KBPS` at build time: 128, 256 or 512; a module
-/// at 16 kHz runs at twice it. The default is what was heard and
-/// accepted on a clock (2026-11-12): 256, 32 bits a sample.
+/// Bit rate of a PCM clip's or a module's stream on the buzzer line
+/// under a software modulator (`CLIP_MODULATOR=sd` or `pwm`; the
+/// default build's converter makes 128 bits of a sample whatever this
+/// says), in kbit/s, from `CLIP_KBPS` at build time: 128, 256 or 512; a module
+/// or PCM at 16 kHz runs at twice it. The default is 512, 64 bits a
+/// sample and 1.024 Mbit/s for a 16 kHz clip: with the modules'
+/// samples at 16 bits the user heard far less noise there than at 256,
+/// which was the default before, and no skips (2026-11-13, on a clock
+/// with a flyback diode across the buzzer and R5 at 3.2 k; a stock
+/// board's transistor has not been heard at this rate).
 pub const CLIP_KBPS: u32 = {
     let kbps = match option_env!("CLIP_KBPS") {
         Some(s) => parse_i32(s),
-        None => 256,
+        None => 512,
     };
     assert!(kbps == 128 || kbps == 256 || kbps == 512, "CLIP_KBPS must be 128, 256 or 512");
     kbps as u32
@@ -193,9 +199,27 @@ pub const CLIP_CARRIER_KHZ: u32 = {
     khz as u32
 };
 
-/// Whether a PCM clip or a module is sent as a sigma-delta stream, a
+/// Whether a PCM clip or a module goes to the chip's own PCM-to-PDM
+/// converter as samples (`CLIP_MODULATOR=pdm`, the default) and is not
+/// modulated in software. Heard on a clock on 2026-11-13 against the
+/// software sigma-delta at 1.024 Mbit/s: cleaner, less noise, at
+/// 2.048 Mbit/s (128 bits a sample; at 64 the converter gives noise).
+/// That clock has a flyback diode across the buzzer and R5 at 3.2 k; a
+/// stock board's transistor has not been heard at that rate, which is
+/// why `sd` and `pwm` remain.
+pub const CLIP_PDM: bool = match option_env!("CLIP_MODULATOR") {
+    None => true,
+    Some(m) => {
+        let m = m.as_bytes();
+        m.len() == 3 && m[0] == b'p' && m[1] == b'd' && m[2] == b'm'
+    }
+};
+
+/// Of the two software modulators, whether a PCM clip or a module is
+/// sent as a sigma-delta stream, a
 /// decision a bit, and not as a pulse a carrier period:
-/// `CLIP_MODULATOR=sd`, the default, or `pwm` at build time. The
+/// `CLIP_MODULATOR=sd`, or `pwm` at build time (with `pdm` neither is
+/// used, and the tests run this one). The
 /// pulses were written when the first sigma-delta clip was quiet and
 /// crackled, which turned out to be the pacer rewriting the ring under
 /// the DMA and not the modulator; with that fixed, a flyback diode
@@ -207,8 +231,9 @@ pub const CLIP_SIGMA_DELTA: bool = match option_env!("CLIP_MODULATOR") {
     Some(m) => {
         let m = m.as_bytes();
         let sd = m.len() == 2 && m[0] == b's' && m[1] == b'd';
-        assert!(sd || (m.len() == 3 && m[0] == b'p' && m[1] == b'w' && m[2] == b'm'), "CLIP_MODULATOR must be sd or pwm");
-        sd
+        let pwm = m.len() == 3 && m[0] == b'p' && m[1] == b'w' && m[2] == b'm';
+        assert!(sd || pwm || CLIP_PDM, "CLIP_MODULATOR must be pdm, sd or pwm");
+        !pwm
     }
 };
 

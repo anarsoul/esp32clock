@@ -17,8 +17,11 @@ from `http://<ip>/update`; its settings survive the update.
   *Trantor: The Last Stormtrooper* by David Whittaker, as the ZX
   Spectrum's speaker played it, and two chiptunes by Orion, "Halftime"
   and "Keygen", played from their tracker modules by a player in the
-  firmware. They go out of the buzzer pin as a bitstream from I2S, and
-  are in the random draw, and a ringing alarm plays them round and
+  firmware. They go out of the buzzer pin as a bitstream from I2S (the
+  modules and PCM clips through its PCM-to-PDM converter, at 128 bits
+  a sample; `CLIP_MODULATOR=sd` at build time is a software
+  sigma-delta at a lower rate, for a buzzer circuit that asks for
+  one), and are in the random draw, and a ringing alarm plays them round and
   round with no gap, as they are written to loop. The music is its
   authors'; see `clips/README.md`.
 - `ALARM_CLIP` at build time chooses other clips, or none: raw PCM

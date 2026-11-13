@@ -49,7 +49,8 @@ pub const MAGIC: &[u8; 4] = b"XMC2";
 /// instruments, the limiter's drive and release (0 for `DRIVE` and
 /// `RELEASE_SHIFT`), the length in ms as `u32`; then the high-pass:
 /// how many times it is applied (0 to 2), the output rate (0 for
-/// `PCM_HZ`, 1 for twice that), and its
+/// `PCM_HZ`, 1 for twice that; bit 1 asks for samples finer than the
+/// 8-bit step, `Tune::next_sample`), and its
 /// second-order section as five `i16` in Q14, b0 b1 b2 a1 a2, which
 /// the converter works out since the chip has no tangent; the order to
 /// start over from when the tune is played round and round; three
@@ -125,6 +126,9 @@ const RELEASE_SHIFT: u32 = 7;
 /// default while the tunes ran at 8 kHz; at 16 kHz the user's ear
 /// took the cleaner one (2026-11-12). A clip may still ask for its own.
 const DRIVE: i32 = 127;
+
+/// What one 8-bit step is in the samples the tune gives.
+pub const STEP: i32 = 256;
 
 /// Whether `data` is a converted module.
 pub const fn is_tune(data: &[u8]) -> bool {
@@ -338,6 +342,9 @@ pub struct Tune<'a> {
     release: u32,
     /// Mixed samples an output sample: 4 at `PCM_HZ`, 2 at twice it.
     oversample: u32,
+    /// Whether the samples keep what the limiter's division leaves
+    /// under the 8-bit step.
+    wide: bool,
 }
 
 impl<'a> Tune<'a> {
@@ -383,13 +390,12 @@ impl<'a> Tune<'a> {
                 r => (r as u32).min(14),
             } + (byte(data, 17) & 1) as u32,
             oversample: if byte(data, 17) & 1 == 0 { 4 } else { 2 },
+            wide: byte(data, 17) & 2 != 0,
         };
         tune.enter(0, 0);
         tune
     }
 
-    /// The next sample, unsigned with 128 for silence; `None` when the
-    /// tune has ended.
     /// Play the tune round and round, as a tracker does, or once.
     pub fn set_looping(&mut self, looping: bool) {
         self.looping = looping;
@@ -401,7 +407,10 @@ impl<'a> Tune<'a> {
         MIX_HZ / self.oversample
     }
 
-    pub fn next_sample(&mut self) -> Option<u8> {
+    /// The next sample, signed, in `STEP`ths of the 8-bit step a PCM
+    /// clip has, so full scale is 127 of those; `None` when the tune
+    /// has ended. Whole steps, unless the clip asks for the finer ones.
+    pub fn next_sample(&mut self) -> Option<i16> {
         let mut sum = 0;
         for _ in 0..self.oversample {
             if self.pool <= 0 {
@@ -805,16 +814,19 @@ impl<'a> Tune<'a> {
         sum
     }
 
-    /// The high-pass, as often as the clip asks, and the limiter; out as
-    /// an unsigned byte.
-    fn shape(&mut self, x: i32) -> u8 {
+    /// The high-pass, as often as the clip asks, and the limiter.
+    fn shape(&mut self, x: i32) -> i16 {
         let mut y = x;
         for filter in &mut self.filter[..self.passes] {
             y = filter.run(&self.highpass, y);
         }
         self.envelope = (self.envelope - (self.envelope >> self.release)).max(y.abs());
-        let out = y * self.drive / self.envelope.max(LIMIT);
-        (128 + out.clamp(-127, 127)) as u8
+        let gain = self.envelope.max(LIMIT);
+        if self.wide {
+            (y as i64 * (self.drive * STEP) as i64 / gain as i64).clamp(-127 * STEP as i64, 127 * STEP as i64) as i16
+        } else {
+            ((y * self.drive / gain).clamp(-127, 127) * STEP) as i16
+        }
     }
 }
 
@@ -1166,7 +1178,7 @@ mod tests {
         let mut t = Tune::new(&data);
         let mut out = Vec::new();
         while let Some(s) = t.next_sample() {
-            out.push(s as i32 - 128);
+            out.push(s as i32 / STEP);
         }
         assert_eq!(out.len(), 16 * 6 * (PCM_HZ as usize * 5 / 2 / 125));
         assert_eq!(crate::clip::duration_ms(&data), 0, "the converter's figure, which this test module leaves at nought");
@@ -1180,7 +1192,7 @@ mod tests {
         let mut t = Tune::new(&quiet);
         let mut peak = 0;
         while let Some(s) = t.next_sample() {
-            peak = peak.max((s as i32 - 128).abs());
+            peak = peak.max((s as i32 / STEP).abs());
         }
         assert!(peak >= 120, "{peak}");
         // The header may ask for its own drive: at 64 the peaks are half scale.
@@ -1190,7 +1202,7 @@ mod tests {
         let mut t = Tune::new(&soft);
         let mut peak = 0;
         while let Some(s) = t.next_sample() {
-            peak = peak.max((s as i32 - 128).abs());
+            peak = peak.max((s as i32 / STEP).abs());
         }
         assert!((58..=64).contains(&peak), "{peak}");
         // With no high-pass asked for the fundamental stays: the output
@@ -1199,7 +1211,7 @@ mod tests {
             let mut t = Tune::new(d);
             let mut out = Vec::new();
             while let Some(s) = t.next_sample() {
-                out.push(s as i32 - 128);
+                out.push(s as i32 / STEP);
             }
             out[2000..].windows(2).filter(|w| w[0] <= 0 && w[1] > 0).count() as f64 * PCM_HZ as f64 / (out.len() - 2000) as f64
         };
@@ -1216,7 +1228,7 @@ mod tests {
         assert_eq!((t.rate(), Tune::new(&plain).rate()), (2 * PCM_HZ, PCM_HZ));
         let mut out = Vec::new();
         while let Some(s) = t.next_sample() {
-            out.push(s as i32 - 128);
+            out.push(s as i32 / STEP);
         }
         assert_eq!(out.len(), 2 * 16 * 6 * (PCM_HZ as usize * 5 / 2 / 125));
         let ups = out[4000..].windows(2).filter(|w| w[0] <= 0 && w[1] > 0).count() as f64 * 2.0 * PCM_HZ as f64 / (out.len() - 4000) as f64;
@@ -1227,9 +1239,23 @@ mod tests {
         let mut t = Tune::new(&rests);
         let mut n = 0;
         while let Some(s) = t.next_sample() {
-            assert_eq!(s, 128);
+            assert_eq!(s, 0);
             n += 1;
         }
         assert!(n > 0);
+        // A clip may ask for the steps between the 8-bit ones: the same
+        // samples before the rounding, and without it the whole steps.
+        let mut wide = data.clone();
+        wide[17] = 2;
+        let (mut narrow, mut wide) = (Tune::new(&data), Tune::new(&wide));
+        let (mut n, mut between) = (0, 0);
+        while let (Some(a), Some(b)) = (narrow.next_sample(), wide.next_sample()) {
+            assert_eq!(a as i32 % STEP, 0);
+            assert_eq!(b as i32 / STEP * STEP, a as i32, "sample {n}");
+            between += (b as i32 % STEP != 0) as usize;
+            n += 1;
+        }
+        assert_eq!((narrow.next_sample(), wide.next_sample()), (None, None));
+        assert!(between > n / 2, "{between} of {n}");
     }
 }

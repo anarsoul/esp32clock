@@ -1,10 +1,16 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 // Copyright (c) 2026 Vasily Khoruzhick
 
-//! Sampled sound for a 1-bit line, the pure half: the pulse-width
-//! modulator that turns 8 kHz PCM into the bitstream the buzzer's
-//! transistor is switched with, and the bookkeeping that keeps a ring
-//! of chunks filled ahead of the DMA reading it.
+//! Sampled sound for a 1-bit line, the pure half: what goes into the
+//! ring the DMA reads, and the bookkeeping that keeps it filled ahead
+//! of the DMA.
+//!
+//! In the default build (`CLIP_MODULATOR=pdm`, `CONVERTER`) a PCM clip
+//! or a module is not modulated here at all: `Player` writes its
+//! levels, ramps included, as 16-bit samples (`fill_samples`) and the
+//! chip's PCM-to-PDM converter makes the bits. The rest of this
+//! header is the two software modulators, which `sd` and `pwm` build
+//! instead and the tests run whatever the build.
 //!
 //! The clip is raw PCM, 8 bits unsigned, mono, `PCM_HZ` samples a
 //! second (`scripts/wav2pcm.sh`). The line carries `BIT_RATE` bits a
@@ -65,8 +71,9 @@ const ORDER: usize = match PERIODS {
 
 /// Bytes in one chunk of the ring: one DMA descriptor.
 pub const CHUNK: usize = 1024;
-/// Chunks in the ring: 16 KB, half a second at 256 kbit/s and a quarter
-/// at 512, all but two chunks of it ahead of the DMA. It was eight
+/// Chunks in the ring: 16 KB, a quarter of a second at 512 kbit/s and
+/// an eighth at the 1.024 Mbit/s of a 16 kHz clip, all but two chunks
+/// of it ahead of the DMA. It was eight
 /// until clips skipped on a busy clock (2026-11-12).
 pub const SLOTS: usize = 16;
 const _: () = assert!(CHUNK.is_multiple_of(BYTES_PER_SAMPLE) && SLOTS >= 4);
@@ -130,6 +137,12 @@ pub struct Player<'a> {
     s2: i32,
     /// The level of the pulse last written.
     fb: i32,
+    /// What one 8-bit step of a sample is worth: `LEVEL` for the
+    /// modulators here, `CONVERTER_LEVEL` for the chip's.
+    step: i32,
+    /// Set when the stream is the samples themselves and not bits, for
+    /// the chip's PCM-to-PDM converter: the bits it makes of a sample.
+    converter: Option<u32>,
 }
 
 impl<'a> Player<'a> {
@@ -151,8 +164,16 @@ impl<'a> Player<'a> {
         Self::with(Body::Tune(tune), None)
     }
 
+    /// Write the stream as samples for the chip's PCM-to-PDM converter
+    /// (`fill_samples`), which makes `ratio` bits of each, or as bits.
+    pub fn for_converter(mut self, ratio: Option<u32>) -> Self {
+        self.converter = ratio;
+        self.step = if ratio.is_some() { CONVERTER_LEVEL } else { LEVEL };
+        self
+    }
+
     const fn with(body: Body<'a>, len: Option<usize>) -> Self {
-        Self { body, len, looping: false, pcm_hz: PCM_HZ, next: 1, cur: -FULL, s1: 0, s2: 0, fb: if SIGMA_DELTA { -FULL * OSR as i32 } else { -FB } }
+        Self { body, len, looping: false, pcm_hz: PCM_HZ, next: 1, cur: -FULL, s1: 0, s2: 0, fb: if SIGMA_DELTA { -FULL * OSR as i32 } else { -FB }, converter: None, step: LEVEL }
     }
 
     /// Play the body round and round, or once. For the alarm: PCM goes
@@ -176,13 +197,16 @@ impl<'a> Player<'a> {
             return Some(-FULL + FULL * k as i32 / RAMP as i32);
         }
         if self.len.is_none_or(|n| k < RAMP + n) {
-            let sample = match &mut self.body {
-                Body::Pcm(pcm) if self.looping && !pcm.is_empty() => Some(pcm[(k - RAMP) % pcm.len()]),
-                Body::Pcm(pcm) => pcm.get(k - RAMP).copied(),
-                Body::Tune(tune) => tune.next_sample(),
+            // A tune's sample is in `xm::STEP`ths of PCM's step.
+            let step = self.step;
+            let pcm_level = |s: u8| (s as i32 - 128) * step;
+            let level = match &mut self.body {
+                Body::Pcm(pcm) if self.looping && !pcm.is_empty() => Some(pcm_level(pcm[(k - RAMP) % pcm.len()])),
+                Body::Pcm(pcm) => pcm.get(k - RAMP).copied().map(pcm_level),
+                Body::Tune(tune) => tune.next_sample().map(|s| s as i32 * step / xm::STEP),
             };
-            match sample {
-                Some(s) => return Some((s as i32 - 128) * LEVEL),
+            match level {
+                Some(level) => return Some(level),
                 None => self.len = Some(k - RAMP),
             }
         }
@@ -214,6 +238,9 @@ impl<'a> Player<'a> {
     /// length must be a multiple of `BYTES_PER_SAMPLE`.
     pub fn fill(&mut self, out: &mut [u8]) {
         debug_assert!(out.len().is_multiple_of(BYTES_PER_SAMPLE));
+        if self.converter.is_some() {
+            return self.fill_samples(out);
+        }
         if SIGMA_DELTA {
             return self.fill_bits(out);
         }
@@ -262,6 +289,23 @@ impl<'a> Player<'a> {
         (self.s1, self.s2, self.fb) = (s1, s2, fb);
     }
 
+    /// `fill` for the chip's converter: the level sequence itself, the
+    /// ramps included, a sample as `i16`, little-endian, with
+    /// `SAMPLE_REST` after the end. Half the loop's level, `FULL` being
+    /// twice an `i16`'s; full scale is `CONVERTER_LEVEL`'s share of the rail.
+    fn fill_samples(&mut self, out: &mut [u8]) {
+        for pair in out.as_chunks_mut::<SAMPLE_BYTES>().0 {
+            let sample = match self.level(self.next) {
+                Some(level) => {
+                    self.next += 1;
+                    (level / 2).clamp(SAMPLE_REST as i32, i16::MAX as i32) as i16
+                }
+                None => SAMPLE_REST,
+            };
+            *pair = sample.to_le_bytes();
+        }
+    }
+
     /// `fill` for the sigma-delta stream: a decision a bit.
     fn fill_bits(&mut self, out: &mut [u8]) {
         // The loop's scale here: levels times `OSR`, a step a bit.
@@ -293,6 +337,57 @@ impl<'a> Player<'a> {
         }
         (self.s1, self.s2, self.fb) = (s1, s2, fb);
     }
+}
+
+/// Bits the chip's PCM-to-PDM converter makes of a sample, in a build
+/// that sends PCM clips and modules through it (`CLIP_MODULATOR=pdm`,
+/// the default) and not through a modulator here. 128 is its ratio of
+/// two; at 64, a ratio of one, the line carried white noise
+/// (2026-11-13).
+pub const CONVERTER: Option<u32> = if config::CLIP_PDM { Some(128) } else { None };
+/// One step of the 8-bit sample for the chip's converter, in the
+/// units of `LEVEL`: 127 steps are 0.85 of the rail. By ear, on two
+/// hard-limited modules (2026-11-13): 0.70, the software loop's, was
+/// clean and 1.7 dB quieter; 0.95 overloaded in a few places, 1.00 in
+/// many.
+const CONVERTER_LEVEL: i32 = 438;
+const _: () = assert!(128 * CONVERTER_LEVEL <= FULL);
+/// Bytes a sample of a stream written for the chip's converter.
+pub const SAMPLE_BYTES: usize = 2;
+/// The sample that is the released line there: no ones at all.
+pub const SAMPLE_REST: i16 = i16::MIN;
+const _: () = assert!(CHUNK.is_multiple_of(SAMPLE_BYTES) && FULL / 2 == -(SAMPLE_REST as i32));
+
+/// The clock the chip's converter runs from, and the range of its bit
+/// clock's divider tried.
+const CONVERTER_SCLK: u64 = 160_000_000;
+const CONVERTER_DIVS: Range<u64> = 8..21;
+
+/// The bit-clock divider to give the chip's converter for `sample_rate`
+/// at `ratio` bits a sample, and the bits a second the ring is then
+/// really read at. In PDM mode the driver, as the IDF does, drops the
+/// fraction of the master clock's divider (less noise), so the rate is
+/// 160 MHz over whole numbers: the divider is the one that lands
+/// nearest, and the pacer must count by what comes out, not by what
+/// was asked for. At 8 it would be 2.8 % fast for 16 kHz at 64, half a
+/// semitone; at 12 it is 0.16 %.
+pub const fn converter_clock(sample_rate: u32, ratio: u32) -> (u32, u32) {
+    let bclk = sample_rate as u64 * ratio as u64;
+    let (mut best, mut best_rate, mut best_err) = (0, 0, u64::MAX);
+    let mut div = CONVERTER_DIVS.start;
+    while div < CONVERTER_DIVS.end {
+        let n = CONVERTER_SCLK / (bclk * div);
+        if n >= 2 {
+            // Ring bits a second: `SAMPLE_BYTES` a sample.
+            let rate = SAMPLE_BYTES as u64 * 8 * CONVERTER_SCLK / (n * div * ratio as u64);
+            let err = rate.abs_diff(SAMPLE_BYTES as u64 * 8 * sample_rate as u64);
+            if err < best_err {
+                (best, best_rate, best_err) = (div, rate, err);
+            }
+        }
+        div += 1;
+    }
+    (best as u32, best_rate as u32)
 }
 
 /// The first bytes of a PCM clip at another rate than `PCM_HZ`: the
@@ -486,9 +581,9 @@ impl<'a> Stream<'a> {
         if is_beeper(data) {
             Self::Beeper(Runs::new(Beeper::new(data).looped(looping)))
         } else if xm::is_tune(data) {
-            Self::Pcm(Player::tune(xm::Tune::new(data)).looped(looping))
+            Self::Pcm(Player::tune(xm::Tune::new(data)).looped(looping).for_converter(CONVERTER))
         } else {
-            Self::Pcm(Player::pcm(data).looped(looping))
+            Self::Pcm(Player::pcm(data).looped(looping).for_converter(CONVERTER))
         }
     }
 
@@ -501,9 +596,39 @@ impl<'a> Stream<'a> {
         }
     }
 
-    /// The bit rate the line must run at for this clip.
+    /// Bits a sample of the chip's PCM-to-PDM converter, for a clip
+    /// that is to go through it: the stream is then samples
+    /// (`SAMPLE_BYTES` each), not the line's bits.
+    pub fn converter(&self) -> Option<u32> {
+        match self {
+            Self::Pcm(p) => p.converter,
+            Self::Beeper(_) => None,
+        }
+    }
+
+    /// Samples a second of a stream for the converter.
+    pub fn sample_rate(&self) -> u32 {
+        match self {
+            Self::Pcm(p) => p.sample_rate(),
+            Self::Beeper(_) => BEEPER_BIT_RATE,
+        }
+    }
+
+    /// Fill `out` with the stream's rest, the released line: zeros as
+    /// bits, `SAMPLE_REST` as samples.
+    pub fn rest(&self, out: &mut [u8]) {
+        match self.converter() {
+            None => out.fill(0),
+            Some(_) => out.as_chunks_mut::<SAMPLE_BYTES>().0.iter_mut().for_each(|pair| *pair = SAMPLE_REST.to_le_bytes()),
+        }
+    }
+
+    /// The bit rate the line must run at for this clip; for one that
+    /// goes through the converter, the rate the ring is read at, which
+    /// is what the pacer wants.
     pub fn bit_rate(&self) -> u32 {
         match self {
+            Self::Pcm(p) if p.converter.is_some() => SAMPLE_BYTES as u32 * 8 * p.sample_rate(),
             // The modulator writes `OSR` bits a sample whatever the
             // rate: a tune at twice `PCM_HZ` needs the line twice as fast.
             Self::Pcm(p) => BIT_RATE / PCM_HZ * p.sample_rate(),
@@ -838,8 +963,14 @@ mod tests {
         empty.fill(&mut buf);
         assert!(empty.done() && buf == [0; 4]);
         assert!(matches!(Stream::new(&[128; 100], false), Stream::Pcm(_)));
-        assert_eq!((Stream::new(&data, false).bit_rate(), Stream::new(&[128; 100], false).bit_rate()), (BEEPER_BIT_RATE, BIT_RATE));
+        assert_eq!((Stream::new(&data, false).bit_rate(), Stream::new(&[128; 100], false).bit_rate()), (BEEPER_BIT_RATE, ring_rate(PCM_HZ)));
         assert!(is_old_beeper(b"BPR1\0\0\0\0") && !is_old_beeper(&data));
+    }
+
+    /// The rate a PCM stream's bytes are read at: the line's bits, or
+    /// the converter's samples.
+    fn ring_rate(hz: u32) -> u32 {
+        if CONVERTER.is_some() { SAMPLE_BYTES as u32 * 8 * hz } else { BIT_RATE / PCM_HZ * hz }
     }
 
     #[test]
@@ -851,7 +982,7 @@ mod tests {
         assert_eq!((pcm_rate(&clip), pcm_rate(&samples)), (2 * PCM_HZ, PCM_HZ));
         assert_eq!((pcm_samples(&clip).len(), pcm_samples(&samples).len()), (16_000, 16_000));
         assert_eq!((duration_ms(&clip), duration_ms(&samples)), (1000, 2000));
-        assert_eq!((Stream::new(&clip, false).bit_rate(), Stream::new(&samples, false).bit_rate()), (2 * BIT_RATE, BIT_RATE));
+        assert_eq!((Stream::new(&clip, false).bit_rate(), Stream::new(&samples, false).bit_rate()), (ring_rate(2 * PCM_HZ), ring_rate(PCM_HZ)));
         // The same samples make the same bits; only the line's clock differs.
         let fill = |data: &[u8]| {
             let mut s = Stream::new(data, false);
@@ -943,9 +1074,58 @@ mod tests {
         let mut tune = xm::Tune::new(data);
         let mut out = Vec::new();
         while let Some(s) = tune.next_sample() {
-            out.push(s);
+            out.push((128 + s as i32 / xm::STEP) as u8);
         }
         std::fs::write(path, out).unwrap();
+    }
+
+    /// For the chip's converter a clip is written out as its samples:
+    /// the ramp from the released line, the clip at the loop's scale,
+    /// and the released line after.
+    #[test]
+    fn a_clip_for_the_converter_is_its_samples() {
+        let pcm: Vec<u8> = (0..4000u32).map(|i| (128.0 + 127.0 * (i as f64 * 0.3).sin()) as u8).collect();
+        let mut p = Player::new(&pcm).for_converter(Some(128));
+        let mut out = vec![0u8; 2 * (RAMP + 3000)];
+        p.fill(&mut out);
+        let got: Vec<i16> = out.as_chunks::<2>().0.iter().map(|p| i16::from_le_bytes(*p)).collect();
+        // Point 0 of the ramp is the rail itself and is not written.
+        assert_eq!(got[0] as i32, (-FULL + FULL / RAMP as i32) / 2);
+        assert!(got[..RAMP - 1].windows(2).all(|w| w[0] < w[1]) && got[RAMP - 2] < 0);
+        for (i, &s) in got[RAMP - 1..].iter().enumerate() {
+            assert_eq!(s as i32, (pcm[i] as i32 - 128) * CONVERTER_LEVEL / 2, "sample {i}");
+        }
+        assert_eq!(127 * CONVERTER_LEVEL * 100 / FULL, 84, "full scale is 0.85 of the rail");
+        // To the end, and the rest after it.
+        while !p.done() {
+            p.fill(&mut out);
+        }
+        p.fill(&mut out);
+        assert!(out.as_chunks::<2>().0.iter().all(|p| i16::from_le_bytes(*p) == SAMPLE_REST));
+        // A module's samples keep their width on the way.
+        if let Some(data) = crate::melody::CLIP_DATA.iter().find(|d| xm::is_tune(d)) {
+            let mut p = Player::tune(xm::Tune::new(data)).for_converter(Some(128));
+            let mut out = vec![0u8; 2 * (RAMP + 4000)];
+            p.fill(&mut out);
+            let mut tune = xm::Tune::new(data);
+            for (i, pair) in out.as_chunks::<2>().0[RAMP - 1..].iter().enumerate() {
+                assert_eq!(i16::from_le_bytes(*pair) as i32, tune.next_sample().unwrap() as i32 * CONVERTER_LEVEL / xm::STEP / 2, "sample {i}");
+            }
+        }
+        // The build's choice is every PCM clip's and module's, and never
+        // a beeper clip's; the stream's rest follows.
+        let runs = beeper_clip(&[3, 5]);
+        let (pcm_stream, beeper) = (Stream::new(&pcm, false), Stream::new(&runs, false));
+        assert_eq!((pcm_stream.converter(), beeper.converter()), (CONVERTER, None));
+        assert_eq!(pcm_stream.sample_rate(), PCM_HZ);
+        let mut rest = [0xFFu8; 8];
+        beeper.rest(&mut rest);
+        assert_eq!(rest, [0; 8]);
+        pcm_stream.rest(&mut rest);
+        assert_eq!(rest, if CONVERTER.is_some() { [0, 0x80, 0, 0x80, 0, 0x80, 0, 0x80] } else { [0; 8] });
+        // The clock: whole dividers of 160 MHz, within a quarter of a percent.
+        assert_eq!(converter_clock(16_000, 128), (13, 256_410));
+        assert_eq!(converter_clock(8_000, 128), (12, 128_205));
     }
 
     #[test]
