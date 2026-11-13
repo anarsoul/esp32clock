@@ -13,8 +13,8 @@ fn main() {
 }
 
 /// `ALARM_CLIP` names the clips to build in as the last melodies, files
-/// separated by commas: raw PCM (`scripts/wav2pcm.sh`), a beeper clip
-/// (`scripts/zxbeeper.py`) or a two-channel tune (`scripts/wham2clip.py`).
+/// separated by commas: raw PCM (`scripts/wav2pcm.sh`) or a beeper clip
+/// (`scripts/zxbeeper.py`).
 /// A relative path is taken from the workspace root, where cargo is run.
 /// A clip's API name is its file's name without the extension, in lower
 /// case with everything but letters turned into `_`; its label is the

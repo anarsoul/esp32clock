@@ -231,7 +231,7 @@ impl<'a> Player<'a> {
     }
 }
 
-/// The first bytes of a beeper clip; a clip with neither magic is PCM.
+/// The first bytes of a beeper clip; a clip without them is PCM.
 pub const BEEPER_MAGIC: &[u8; 4] = b"BPR1";
 /// Bytes before a beeper clip's runs: the magic and the length in ticks.
 const BEEPER_HEADER: usize = 8;
@@ -250,14 +250,11 @@ pub const fn is_beeper(data: &[u8]) -> bool {
     has_magic(data, BEEPER_MAGIC, BEEPER_HEADER)
 }
 
-/// How long a clip of any kind plays, in milliseconds.
+/// How long a clip of either kind plays, in milliseconds.
 pub const fn duration_ms(data: &[u8]) -> u32 {
     if is_beeper(data) {
         let ticks = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
         (ticks as u64 * 1000 / BEEPER_TICK_HZ as u64) as u32
-    } else if is_wham(data) {
-        let steps = u16::from_le_bytes([data[6], data[7]]) as u64;
-        (steps * (tone_step_t(data[4]) + STEP_OVERHEAD_T) as u64 * 1000 / CPU_HZ as u64) as u32
     } else {
         (data.len() as u64 * 1000 / PCM_HZ as u64) as u32
     }
@@ -358,322 +355,15 @@ impl RunSource for Beeper<'_> {
     }
 }
 
-/// The first bytes of a tune for the two-channel player.
-pub const WHAM_MAGIC: &[u8; 4] = b"WHM1";
-/// Bytes before the notes: the magic, the tempo, the octave shift and
-/// the number of steps as a little-endian `u16`.
-const WHAM_HEADER: usize = 8;
-
-/// Whether `data` is a tune for the two-channel player.
-pub const fn is_wham(data: &[u8]) -> bool {
-    has_magic(data, WHAM_MAGIC, WHAM_HEADER)
-}
-
-/// The bit rate the two-channel player's line runs at, whatever
-/// `CLIP_KBPS` says: a channel's slot is 48 T-states, which is seven
-/// bits here and three and a half at 256 kbit/s, where the slots came
-/// out three and four bits by turns and the tunes crackled
-/// (2026-11-12).
-pub const WHAM_BIT_RATE: u32 = 512_000;
-/// A channel's slot of the tone loop on the line. Whole bits, so every
-/// slot is the same: 0.3 % short of the original's 48 T-states, which
-/// is five cents sharp and as much fast.
-const SLOT_BITS: u32 = 7;
-
-/// The clock the player's timing is written in: the T-states of the
-/// 3.5 MHz Z80 it was written for.
-const CPU_HZ: u32 = 3_500_000;
-/// One pass of the tone loop; each channel has half of it.
-const LOOP_T: u32 = 96;
-/// Between two steps: fetching the notes and a look at the keyboard.
-const STEP_OVERHEAD_T: u32 = 1164;
-/// One pass of the silent loop, and what each 256 of them add.
-const REST_LOOP_T: u32 = 94;
-const REST_OUTER_T: u32 = 14;
-/// One pass of the noise loop with and without a sample taken.
-const NOISE_ON_T: u32 = 96;
-const NOISE_OFF_T: u32 = 90;
-/// The sweep drum: the first half period, what each cycle pair adds,
-/// and the gap between pairs.
-const SWEEP_FIRST_T: u32 = 130;
-const SWEEP_STEP_T: u32 = 1020;
-const SWEEP_GAP_T: u32 = 360;
-/// Cycle pairs of the sweep drum by `255 - tempo`.
-const SWEEP_PAIRS: [u8; 35] =
-    [1, 1, 1, 2, 2, 11, 12, 13, 13, 14, 14, 14, 15, 15, 15, 16, 16, 17, 17, 18, 18, 19, 19, 20, 20, 21, 21, 21, 22, 22, 22, 22, 23, 23, 24];
-/// Loop passes between flips for each semitone, lowest first: 255 is
-/// 71.5 Hz, and twelve further on is half of it. `REST` and anything
-/// past the table is silence.
-const WHAM_PERIODS: [u8; 53] = [
-    255, 240, 227, 215, 203, 192, 180, 171, 161, 151, 144, 136, 128, 121, 114, 108, 102, 96, 91, 86, 81, 76, 72, 68, 64, 61, 57, 54,
-    51, 48, 45, 43, 40, 38, 36, 34, 32, 30, 28, 27, 25, 24, 23, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12,
-];
-/// The note code of a rest.
-pub const WHAM_REST: u8 = 53;
-/// Channel 1 codes from here are drums, with channel 2's byte as the
-/// noise's pattern.
-const DRUM: u8 = 0x80;
-const DRUM_NOISE: u8 = 0xFF;
-const DRUM_SWEEP: u8 = 0xC0;
-
-/// T-states of one step of tones at this tempo.
-const fn tone_step_t(tempo: u8) -> u32 {
-    (256 - tempo as u32) * 256 * LOOP_T
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Phase {
-    Fetch,
-    /// The tone loop: which channel's slot is next.
-    Tone { second: bool },
-    /// The four quarters of a drum, most significant bit of the code's
-    /// low nibble first: noise or silence.
-    Quarters,
-    Noise,
-    Sweep { pair: u8, part: u8 },
-    /// The gap after a step.
-    Gap,
-}
-
-/// A two-channel tune for a 1-bit speaker, played the way Mark
-/// Alexander's "Wham! The Music Box" (ZX Spectrum, 1985) plays its
-/// tunes; `scripts/wham2clip.py` takes them from that program's tape.
-/// This is a new player written from what the original does, checked
-/// against it in an emulator flip for flip on the tones and to tens of
-/// microseconds a step on the rests and drums.
-///
-/// A tune is steps of two note codes. A step runs a fixed loop
-/// `(256 - tempo) * 256` times; each pass gives the line to channel 1
-/// for half of it and to channel 2 for the other half, so the two
-/// square waves are mixed by time, 36 kHz apart, and each channel flips
-/// its level every `WHAM_PERIODS[code]` passes. Both channels resting is a
-/// silent step, a little shorter. Channel 1 codes from 0x80 are drums
-/// that take the whole step: noise gated by channel 2's byte as a bit
-/// pattern, in four quarters picked by the code's low nibble, or for
-/// the whole step (0xFF), or a falling sweep (0xC0).
-///
-/// Two things are not the original's. A channel that rests while the
-/// other plays is held low; the original flips it every pass, an
-/// 18 kHz tone at half level. And the noise is a shift register's; the
-/// original reads it out of its machine's ROM.
-///
-/// `octave` in the header shifts every period right, for a buzzer that
-/// has no bass.
-pub struct Wham<'a> {
-    c1: &'a [u8],
-    c2: &'a [u8],
-    tempo: u8,
-    octave: u8,
-    step: usize,
-    phase: Phase,
-    /// The line's level, held through gaps and rests.
-    level: bool,
-    /// Fraction of a bit carried from run to run, in `1 / CPU_HZ` bits.
-    carry: u32,
-    levels: [bool; 2],
-    /// Passes until each channel flips, and its period; 0 is a rest.
-    count: [u8; 2],
-    period: [u8; 2],
-    /// Passes of the current loop still to run.
-    passes: u32,
-    /// The drum code and its quarters still to play.
-    code: u8,
-    quarters: u8,
-    pattern: u8,
-    lfsr: u16,
-}
-
-impl<'a> Wham<'a> {
-    /// `data` must be such a tune (`is_wham`).
-    pub fn new(data: &'a [u8]) -> Self {
-        let steps = u16::from_le_bytes([data[6], data[7]]) as usize;
-        let notes = &data[WHAM_HEADER..];
-        let steps = steps.min(notes.len() / 2);
-        Self {
-            c1: &notes[..steps],
-            c2: &notes[steps..2 * steps],
-            tempo: data[4],
-            octave: data[5].min(3),
-            step: 0,
-            phase: Phase::Fetch,
-            level: false,
-            carry: 0,
-            levels: [false; 2],
-            count: [0; 2],
-            period: [0; 2],
-            passes: 0,
-            code: 0,
-            quarters: 0,
-            pattern: 0,
-            lfsr: 0,
-        }
-    }
-
-    /// The bits `t` T-states take, with the fraction carried over.
-    fn bits(&mut self, mut t: u32) -> u32 {
-        // 8000 T-states at the bit rate, with the carry, fit in a u32.
-        const PIECE: u32 = 8000;
-        const _: () = assert!(PIECE as u64 * WHAM_BIT_RATE as u64 + CPU_HZ as u64 <= u32::MAX as u64);
-        let mut bits = 0;
-        while t > 0 {
-            let piece = t.min(PIECE);
-            let x = self.carry + piece * WHAM_BIT_RATE;
-            bits += x / CPU_HZ;
-            self.carry = x % CPU_HZ;
-            t -= piece;
-        }
-        bits
-    }
-
-    fn period_of(&self, code: u8) -> u8 {
-        match WHAM_PERIODS.get(code as usize) {
-            Some(&p) => (p >> self.octave).max(2),
-            None => 0,
-        }
-    }
-
-    /// Passes of the silent and noise loops in a whole step, and in a
-    /// quarter of one.
-    fn drum_passes(&self) -> u32 {
-        (255 - self.tempo as u32) * 256
-    }
-
-    fn quarter_passes(&self) -> u32 {
-        ((256 - self.tempo as u32) / 4).max(1) * 256
-    }
-
-    fn rest_t(passes: u32) -> u32 {
-        passes * REST_LOOP_T + passes / 256 * REST_OUTER_T
-    }
-
-    fn start_noise(&mut self, passes: u32) {
-        self.passes = passes;
-        // The same noise every time, as the original's is.
-        self.lfsr = 0xACE1;
-        self.phase = Phase::Noise;
-    }
-}
-
-impl RunSource for Wham<'_> {
-    fn next_run(&mut self) -> Option<(bool, u32)> {
-        loop {
-            match self.phase {
-                Phase::Fetch => {
-                    let (&c1, &c2) = (self.c1.get(self.step)?, self.c2.get(self.step)?);
-                    self.step += 1;
-                    if c1 >= DRUM {
-                        self.code = c1;
-                        self.pattern = c2;
-                        self.quarters = 0;
-                        match c1 {
-                            DRUM_NOISE => self.start_noise(self.drum_passes()),
-                            DRUM_SWEEP => self.phase = Phase::Sweep { pair: 0, part: 0 },
-                            _ => {
-                                self.quarters = 4;
-                                self.phase = Phase::Quarters;
-                            }
-                        }
-                        continue;
-                    }
-                    self.period = [self.period_of(c1), self.period_of(c2)];
-                    if self.period == [0, 0] {
-                        self.phase = Phase::Gap;
-                        let t = Self::rest_t(self.drum_passes());
-                        return Some((self.level, self.bits(t)));
-                    }
-                    // Both low, and each flips on the first pass.
-                    self.levels = [false; 2];
-                    self.count = [1; 2];
-                    self.passes = tone_step_t(self.tempo) / LOOP_T;
-                    self.phase = Phase::Tone { second: false };
-                }
-                Phase::Tone { second } => {
-                    let ch = second as usize;
-                    self.level = self.levels[ch];
-                    if self.period[ch] != 0 {
-                        self.count[ch] -= 1;
-                        if self.count[ch] == 0 {
-                            self.count[ch] = self.period[ch];
-                            self.levels[ch] = !self.levels[ch];
-                        }
-                    }
-                    self.phase = Phase::Tone { second: !second };
-                    if second {
-                        self.passes -= 1;
-                        if self.passes == 0 {
-                            self.phase = Phase::Gap;
-                        }
-                    }
-                    return Some((self.level, SLOT_BITS));
-                }
-                Phase::Quarters => {
-                    if self.quarters == 0 {
-                        self.phase = Phase::Gap;
-                        continue;
-                    }
-                    self.quarters -= 1;
-                    let passes = self.quarter_passes();
-                    if self.code >> self.quarters & 1 == 1 {
-                        self.start_noise(passes);
-                    } else {
-                        let t = Self::rest_t(passes);
-                        return Some((self.level, self.bits(t)));
-                    }
-                }
-                Phase::Noise => {
-                    if self.passes == 0 {
-                        self.phase = if self.code == DRUM_NOISE { Phase::Gap } else { Phase::Quarters };
-                        continue;
-                    }
-                    self.passes -= 1;
-                    let sample = self.pattern & 1 == 1;
-                    self.pattern = self.pattern.rotate_right(1);
-                    if !sample {
-                        return Some((self.level, self.bits(NOISE_OFF_T)));
-                    }
-                    let bit = self.lfsr & 1 == 1;
-                    self.lfsr = self.lfsr >> 1 ^ if bit { 0xB400 } else { 0 };
-                    self.level = bit;
-                    return Some((self.level, self.bits(NOISE_ON_T)));
-                }
-                Phase::Sweep { pair, part } => {
-                    let pairs = SWEEP_PAIRS[(255 - self.tempo as usize).min(SWEEP_PAIRS.len() - 1)];
-                    if pair == pairs {
-                        self.phase = Phase::Gap;
-                        continue;
-                    }
-                    // High, low, high for a half period each, then a short low.
-                    let half = SWEEP_FIRST_T + SWEEP_STEP_T * pair as u32;
-                    self.level = part % 2 == 0;
-                    let t = if part == 3 { SWEEP_GAP_T } else { half };
-                    self.phase = if part == 3 { Phase::Sweep { pair: pair + 1, part: 0 } } else { Phase::Sweep { pair, part: part + 1 } };
-                    return Some((self.level, self.bits(t)));
-                }
-                Phase::Gap => {
-                    self.phase = Phase::Fetch;
-                    return Some((self.level, self.bits(STEP_OVERHEAD_T)));
-                }
-            }
-        }
-    }
-}
-
-/// A clip of any kind as the line's bitstream.
+/// A clip of either kind as the line's bitstream.
 pub enum Stream<'a> {
     Pcm(Player<'a>),
     Beeper(Runs<Beeper<'a>>),
-    Wham(Runs<Wham<'a>>),
 }
 
 impl<'a> Stream<'a> {
     pub fn new(data: &'a [u8]) -> Self {
-        if is_beeper(data) {
-            Self::Beeper(Runs::new(Beeper::new(data)))
-        } else if is_wham(data) {
-            Self::Wham(Runs::new(Wham::new(data)))
-        } else {
-            Self::Pcm(Player::new(data))
-        }
+        if is_beeper(data) { Self::Beeper(Runs::new(Beeper::new(data))) } else { Self::Pcm(Player::new(data)) }
     }
 
     /// Write the next `out.len()` bytes, a multiple of
@@ -682,15 +372,6 @@ impl<'a> Stream<'a> {
         match self {
             Self::Pcm(p) => p.fill(out),
             Self::Beeper(b) => b.fill(out),
-            Self::Wham(w) => w.fill(out),
-        }
-    }
-
-    /// The bit rate the line must run at for this clip.
-    pub fn bit_rate(&self) -> u32 {
-        match self {
-            Self::Wham(_) => WHAM_BIT_RATE,
-            _ => BIT_RATE,
         }
     }
 
@@ -698,7 +379,6 @@ impl<'a> Stream<'a> {
         match self {
             Self::Pcm(p) => p.done(),
             Self::Beeper(b) => b.done(),
-            Self::Wham(w) => w.done(),
         }
     }
 }
@@ -1022,145 +702,6 @@ mod tests {
         empty.fill(&mut buf);
         assert!(empty.done() && buf == [0; 4]);
         assert!(matches!(Stream::new(&[128; 100]), Stream::Pcm(_)));
-    }
-
-    /// A tune for the two-channel player.
-    fn wham_tune(tempo: u8, octave: u8, c1: &[u8], c2: &[u8]) -> Vec<u8> {
-        assert_eq!(c1.len(), c2.len());
-        let mut data = WHAM_MAGIC.to_vec();
-        data.extend([tempo, octave]);
-        data.extend((c1.len() as u16).to_le_bytes());
-        data.extend(c1);
-        data.extend(c2);
-        data
-    }
-
-    /// The whole stream of a tune as bits, one `bool` each.
-    fn wham_bits(data: &[u8]) -> Vec<bool> {
-        let mut s = Stream::new(data);
-        assert!(matches!(s, Stream::Wham(_)));
-        let mut bits = Vec::new();
-        let mut buf = [0u8; 64];
-        while !s.done() {
-            s.fill(&mut buf);
-            bits.extend((0..buf.len() * 8).map(|i| bit(&buf, i) > 0.0));
-        }
-        while bits.last() == Some(&false) {
-            bits.pop();
-        }
-        bits
-    }
-
-    /// Bits of `t` T-states.
-    fn t_bits(t: u32) -> f64 {
-        t as f64 * WHAM_BIT_RATE as f64 / CPU_HZ as f64
-    }
-
-    /// The runs of ones and zeros in `bits` at least `min` long, after
-    /// closing every gap shorter than that: the channel under the
-    /// 36 kHz sharing.
-    fn envelope(bits: &[bool], min: usize) -> Vec<(bool, usize)> {
-        let mut smooth = bits.to_vec();
-        let mut i = 0;
-        while i < bits.len() {
-            let j = (i..bits.len()).find(|&j| bits[j] != bits[i]).unwrap_or(bits.len());
-            if !bits[i] && j - i < min && i > 0 && j < bits.len() {
-                smooth[i..j].fill(true);
-            }
-            i = j;
-        }
-        let mut runs = Vec::new();
-        let mut i = 0;
-        while i < smooth.len() {
-            let j = (i..smooth.len()).find(|&j| smooth[j] != smooth[i]).unwrap_or(smooth.len());
-            runs.push((smooth[i], j - i));
-            i = j;
-        }
-        runs
-    }
-
-    #[test]
-    fn a_tone_has_its_pitch_and_half_the_line() {
-        // Code 24 is 64 passes a flip: 3.5 MHz / (96 * 2 * 64) = 284.8 Hz.
-        let tempo = 239;
-        let data = wham_tune(tempo, 0, &[24], &[WHAM_REST]);
-        let bits = wham_bits(&data);
-        let step = t_bits(tone_step_t(tempo));
-        assert!((bits.len() as f64) < step && bits.len() as f64 > step - t_bits(2 * 64 * LOOP_T));
-        assert_eq!(duration_ms(&data), ((tone_step_t(tempo) + STEP_OVERHEAD_T) as u64 * 1000 / CPU_HZ as u64) as u32);
-        // While the channel is high the line is its half of each pass.
-        let runs = envelope(&bits, t_bits(LOOP_T) as usize);
-        let half = t_bits(64 * LOOP_T);
-        for &(on, len) in &runs[1..runs.len() - 1] {
-            assert!((len as f64 - half).abs() < t_bits(LOOP_T), "{on} for {len} bits, {half} expected");
-        }
-        let highs = runs.iter().filter(|r| r.0).count();
-        assert_eq!(highs, (17 * 256usize).div_ceil(128), "one high per 128 passes");
-        let ones = bits.iter().filter(|&&b| b).count() as f64;
-        assert!((ones / bits.len() as f64 - 0.25).abs() < 0.01, "half the time high, half of each pass");
-        // An octave up is half the period, and two channels on the same
-        // note fill the pass.
-        let up = envelope(&wham_bits(&wham_tune(tempo, 1, &[24], &[WHAM_REST])), t_bits(LOOP_T) as usize);
-        assert!((up[2].1 as f64 - half / 2.0).abs() < t_bits(LOOP_T));
-        let both = wham_bits(&wham_tune(tempo, 0, &[24], &[24]));
-        let ones = both.iter().filter(|&&b| b).count() as f64;
-        assert!((ones / both.len() as f64 - 0.5).abs() < 0.01);
-    }
-
-    #[test]
-    fn rests_and_drums_keep_the_time() {
-        let tempo = 239;
-        // A rest between two notes: the second note starts a silent
-        // step and two gaps after the first.
-        let bits = wham_bits(&wham_tune(tempo, 0, &[24, WHAM_REST, 24], &[WHAM_REST; 3]));
-        let silent = t_bits(Wham::rest_t(16 * 256));
-        let runs = envelope(&bits, t_bits(LOOP_T) as usize);
-        let longest = runs.iter().filter(|r| !r.0).map(|r| r.1).max().unwrap() as f64;
-        let expected = silent + t_bits(2 * STEP_OVERHEAD_T);
-        assert!(longest >= expected && longest < expected + t_bits(130 * LOOP_T), "{longest} against {expected}");
-        // A step of noise is as long as a silent one and is noise.
-        let noise = wham_bits(&wham_tune(tempo, 0, &[DRUM_NOISE, 24], &[0xFF, WHAM_REST]));
-        let n = t_bits(16 * 256 * NOISE_ON_T) as usize;
-        let ones = noise[..n].iter().filter(|&&b| b).count() as f64 / n as f64;
-        assert!((ones - 0.5).abs() < 0.05, "{ones}");
-        let flips = noise[..n].windows(2).filter(|w| w[0] != w[1]).count();
-        assert!(flips > 16 * 256 / 3, "{flips} flips");
-        // A pattern with one bit in eight set samples an eighth as often.
-        let sparse = wham_bits(&wham_tune(tempo, 0, &[DRUM_NOISE, 24], &[0x01, WHAM_REST]));
-        // (Its passes are mostly the shorter kind, so the step is shorter.)
-        let n = t_bits(16 * 256 * NOISE_OFF_T) as usize;
-        let sparse_flips = sparse[..n].windows(2).filter(|w| w[0] != w[1]).count();
-        assert!(sparse_flips < flips / 4, "{sparse_flips} against {flips}");
-        // Quarters: 0x88 is noise for the first quarter only.
-        let quarter = wham_bits(&wham_tune(tempo, 0, &[0x88, 24], &[0xFF, WHAM_REST]));
-        let q = t_bits(4 * 256 * NOISE_ON_T) as usize;
-        assert!(quarter[..q].windows(2).filter(|w| w[0] != w[1]).count() > 200);
-        let tail = &quarter[q + 100..q + t_bits(Wham::rest_t(3 * 4 * 256)) as usize - 100];
-        assert!(tail.windows(2).all(|w| w[0] == w[1]), "silent after the first quarter");
-        // The sweep: sixteen pairs at this tempo, each period longer.
-        let sweep = wham_bits(&wham_tune(tempo, 0, &[DRUM_SWEEP], &[0]));
-        let highs: Vec<usize> = envelope(&sweep, 1).iter().filter(|r| r.0).map(|r| r.1).collect();
-        assert_eq!(highs.len(), 32);
-        // (To a bit: the two of a pair are the same length before rounding.)
-        assert!(highs.windows(2).all(|w| w[0] <= w[1] + 1), "{highs:?}");
-        assert!((highs[31] as f64 - t_bits(SWEEP_FIRST_T + 15 * SWEEP_STEP_T)).abs() < 2.0);
-    }
-
-    #[test]
-    fn a_tune_ends_and_bad_ones_do_no_harm() {
-        // Steps the header promises and the data lacks are not played.
-        let mut data = wham_tune(239, 0, &[24, 24], &[24, 24]);
-        data[6] = 200;
-        let bits = wham_bits(&data);
-        assert!((bits.len() as f64) < 2.0 * t_bits(tone_step_t(239) + STEP_OVERHEAD_T));
-        // Codes past the table rest, and a tune of nothing is done at once.
-        assert!(wham_bits(&wham_tune(239, 0, &[60, 0x7F], &[54, 100])).is_empty());
-        assert!(wham_bits(&wham_tune(239, 9, &[], &[])).is_empty());
-        assert!(!is_wham(b"WHM1") && !is_wham(&[128; 100]));
-        // The periods are semitones: twelve on is half, within rounding.
-        for i in 0..WHAM_PERIODS.len() - 12 {
-            assert!((WHAM_PERIODS[i] as i32 - 2 * WHAM_PERIODS[i + 12] as i32).abs() <= 2, "{i}");
-        }
     }
 
     /// Not a test: with `CLIP_DUMP=file` in the environment and a clip

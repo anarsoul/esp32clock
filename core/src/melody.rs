@@ -322,8 +322,8 @@ pub const JINGLE_BELLS: Melody = Melody {
 // `CLIP_COUNT`, `CLIP_NAMES` (API name and label of each) and
 // `CLIP_DATA`, written by `build.rs` from `ALARM_CLIP`: the files named
 // there, in order. Each is raw PCM (8 bits unsigned, mono,
-// `clip::PCM_HZ` samples a second), a beeper clip's run lengths behind
-// `clip::BEEPER_MAGIC`, or a two-channel tune behind `clip::WHAM_MAGIC`.
+// `clip::PCM_HZ` samples a second) or a beeper clip's run lengths behind
+// `clip::BEEPER_MAGIC`.
 // The data is a `static`, so the image holds it once.
 include!(concat!(env!("OUT_DIR"), "/clips.rs"));
 
