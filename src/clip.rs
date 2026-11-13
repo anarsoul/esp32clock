@@ -6,7 +6,7 @@
 //!
 //! The transmitter runs in TDM mode with two 8-bit channels and no
 //! clock pins, so its data line carries the ring's bytes MSB first at
-//! `clip::BIT_RATE`. The ring is `SLOTS` descriptors of `CHUNK` bytes,
+//! the clip's bit rate (`Stream::bit_rate`). The ring is `SLOTS` descriptors of `CHUNK` bytes,
 //! the last pointing at the first, and the DMA goes round it until it
 //! is stopped. The C3's GDMA reads internal RAM only, so the clip stays
 //! in flash and `core::clip::Stream` writes its bits into the slots a few
@@ -49,7 +49,7 @@ use esp_hal::gpio::{DriveMode, Level, Output, OutputConfig, OutputSignal};
 use esp_hal::i2s::master::{Channels, DataFormat, I2s, TdmConfig};
 use esp_hal::peripherals::{DMA, DMA_CH1, GPIO5, I2S0};
 use esp_hal::time::Rate;
-use esp32clock_core::clip::{BIT_RATE, CHUNK, Pacer, SLOTS, Stream, chunk_us, chunks_in};
+use esp32clock_core::clip::{CHUNK, Pacer, SLOTS, Stream, chunk_us, chunks_in};
 use log::{info, warn};
 use static_cell::ConstStaticCell;
 
@@ -203,7 +203,8 @@ impl Sampler {
         let slot = |chunk: u32| unsafe { core::slice::from_raw_parts_mut((base as *mut u8).add(chunk as usize % SLOTS * CHUNK), CHUNK) };
 
         let mut player = Stream::new(data);
-        let bit_rate = BIT_RATE;
+        // A beeper clip has its own; see `clip::BEEPER_BIT_RATE`.
+        let bit_rate = player.bit_rate();
         // The ring is topped up twice a chunk.
         let tick = Duration::from_micros(chunk_us(bit_rate) / 2);
         // The chunk the clip's last bit is in, once it has been written.

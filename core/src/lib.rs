@@ -32,3 +32,4 @@ pub mod sensors;
 pub mod settings;
 pub mod tz;
 pub mod ui;
+pub mod xm;

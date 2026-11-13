@@ -368,6 +368,8 @@ pub const MELODIES: &[Melody] = &{
         // A second of sound at least, room left in the 1920 KB slot, and
         // a name of its own, or the API could not pick it.
         assert!(crate::clip::duration_ms(CLIP_DATA[k]) >= 1000 && CLIP_DATA[k].len() <= 1_000_000, "ALARM_CLIP: a clip must be a second of sound at least and 1 MB at most");
+        assert!(!crate::clip::is_old_beeper(CLIP_DATA[k]), "ALARM_CLIP: a beeper clip of the first format (BPR1); convert it again with scripts/zxbeeper.py");
+        assert!(!crate::xm::is_old_tune(CLIP_DATA[k]), "ALARM_CLIP: a module of the first layout (XMC1); convert it again with scripts/xm2clip.py");
         let mut j = 0;
         while j < TUNES.len() + k {
             assert!(!same(all[j].name, name) && !same(name, RANDOM_NAME), "ALARM_CLIP: two melodies with one name; rename the file");

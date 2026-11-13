@@ -13,6 +13,12 @@ Beeper music is narrow pulses, a few percent of the time on, which is
 quiet on the clock's buzzer; --stretch widens every pulse by a factor,
 never into the next one.
 
+Some tapes do not run by themselves: the loader unpacks the program and
+waits for a key before it starts it (`PAUSE 0: RANDOMIZE USR n`). For
+those, --settle gives the unpacking its time and --start is the address
+to start at then, the `n` of the loader:
+    … scripts/zxbeeper.py CHRON.TAP out.bpr --settle 20 --start 64000 --seconds 185
+
 Needs SkoolKit, so run it with a Python that has it, for instance
     pipx install skoolkit
     ~/.local/pipx/venvs/skoolkit/bin/python scripts/zxbeeper.py game.tap out.bpr --seconds 60
@@ -26,12 +32,13 @@ import tempfile
 from skoolkit import tap2sna, trace
 
 CPU_HZ = 3_500_000  # the 48K Spectrum's clock; SkoolKit counts in its T-states
-TICK_HZ = 128_000  # clip::BEEPER_TICK_HZ
-MAGIC = b"BPR1"  # clip::BEEPER_MAGIC
+TICK_HZ = 512_000  # clip::BEEPER_TICK_HZ
+MAGIC = b"BPR2"  # clip::BEEPER_MAGIC
 
 
-def flips(tape, tstates):
-    """T-states of every flip of the speaker bit, from the end of the load."""
+def flips(tape, tstates, settle=0, start=None):
+    """T-states of every flip of the speaker bit, from the end of the load,
+    or from a jump to `start` made `settle` T-states after it."""
     kept = []
 
     class Spy(trace.Tracer):
@@ -43,9 +50,15 @@ def flips(tape, tstates):
     with tempfile.TemporaryDirectory() as tmp:
         snapshot = os.path.join(tmp, "loaded.z80")
         tap2sna.main([tape, snapshot])
+        begin = []
+        if start is not None:
+            settled = os.path.join(tmp, "settled.z80")
+            trace.main(["-M", str(settle), snapshot, settled])
+            snapshot, begin = settled, ["-s", str(start)]
+            kept.clear()
         # A WAV to write is what makes the tracer log the port.
-        trace.main(["-M", str(tstates), snapshot, os.path.join(tmp, "out.wav")])
-    return [t for t, register, _ in kept[0].audio_log if register == 0xFF]
+        trace.main(begin + ["-M", str(tstates), snapshot, os.path.join(tmp, "out.wav")])
+    return [t for t, register, _ in kept[-1].audio_log if register == 0xFF]
 
 
 def leb128(value):
@@ -66,10 +79,12 @@ def main():
     parser.add_argument("--skip", type=float, default=0, help="seconds of sound to drop first")
     parser.add_argument("--stretch", type=float, default=1, help="widen each pulse by this factor (default 1, as played)")
     parser.add_argument("--boot", type=float, default=60, help="seconds to allow before the first sound (default 60)")
+    parser.add_argument("--settle", type=float, default=20, help="with --start: seconds to run the loaded tape first (default 20)")
+    parser.add_argument("--start", type=int, help="jump to this address after --settle, for a loader that waits for a key")
     args = parser.parse_args()
 
     limit = int((args.boot + args.skip + args.seconds) * CPU_HZ)
-    times = flips(args.tape, limit)
+    times = flips(args.tape, limit, int(args.settle * CPU_HZ), args.start)
     if len(times) < 2:
         raise SystemExit("no sound on the beeper")
     # The speaker is off before the first flip, so flips come in pairs: on, off.

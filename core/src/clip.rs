@@ -32,6 +32,7 @@
 use core::ops::Range;
 
 use crate::config;
+use crate::xm;
 
 /// Samples per second of a clip.
 pub const PCM_HZ: u32 = 8_000;
@@ -102,8 +103,20 @@ const LIMIT: i32 = 16 * FB;
 pub const RAMP: usize = 240;
 
 /// Turns a clip into its bitstream, a buffer at a time.
+/// Where a `Player`'s samples come from.
+#[allow(clippy::large_enum_variant, reason = "there is no heap to box the tune's state in, and one clip plays at a time")]
+enum Body<'a> {
+    /// Raw PCM, as it is.
+    Pcm(&'a [u8]),
+    /// A tracker module, played as it goes (`xm::Tune`).
+    Tune(xm::Tune<'a>),
+}
+
 pub struct Player<'a> {
-    pcm: &'a [u8],
+    body: Body<'a>,
+    /// Samples in the body: known for PCM, and for a tune once it has
+    /// ended.
+    len: Option<usize>,
     /// Index of the next point of the level sequence: the up ramp, the
     /// samples, the down ramp.
     next: usize,
@@ -117,33 +130,57 @@ pub struct Player<'a> {
 
 impl<'a> Player<'a> {
     pub const fn new(pcm: &'a [u8]) -> Self {
-        Self { pcm, next: 1, cur: -FULL, s1: 0, s2: 0, fb: if SIGMA_DELTA { -FULL * OSR as i32 } else { -FB } }
+        Self::with(Body::Pcm(pcm), Some(pcm.len()))
+    }
+
+    /// A player of a tracker module.
+    pub fn tune(tune: xm::Tune<'a>) -> Self {
+        Self::with(Body::Tune(tune), None)
+    }
+
+    const fn with(body: Body<'a>, len: Option<usize>) -> Self {
+        Self { body, len, next: 1, cur: -FULL, s1: 0, s2: 0, fb: if SIGMA_DELTA { -FULL * OSR as i32 } else { -FB } }
     }
 
     /// The level at point `k`, `None` past the end. Point 0 is the
-    /// rail the line idles at, and so is the last.
-    fn level(&self, k: usize) -> Option<i32> {
-        let n = self.pcm.len();
+    /// rail the line idles at, and so is the last. Asked for the points
+    /// in order, which is all a tune can give.
+    fn level(&mut self, k: usize) -> Option<i32> {
         if k < RAMP {
-            Some(-FULL + FULL * k as i32 / RAMP as i32)
-        } else if k < RAMP + n {
-            Some((self.pcm[k - RAMP] as i32 - 128) * LEVEL)
-        } else if k < RAMP + n + RAMP {
-            Some(-FULL * (k - RAMP - n + 1) as i32 / RAMP as i32)
-        } else {
-            None
+            return Some(-FULL + FULL * k as i32 / RAMP as i32);
+        }
+        if self.len.is_none_or(|n| k < RAMP + n) {
+            let sample = match &mut self.body {
+                Body::Pcm(pcm) => pcm.get(k - RAMP).copied(),
+                Body::Tune(tune) => tune.next_sample(),
+            };
+            match sample {
+                Some(s) => return Some((s as i32 - 128) * LEVEL),
+                None => self.len = Some(k - RAMP),
+            }
+        }
+        let n = self.len.unwrap_or(0);
+        (k < RAMP + n + RAMP).then(|| -FULL * (k - RAMP - n + 1) as i32 / RAMP as i32)
+    }
+
+    /// Samples a second the body gives.
+    pub fn sample_rate(&self) -> u32 {
+        match &self.body {
+            Body::Pcm(_) => PCM_HZ,
+            Body::Tune(tune) => tune.rate(),
         }
     }
 
     /// Whether the clip and its ramps have been written out; `fill`
     /// writes zeros from then on.
     pub fn done(&self) -> bool {
-        self.next >= 2 * RAMP + self.pcm.len()
+        self.len.is_some_and(|n| self.next >= 2 * RAMP + n)
     }
 
-    /// PCM sample periods the whole stream lasts, ramps included.
-    pub const fn periods(&self) -> usize {
-        2 * RAMP + self.pcm.len() - 1
+    /// PCM sample periods the whole stream lasts, ramps included, as
+    /// far as is known: a tune's are not until it has ended.
+    pub fn periods(&self) -> usize {
+        2 * RAMP + self.len.unwrap_or(0) - 1
     }
 
     /// Write the next `out.len()` bytes of the stream, MSB first. The
@@ -232,15 +269,27 @@ impl<'a> Player<'a> {
 }
 
 /// The first bytes of a beeper clip; a clip without them is PCM.
-pub const BEEPER_MAGIC: &[u8; 4] = b"BPR1";
+pub const BEEPER_MAGIC: &[u8; 4] = b"BPR2";
 /// Bytes before a beeper clip's runs: the magic and the length in ticks.
 const BEEPER_HEADER: usize = 8;
 /// Ticks per second of a beeper clip's run lengths.
-pub const BEEPER_TICK_HZ: u32 = 128_000;
-/// Bits on the line per tick.
-const BITS_PER_TICK: u32 = BIT_RATE / BEEPER_TICK_HZ;
-const _: () = assert!(BITS_PER_TICK >= 1 && BITS_PER_TICK * BEEPER_TICK_HZ == BIT_RATE);
+///
+/// 512 kHz, 1.95 µs, since 2026-11-12. The first format (`BPR1`) had
+/// 128 kHz, 7.8 µs or 27 of the Spectrum's T-states, which was fine
+/// for Trantor and not for Chronos: Tim Follin's player shapes its
+/// sound with the pulse width in steps of 14 T-states, half a tick, so
+/// widths that should have moved smoothly came out a tick this way or
+/// that from pulse to pulse.
+pub const BEEPER_TICK_HZ: u32 = 512_000;
+/// The bit rate the line runs at for a beeper clip, whatever
+/// `CLIP_KBPS` says: a bit a tick.
+pub const BEEPER_BIT_RATE: u32 = BEEPER_TICK_HZ;
 
+/// Whether `data` is a beeper clip of the first format, which this
+/// firmware would take for PCM: convert it again.
+pub const fn is_old_beeper(data: &[u8]) -> bool {
+    has_magic(data, b"BPR1", BEEPER_HEADER)
+}
 const fn has_magic(data: &[u8], magic: &[u8; 4], header: usize) -> bool {
     data.len() >= header && data[0] == magic[0] && data[1] == magic[1] && data[2] == magic[2] && data[3] == magic[3]
 }
@@ -250,11 +299,13 @@ pub const fn is_beeper(data: &[u8]) -> bool {
     has_magic(data, BEEPER_MAGIC, BEEPER_HEADER)
 }
 
-/// How long a clip of either kind plays, in milliseconds.
+/// How long a clip of any kind plays, in milliseconds.
 pub const fn duration_ms(data: &[u8]) -> u32 {
     if is_beeper(data) {
         let ticks = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
         (ticks as u64 * 1000 / BEEPER_TICK_HZ as u64) as u32
+    } else if xm::is_tune(data) {
+        xm::duration_ms(data)
     } else {
         (data.len() as u64 * 1000 / PCM_HZ as u64) as u32
     }
@@ -351,19 +402,27 @@ impl RunSource for Beeper<'_> {
             }
         }
         self.on = !self.on;
-        Some((self.on, ticks.saturating_mul(BITS_PER_TICK)))
+        Some((self.on, ticks))
     }
 }
 
-/// A clip of either kind as the line's bitstream.
+/// A clip of any kind as the line's bitstream.
+#[allow(clippy::large_enum_variant, reason = "there is no heap to box the tune's state in, and one clip plays at a time")]
 pub enum Stream<'a> {
+    /// PCM, or a tracker module through the same modulator.
     Pcm(Player<'a>),
     Beeper(Runs<Beeper<'a>>),
 }
 
 impl<'a> Stream<'a> {
     pub fn new(data: &'a [u8]) -> Self {
-        if is_beeper(data) { Self::Beeper(Runs::new(Beeper::new(data))) } else { Self::Pcm(Player::new(data)) }
+        if is_beeper(data) {
+            Self::Beeper(Runs::new(Beeper::new(data)))
+        } else if xm::is_tune(data) {
+            Self::Pcm(Player::tune(xm::Tune::new(data)))
+        } else {
+            Self::Pcm(Player::new(data))
+        }
     }
 
     /// Write the next `out.len()` bytes, a multiple of
@@ -372,6 +431,16 @@ impl<'a> Stream<'a> {
         match self {
             Self::Pcm(p) => p.fill(out),
             Self::Beeper(b) => b.fill(out),
+        }
+    }
+
+    /// The bit rate the line must run at for this clip.
+    pub fn bit_rate(&self) -> u32 {
+        match self {
+            // The modulator writes `OSR` bits a sample whatever the
+            // rate: a tune at twice `PCM_HZ` needs the line twice as fast.
+            Self::Pcm(p) => BIT_RATE / PCM_HZ * p.sample_rate(),
+            Self::Beeper(_) => BEEPER_BIT_RATE,
         }
     }
 
@@ -533,7 +602,7 @@ mod tests {
     fn a_sine_comes_back_out_of_the_bits() {
         let pcm = sine(1000.0, 127.0, 4000);
         let s = stream(&pcm, 0);
-        let p = Player::new(&pcm);
+        let mut p = Player::new(&pcm);
         // The input the modulator saw, bit by bit, in units of the feedback.
         let bits = s.len() * 8;
         let mut input = Vec::with_capacity(bits);
@@ -632,7 +701,7 @@ mod tests {
 
     #[test]
     fn a_clip_lasts_its_samples_and_the_ramps() {
-        let p = Player::new(&[128; 100]);
+        let mut p = Player::new(&[128; 100]);
         assert_eq!(p.periods(), 100 + 2 * RAMP - 1);
         assert_eq!(p.level(0), Some(-FULL));
         assert_eq!(p.level(p.periods()), Some(-FULL));
@@ -673,7 +742,7 @@ mod tests {
         assert!(is_beeper(&data) && !is_beeper(&[128; 100]));
         assert_eq!(duration_ms(&data), runs.iter().sum::<u32>() * 1000 / BEEPER_TICK_HZ);
         assert_eq!(duration_ms(&[128; 16_000]), 2000);
-        let per = BITS_PER_TICK as usize;
+        let per = 1;
         let total = runs.iter().sum::<u32>() as usize * per;
         let mut out = vec![0xAAu8; total / 8 + 40];
         let mut s = Stream::new(&data);
@@ -702,6 +771,8 @@ mod tests {
         empty.fill(&mut buf);
         assert!(empty.done() && buf == [0; 4]);
         assert!(matches!(Stream::new(&[128; 100]), Stream::Pcm(_)));
+        assert_eq!((Stream::new(&data).bit_rate(), Stream::new(&[128; 100]).bit_rate()), (BEEPER_BIT_RATE, BIT_RATE));
+        assert!(is_old_beeper(b"BPR1\0\0\0\0") && !is_old_beeper(&data));
     }
 
     /// Not a test: with `CLIP_DUMP=file` in the environment and a clip
@@ -719,6 +790,28 @@ mod tests {
         while !s.done() {
             s.fill(&mut buf);
             out.extend(buf);
+        }
+        std::fs::write(path, out).unwrap();
+    }
+
+    /// Not a test either: with `CLIP_PCM_DUMP=file`, writes the samples a
+    /// built-in tracker module gives the modulator, 8 bits unsigned at
+    /// `PCM_HZ`, to compare the player with another's render.
+    #[test]
+    #[ignore]
+    fn dump_the_tune() {
+        let Ok(path) = std::env::var("CLIP_PCM_DUMP") else { return };
+        let index = std::env::var("CLIP_INDEX").map_or(0, |i| i.parse().unwrap());
+        let data = crate::melody::CLIP_DATA[index];
+        // `CLIP_RAW` asks for the mix before the shaping, as `i16`.
+        if std::env::var("CLIP_RAW").is_ok() {
+            let out: Vec<u8> = xm::raw_mix(data).iter().flat_map(|s| s.to_le_bytes()).collect();
+            return std::fs::write(path, out).unwrap();
+        }
+        let mut tune = xm::Tune::new(data);
+        let mut out = Vec::new();
+        while let Some(s) = tune.next_sample() {
+            out.push(s);
         }
         std::fs::write(path, out).unwrap();
     }
