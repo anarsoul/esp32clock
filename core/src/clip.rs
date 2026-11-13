@@ -1163,23 +1163,24 @@ mod tests {
             let out: Vec<u8> = mix.iter().flat_map(|s| s.to_le_bytes()).collect();
             return std::fs::write(path, out).unwrap();
         }
-        let mut out = Vec::new();
+        let mut samples = Vec::new();
         if sid::is_tune(data) {
             let mut tune = sid::Tune::new(data);
-            while let Some(s) = tune.next_sample() {
-                out.push((128 + s as i32 / xm::STEP) as u8);
-            }
+            samples.extend(core::iter::from_fn(|| tune.next_sample()));
         } else if pt3::is_tune(data) {
             let mut tune = pt3::Tune::new(data);
-            while let Some(s) = tune.next_sample() {
-                out.push((128 + s as i32 / xm::STEP) as u8);
-            }
+            samples.extend(core::iter::from_fn(|| tune.next_sample()));
         } else {
             let mut tune = xm::Tune::new(data);
-            while let Some(s) = tune.next_sample() {
-                out.push((128 + s as i32 / xm::STEP) as u8);
-            }
+            samples.extend(core::iter::from_fn(|| tune.next_sample()));
         }
+        // `CLIP_WIDE` asks for them as they are, `i16` with full scale
+        // at 127 steps, and not in the 8-bit steps of a PCM clip.
+        let out: Vec<u8> = if std::env::var("CLIP_WIDE").is_ok() {
+            samples.iter().flat_map(|s| s.to_le_bytes()).collect()
+        } else {
+            samples.iter().map(|&s| (128 + s as i32 / xm::STEP) as u8).collect()
+        };
         std::fs::write(path, out).unwrap();
     }
 

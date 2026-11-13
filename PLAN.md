@@ -8140,6 +8140,116 @@ re-made with them. `scripts/wav2pcm.sh` stays at 16 000 unless told:
 PCM at 31 250 is 31 KB of flash a second. Not read off the clock: the
 `clip:` line's share of the processor for a module at this rate.
 
+### PT3 tunes flat, for headphones — built 2026-11-13, to be heard on test-clock
+
+"Drop our extra filters we made from PT3 player, I want to try it flat
+on headphones" (the user). What the player did to the chip's output
+was all for the buzzer: the noise at 11 sixteenths, the optional
+low-pass over it, the 300 Hz high-pass and the limiter with its 20 dB
+of drive. None of it is taken out of the player, since the clocks'
+buzzers still want it; a clip says it wants none of it: flags bit 3,
+`pt3::FLAT`, `scripts/pt32clip.py --flat`, which also writes the noise
+at 16 sixteenths, no low-pass and no pass of the high-pass.
+
+Two things have to stay for a flat clip. The chip's output is all
+above nought, so its mean is taken out, by a one-pole tracker at 5 Hz
+in `pt3::Tune::next_sample` and not by the shaper's high-pass, whose
+Q14 section cannot be put under 100 Hz or so at 31 250 samples a
+second (16384 w² is under 1 at 20 Hz). And a gain needs a level: the
+limiter's knee is three channels at their top level (`FLAT_KNEE`, 96
+in the shaper's 1024s), so nothing ever limits and the header's drive
+is a plain gain, 127 for that, to 255 for twice it. The header had no
+spare byte for a knee of the clip's own, as `XMC2` has.
+
+On the host, the three tunes as the clocks have them against flat:
+
+| tune | limited: peak, RMS of full scale | flat: lowest, highest of 127, RMS |
+| --- | --- | --- |
+| Hibernation | 127, 0.41 | −57, 113, 0.17 |
+| Synchronization | 127, 0.37 | −52, 126, 0.18 |
+| PPK | 127, 0.41 | −48, 119, 0.12 |
+
+So flat is 7 to 10 dB quieter and needs no more gain than the chip's
+own: the peaks are within 1 dB of full scale. The flat files are
+`target/clips/*_flat.pt3c`, beside the clocks' own in one build:
+
+```
+ALARM_CLIP=clips/trantor.bpr,clips/halftime.xmc,clips/keygen.xmc,pt3/hibernation.pt3c,target/clips/hibernation_flat.pt3c,pt3/synchronization.pt3c,target/clips/synchronization_flat.pt3c,pt3/ppk.pt3c,target/clips/ppk_flat.pt3c
+```
+
+The host test (`the_samples_are_the_notes_on_their_frames`) has a flat
+square wave: a third of full scale from top to bottom, the same either
+side of nought once the mean is found, at its pitch. Sent to
+test-clock over the air (ota_1, `v0.4-24-g2305f61-dirty`); the clock
+did not come back on the LAN after it, see the next entry. Not heard.
+
+**A/B for the headphones, 2026-11-13: on test-clock over USB, to be
+heard.** "Sounds like too much bass with little treble" (the user, of
+the flat clips). Nothing shapes a flat clip; the bass is the chip's,
+which the buzzer's high-pass had hidden: 53 % of flat
+Synchronization's energy is under 300 Hz against 9 % as the clocks
+have it. So `--flat` no longer forbids the high-pass (`--flat --passes
+1 --highpass HZ`; `--noise` likewise), and five of Synchronization
+are side by side, `target/clips/sync_*.pt3c`, the first minute's
+energy by band from the host:
+
+| melody | what | RMS | under 150 Hz | 150 to 300 | 300 to 1 k | 1 to 3 k | over 3 k |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Sync A Flat | no high-pass | 0.18 | 35 % | 18 % | 16 % | 13 % | 18 % |
+| Sync B Hz | 100 Hz, 12 dB an octave | 0.15 | 14 % | 22 % | 21 % | 18 % | 25 % |
+| Sync C Hz | 200 Hz | 0.13 | 3 % | 15 % | 26 % | 23 % | 32 % |
+| Sync D Hz | 300 Hz | 0.13 | 1 % | 7 % | 27 % | 27 % | 37 % |
+| Sync E Clock | the clocks': 300 Hz, noise 11/16, the limiter | 0.37 | 1 % | 8 % | 35 % | 27 % | 29 % |
+
+(The labels lose their digits.) B to D touch full scale in under
+0.002 % of the samples. The same five as 16-bit WAV files for the
+host, `target/wav/sync_*.wav`: `CLIP_WIDE=1` with `CLIP_PCM_DUMP`
+writes the player's samples as `i16` and not in 8-bit steps.
+
+**Heard, 2026-11-13: flat with a 100 Hz cut and 3 dB of gain.** "Limiter
+hurts PT3s. Sync A flat sounds correct in headphones, but it's too
+quiet (e.g. vs Halftime)" (the user). Halftime's RMS is 0.40 of full
+scale and flat Synchronization's 0.19 with its peaks already at full
+scale (the waveform is lopsided, +1.0 and −0.41), so more level is a
+plain gain that clips the tops: the header's drive, 180 for 1.4 times
+and 254 for twice. Two rounds on the bench's headphones, without the
+cut (A, F, G) and with 100 Hz at 12 dB an octave (H, I, J):
+
+| melody | cut | gain | RMS | samples at the rails |
+| --- | --- | --- | --- | --- |
+| Sync A Flat | none | 1 | 0.19 | none |
+| Sync F Louder | none | 1.4 | 0.26 | 0.4 % |
+| Sync G Loudest | none | 2 | 0.36 | 2 % |
+| Sync H Cut | 100 Hz | 1 | 0.15 | none |
+| Sync I Cut Louder | 100 Hz | 1.4 | 0.21 | 0.1 % |
+| Sync J Cut Loudest | 100 Hz | 2 | 0.30 | 1 % |
+
+"I prefer sync_i_cut_louder": `scripts/pt32clip.py … --flat --passes 1
+--highpass 100 --drive 180`. That is a choice for headphones on the
+breadboard stage; no clock's buzzer has heard a flat clip, and the
+converter's defaults are still the buzzer's.
+
+**The default, 2026-11-13.** "sync_i_cut_louder is also better on the
+actual clock. So let's make it default. Regenerate PT3 clips" (the
+user, after the same build on white-clock's buzzer). `scripts/pt32clip.py`
+with no options now makes that clip: `FLAT`, the noise at 16
+sixteenths, the high-pass at 100 Hz once, drive 180. `--flat` is gone
+and `--limiter` is the way back: `--limiter --highpass 300 --noise 11`
+gives the old Synchronization byte for byte, and no options the
+chosen clip byte for byte (both checked). `pt3/hibernation.pt3c`
+(`--restart`), `pt3/synchronization.pt3c` (`--restart`) and
+`pt3/ppk.pt3c` are re-made; on the host:
+
+| tune | RMS of full scale | samples at the rails |
+| --- | --- | --- |
+| Hibernation | 0.21 | 0.02 % |
+| Synchronization | 0.21 | 0.11 % |
+| PPK | 0.14 | 0.01 % |
+
+Only Synchronization was heard with these settings. The player's own
+defaults for a clip without the flag are unchanged, so a `.pt3c` made
+before plays as it did.
+
 ### The station picks its access point: the strongest of each scan — built 2026-11-13, not on a clock yet
 
 "Bench board keeps trying to connect to far AP. … let's do pinning
