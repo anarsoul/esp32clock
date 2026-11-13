@@ -4248,6 +4248,59 @@ Still owed: the access points' figure for each clock from the real
 spot with the lid closed, which the user reads from the router, and
 the same run on the v3 Zero adapter.
 
+The v3 Zero adapter, the same afternoon: a clock on the
+`adapter-esp32c3-zero` board (the chip antenna over the notch at the
+board's edge; hostname `clock`, 10.1.1.65, id `clock-6a1bf4`,
+`v0.4-3-gb744b03`) on the same port, the same run. Connected to the
+near access point it read −54 to −57, steady, over the three minutes;
+the four boot scans read the near one at −56 every time and the far
+one at −87, −86, −86, −86. 180 of 180 pings of 498 bytes answered,
+3.2/8.1/116 ms; the settings page in 46 to 73 ms; the boot probe in
+70 ms. So the notch did not bring the chip antenna up to the old
+board: the v3 Zero adapter sits at the old board's lower level (−52
+to −54) without its upper one (−38/−39), inside the range the first
+adapter's chip antenna had on 2026-11-01 (−52 to −65), and 33 dB
+below the SuperMini Plus with its external antenna. It passes
+traffic at the bench all the same. Whether the board was in the same
+case and spot as the morning's two was not said.
+
+Standing upright, later that afternoon: the user stood the case
+bottom down, as the clock stands in use, and the session repeated
+the run on the v3 Zero adapter and then, with the adapter swapped,
+on the old white-clock board in the same case.
+
+| measure | v3 Zero adapter, upright | old white-clock board, upright |
+| --- | --- | --- |
+| RSSI connected, near AP | −53 to −60, drifting down | −53 to −57, steady |
+| boot scans, near AP | −59 all four | −54, −53, −54, −54 |
+| boot scans, far AP | −90, −89, −92, −90 | −87 once, not listed in three |
+| 498-byte pings, 180 | 180 answered, 3.1/10.0/100 ms | 180 answered, 3.0/6.1/36 ms |
+| settings page | 45 to 69 ms, two of 0.46 and 0.48 s | 41 to 73 ms |
+| boot probe | 48, 74, 54, 49 ms | 50, 44, 49, 67 ms |
+
+Upright the two chip-antenna boards are within 3 to 5 dB of each
+other, the old one ahead, and the old board's upper level of the
+morning (−38/−39) is gone: that was the case lying down, not the
+board. The v3 Zero adapter lost about 3 dB against its own run lying
+down. Neither hears the far access point usefully. The SuperMini
+Plus was not measured upright.
+
+The user's own readings of the two, taken by hand the same day: the
+v3 Zero adapter always lists the far access point and reads the near
+one between −52 and −58; the old board often does not list the far
+one at all and reads the near one closer to −58. The two sets agree
+on the far access point: the session's scans listed it in all eight
+boots of the v3 Zero adapter, lying down and upright, and in one of
+the old board's four upright. On the near one they differ by a few
+dB in opposite directions (the session had the old board 3 to 5 dB
+ahead upright, the user has it behind), which is the spread of the
+placement, so the near access point does not separate the two
+boards. What the notch bought is the far access point being heard at
+all, at −86 to −92, too weak to rely on. The user's verdict: the
+v3 Zero adapter is only marginally better than the old board, and
+the external antenna, the SuperMini Plus adapter, is the one to
+build.
+
 #### Thermometer offset (after M11a) — DONE, verified on the bench 2026-11-01
 
 The afternoon's comparison above gave a constant 0.6 to 0.8 °C

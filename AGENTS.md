@@ -434,7 +434,9 @@ module ends with its `#[cfg(test)] mod tests`.
   its IPEX jack reads
   −21 to −23 there, against −38 to −54 for the old white-clock board in
   the same case and spot (2026-11-12; the access points' side not yet
-  read). ADC1 is the converter that works with Wi-Fi on,
+  read); the v3 Zero adapter, its chip antenna over a notch at the
+  board's edge, reads −52 to −60, level with the old board at the near access point,
+  and unlike it always lists the far one, at −86 to −92. ADC1 is the converter that works with Wi-Fi on,
   11 dB attenuation is only calibrated to about 2.5 V, and
   `AdcCalCurve` is the scheme to use: the line fit is percent off.
 - **Current:** `IS` comes from brightness alone, capped at
