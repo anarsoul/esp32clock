@@ -6641,3 +6641,25 @@ heard.
 **Accepted, 2026-11-12.** With the set and tempos above on white-clock
 (the flyback diode fitted, R5 at 3.2 k) the user's verdict is "all
 good now".
+
+**The two-channel player removed, Trantor kept in the repository,
+2026-11-12.** The user on the Wham tunes, once everything played
+right: the player works, the arrangements are not to his taste. So
+`clip::Wham`, its tests, `Stream::bit_rate` and `scripts/wham2clip.py`
+are gone (the section above stays as the record of how that program
+plays, and commit b6ff2c6 has the code); `Runs` and `RunSource` stay,
+with the beeper clip their one user. 103 host tests.
+
+Asked whether Futurama and Trantor could go into the repository, the
+answer given was no for both: a recording of a television theme, and
+a note-for-note capture of a game's title music, neither licensed.
+The user's decision: Futurama stays out (`wav/` is ignored), Trantor
+goes in with its author named. It is `clips/trantor.bpr`, the pulses
+as played, with `clips/README.md` saying that the music is David
+Whittaker's, that copyright stays with him and the game's publishers,
+and that the file is not under the project's licence. No build takes
+it in unless `ALARM_CLIP` names it, so the releases do not carry it.
+The set on the two clocks is now built with
+`ALARM_CLIP=clips/trantor.bpr,wav/futurama.pcm` and, for Futurama,
+`CLIP_MODULATOR=sd CLIP_KBPS=256`; white-clock and martin-clock still
+run the earlier set with the four tunes until they are flashed again.
