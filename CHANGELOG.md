@@ -34,6 +34,11 @@ from `http://<ip>/update`; its settings survive the update.
   module: the firmware has the player and an AY-3-8910 of its own).
 - A Stop button beside Play on the settings page (`POST /stop`): it
   ends a preview, and a ringing alarm as a button press would.
+- `CLIP_PDM_BITS` at build time (128, the default, 256 or 384) sets
+  how many bits the PDM converter makes of a sample, and
+  `scripts/xm2clip.py --knee` where a module's limiter starts, up to
+  off: for a speaker in the buzzer's place, where the buzzer's hard
+  limiting is heard as overdrive.
 
 ### Changed
 

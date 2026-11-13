@@ -56,13 +56,14 @@ scripts/pin.sh <ip> <serial-log>        # POST /pin, then the four digits read b
 AP_PASSWORD='…' cargo build --release   # optional: the clock's own access point's password (default esp32clock)
 scripts/wav2pcm.sh in.wav wav/tune.pcm [seconds] [skip] [rate]   # a sound file as the clip's raw PCM (sox): mono, 8 bits unsigned, 16 kHz behind a PCM1 header, or bare at 8 kHz for half the flash
 ~/.local/pipx/venvs/skoolkit/bin/python scripts/zxbeeper.py game.tap tap/tune.bpr --seconds 60 [--stretch 4] [--settle 20 --start 64000]   # what a ZX Spectrum program plays on its beeper, as a clip (needs SkoolKit; --start for a loader that waits for a key)
-scripts/xm2clip.py tune.xm mods/tune.xmc [--highpass 900 --passes 2] [--raise 1:2] [--drive 160 --release 5] [--rate 8000] [--bits 8]   # a FastTracker 2 module for the clock's own player; lists what it uses that the player lacks; the bass cut, an instrument's octave and the limiter are the clip's
+scripts/xm2clip.py tune.xm mods/tune.xmc [--highpass 900 --passes 2] [--raise 1:2] [--drive 160 --release 5] [--knee 100] [--rate 8000] [--bits 8]   # a FastTracker 2 module for the clock's own player; lists what it uses that the player lacks; the bass cut, an instrument's octave and the limiter are the clip's (--knee is the level the limiter starts at, in 1024s of the mix where one voice is 32; the default is 20 dB of drive, for the buzzer, and a knee above the tune's peak is the limiter off, for a speaker)
 scripts/sid2clip.py tune.sid sid/tune.sidc [--song 2] [--seconds 90] [--mute 2] [--model 8580] [--steps 2] [--highpass 300 --passes 1]   # a Commodore 64 tune (PSID) for the clock's own SID: runs the tune's 6502 code on the host and keeps each frame's register writes, to the point where the tune loops; --mute keeps the voices' gates closed for the first frames, for a routine that clicks as it starts; says what it does that the clock will not play
 scripts/pt32clip.py tune.pt3 pt3/tune.pt3c [--machine pentagon|spectrum] [--clock 1773400] [--chip ym] [--restart] [--noise 16] [--noise-lowpass 3000] [--highpass 300 --passes 1]   # a ZX Spectrum tune (Pro Tracker 3 or Vortex Tracker II module) for the clock's own player and AY-3-8910: the module as it is behind a header with the machine's clock and frame rate (by the module's tone table unless told), the length and where it goes round; --restart for a module whose loop is only its ending
 ALARM_CLIP=clips/trantor.bpr,wav/tune.pcm cargo build --release   # other clips than the three in clips/ (PCM, beeper, tracker module, SID tune or PT3 module), as the last melodies, named after their files; ALARM_CLIP_LABEL='A,B' for other labels; a ringing alarm loops a beeper clip, a module, a SID tune or a PT3 module with no gap and repeats PCM after a pause, unless the file is given as file:once or file:loop
 ALARM_CLIP= cargo build --release   # no clips at all: the nine note melodies, 16 KB more stack
 CLIP_MODULATOR=sd CLIP_KBPS=256 cargo build --release   # a PCM clip or module through the software sigma-delta and not the chip's PDM converter (the default, `pdm`, 128 bits a sample): for a buzzer circuit that 2 Mbit/s is too fast for; CLIP_KBPS is 128, 256 or 512 (default; a 16 kHz clip runs at twice the figure)
 CLIP_MODULATOR=pwm cargo build --release   # the other software modulator: a pulse a carrier period (CLIP_CARRIER_KHZ, default 16)
+CLIP_PDM_BITS=256 cargo build --release   # the PDM converter at 256 bits a sample, 4.096 Mbit/s for a 16 kHz clip (128, the default, or 384): less of the converter's own noise, shorter pulses for the transistor
 ```
 
 Releases: `CHANGELOG.md` gets the version's section first (the release body points at it), then an annotated tag `v*` (`git tag -a`; `build.rs` runs `git
@@ -437,7 +438,14 @@ module ends with its `#[cfg(test)] mod tests`.
   bits, 2.048 Mbit/s for 16 kHz: on white-clock (flyback diode, R5 at
   5.1 k) that was cleaner than the software sigma-delta at half the
   rate (2026-11-13); a stock board's transistor has not been heard
-  there, and `CLIP_MODULATOR=sd` is the way back. The converter at 64
+  there, and `CLIP_MODULATOR=sd` is the way back. `CLIP_PDM_BITS=256`
+  doubles the rate; heard only on a breadboard copy of the stage with
+  headphones for the buzzer (`bench/`, 2026-11-13: a BC557, 5.1 k, a
+  100 Ω load), where a silent clip hissed at 128 bits and not at 256,
+  and where clips with heavy bass were distorted at either until a
+  2.2 kΩ resistor from base to emitter let the saturated transistor
+  turn off in time. No clock has that resistor; whether an S8550
+  saturates depends on its load. The converter at 64
   bits a sample is white noise. The inverter is part of the pin's connection:
   `clip.rs` takes the pin back as a plain `Output` when it ends,
   which clears it, and a tone's LEDC must never be connected over an

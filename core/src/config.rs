@@ -215,6 +215,20 @@ pub const CLIP_PDM: bool = match option_env!("CLIP_MODULATOR") {
     }
 };
 
+/// Bits the chip's converter makes of a sample, from `CLIP_PDM_BITS` at
+/// build time: 128 (the default, 2.048 Mbit/s for 16 kHz), 256 or 384,
+/// the converter's ratios of two, four and six. At 64 it gives noise.
+/// More bits a sample are less of the modulator's own noise in the
+/// audio band and shorter pulses for the transistor to follow.
+pub const CLIP_PDM_BITS: u32 = {
+    let bits = match option_env!("CLIP_PDM_BITS") {
+        Some(s) => parse_i32(s),
+        None => 128,
+    };
+    assert!(bits == 128 || bits == 256 || bits == 384, "CLIP_PDM_BITS must be 128, 256 or 384");
+    bits as u32
+};
+
 /// Of the two software modulators, whether a PCM clip or a module is
 /// sent as a sigma-delta stream, a
 /// decision a bit, and not as a pulse a carrier period:

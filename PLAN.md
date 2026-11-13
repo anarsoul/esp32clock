@@ -7850,3 +7850,231 @@ scripts/pt32clip.py pt3/nq-ppk.pt3 pt3/ppk.pt3c
 
 White-clock is back on the eight clips: Trantor, Halftime, Keygen,
 Futurama, Donkey Kong, Hibernation, Synchronization, PPK.
+
+### Bass cut for a speaker: an A/B on headphones — built 2026-11-13, on test-clock to be heard
+
+The user is waiting for 32 Ω speakers to try in the buzzer's place
+and meanwhile listens to test-clock's GPIO5 on headphones: the
+clock's own stage on a breadboard (`bench/buzzer-sim.png`: a BC557
+for the S8550, 10 k into its base, 100 Ω for the load, the headphones
+across it through 4.7 k). There the clips are thin: their bass cut
+was chosen for the buzzer, which is all but silent under 1 kHz (PCM:
+900 Hz twice in `scripts/wav2pcm.sh`; modules: 300 Hz once, the
+default of `scripts/xm2clip.py`). The user's words were "low-pass
+filter too low"; taken to mean this cut.
+
+To hear, as six melodies in one build (`target/ab/`, nothing in
+`clips/` changes), only the high-pass differing within a tune:
+
+| melody | high-pass |
+| --- | --- |
+| Halftime A | 300 Hz once, as on the clocks |
+| Halftime B | 100 Hz once |
+| Halftime C | none |
+| Futurama A | 900 Hz twice, as on the clocks |
+| Futurama B | 300 Hz once |
+| Futurama C | 60 Hz once |
+
+Futurama is its first 12 s, three times, so the image stays in its
+slot; the limiter (20 dB of drive) is the clocks' in all six. No code
+changes: the module's cut is its header's, and the PCM variants are
+`wav2pcm.sh`'s sox line with another `highpass`.
+
+**Heard, 2026-11-13** (the breadboard's base resistor is 5.1 k, the
+user says, not the 10 k drawn): "Futurama C is good, all the
+Halftimes are distorted (overdriven)". So the cut was the PCM clip's
+trouble, and the PDM stream through the stage is not; the module's is
+the limiter. Halftime's mix before it peaks at 88428 with an RMS of
+18238 (`CLIP_RAW` writes a quarter of the mix, which the first
+figures here missed) against the limiter's knee of 3000, 86 % of the
+samples over it, and with the release of 16 ms the gain moves 3.3 dB
+on average inside 5 ms: it follows the waveform, which on the buzzer
+was loudness and on headphones is overdrive. A release of 1 s moves
+it 0.1 dB, for 5.3 dB less level (RMS 0.50 and 0.27 of full scale as
+the player gives them).
+
+The second round, the high-pass at 60 Hz once in all, as Futurama C:
+
+| melody | limiter's release (`xm2clip.py --release`) |
+| --- | --- |
+| Halftime A | 7, 16 ms, as on the clocks |
+| Halftime B | 10, 128 ms |
+| Halftime C | 13, 1 s |
+| Futurama C | the first round's, for the level |
+
+**Heard meanwhile: Futurama C "has a little bit of hissing, like
+volume knob is at its max".** That is the 20 dB of drive into sox's
+limiter, which lifts the quiet parts and the recording's and the
+8-bit samples' noise with them. Two more in the same build, the cut
+at 60 Hz as C's: Futurama D with 10 dB of drive (RMS 0.29 of full
+scale against C's 0.48), Futurama E with none, only normalised (0.15).
+
+### Where a module's overdrive comes from: the limiter's release — measured on the host 2026-11-13, the A/B on test-clock's headphones to be heard
+
+"Let's try fixing Halftime (and MOD player) in general" (the user,
+after the first round above). Measured on the host first, so the
+player and the limiter are told apart: Halftime's mix before the
+shaping against openmpt123's render of the module (32 kHz, mono,
+down to 16 kHz) has the same energy in every band from 0 to 8 kHz
+within 0.6 dB (58 % of it under 150 Hz: the tune is mostly bass), so
+the notes, volumes and interpolation are right. The limiter is the
+distortion: what a gain steady over 50 ms cannot explain of its
+output is 25 % of the signal at the clocks' release (16 ms) and 6 %
+at 1 s, with the knee at 3000 where the mix's RMS is 18238: it is
+always limiting, by 19 dB on average, and with the bass let through
+it rides the bass.
+
+On the buzzer that was the point (loudness, and under 900 Hz nothing
+sounded). "Let's try disabling the limiter?" (the user). Off is a
+plain gain, and a gain needs a level to aim at, so the limiter's knee
+becomes the clip's: header byte 29 (a spare), the byte times 1024
+where one voice at full level is 32768, 0 for the 3000 of before, so
+every clip made so far plays as it did. `Shaper::new` takes it,
+`scripts/xm2clip.py --knee N` writes it; the SID and PT3 players pass
+0 until their headers have the byte. A knee above the tune's peak
+(100547 for Halftime's mix after the 60 Hz cut) is the limiter off.
+
+What the host says of the three beforehand: the clocks' limiter puts
+3.35 % of the samples at full scale, RMS 0.50; the 1 s release 0.09 %,
+RMS 0.27; the limiter off none, peak 126 of 127, RMS 0.16, which is
+10 dB under the clocks' level and 4.7 dB under the slow release's. A
+knee anywhere under the tune's level changes nothing once the release
+is 1 s (3000 to 22272: the same in 97.4 % of the samples), since the
+envelope then sits near the peak.
+
+To hear, the cut at 60 Hz once in all:
+
+| melody | limiter |
+| --- | --- |
+| Halftime A | the clocks': knee 3000, release 16 ms |
+| Halftime B | knee 3000, release 1 s (`--release 13`) |
+| Halftime C | off: `--knee 100` (102400), a plain gain |
+| Futurama C, D, E | 20 dB, 10 dB and no drive into sox's limiter |
+
+**Heard, 2026-11-13: "All Halftimes are overdriven, like it clips"**,
+the one with the limiter off included, and "Futurama C is good (even
+with hissing)", with the question whether the hiss is the modulator
+at only 2 MHz. So the limiter was not it, or not all of it: Halftime
+C is a plain gain whose host output peaks at 126 of 127 and touches
+the rail nowhere. What is left is told apart by a third build:
+
+| melody | what it is | if it is clean |
+| --- | --- | --- |
+| Halftime C | the module, limiter off, as before | |
+| Halftime PCM | the first 20 s of the host's output of that same clip (the dump, 8 bits), as a PCM clip | the player's samples are good and the chip makes others of the module (time, the 16-bit path) |
+| Futurama C | as before | |
+| Silence | 6 s of PCM at mid-scale | no hiss here: the hiss is in Futurama's samples (8 bits, 20 dB of drive), not the modulator or the stage |
+
+And off the clock: the same host output and openmpt123's render as
+WAV files for the user's headphones on the PC. Overdriven there too,
+and it is the tune or the player's arithmetic; clean there and
+overdriven from the clock's PCM clip, and it is the converter or the
+transistor with this material (Halftime is 58 % bass under 150 Hz,
+Futurama is not).
+
+**Heard, 2026-11-13: "Silence isn't quiet, it's hissing, so comes
+from modulator. Let's bump it to 4MHz?"** Silence is PCM at
+mid-scale, so nothing of it is in the samples: the hiss is the
+converter's bits or what the transistor makes of them. The two pull
+opposite ways at a higher rate: more bits a sample is less of the
+modulator's own noise in the audio band, and shorter pulses (244 ns)
+are more of the stage's uneven edges, which fold the bitstream's
+noise back down. Only the ear says which wins.
+
+`CLIP_PDM_BITS` at build time, 128 (the default), 256 or 384, is what
+`clip::CONVERTER` carries: the converter's ratio fp/fs of two, four
+or six, with fp at the IDF's 960 and fs 480, 240 or 160 (esp-hal's own
+DAC default is fs = rate/100, a ratio of six at 16 kHz, so these are
+the driver's ground). `converter_clock` gives the same ring rate at
+each (divider 13, the master's 6, 3 and 2). test-clock has the third
+build's four melodies at 256, 4.096 Mbit/s; nothing else differs.
+Not known before it is heard: whether the converter is sound at four,
+and whether the BC557 passes pulses that short at all.
+
+**Heard at 256 bits, 2026-11-13: "No hissing with Futurama, and it
+sounds right … Silence is quiet."** So the hiss was the converter's
+own noise at 128 bits a sample, and the BC557 with 5.1 k at its base
+passes 4.096 Mbit/s. (Heard on the breadboard stage and headphones
+only; the clocks' S8550 and buzzer have not had this rate.)
+
+**And: "Halftime PCM and Halftime C is very quiet with occasional
+clips. I don't think that the mixer is implemented correctly."** The
+two alike, so the chip plays the samples the host computes. Against
+openmpt123's render again, this time the peaks: the crest is 13.7 dB
+in ours and 13.9 dB in the reference, the RMS ratio is 0.83 to 0.88
+in every one of the 43 seconds, and the twelve largest peaks are at
+the same places with the reference's as large or larger. The clips
+are the module's own: instrument 1 has 11.5 % of its samples at the
+8-bit rail, in runs of up to 20, and instrument 2 has 5.8 %, runs of
+15 (the drums, recorded clipped), and the waveform at the loudest
+peak has the same flat shelf in both renders. Quiet is what a plain
+gain makes of a tune whose peaks are 14 dB over its RMS: −16 dB of
+full scale, against Futurama C's −6.
+
+So, between off and the clocks' 20 dB, with the release at 128 ms
+(`--release 10`) and the build at 256 bits:
+
+| melody | limiter | RMS of full scale |
+| --- | --- | --- |
+| Halftime A | off (`--knee 100`) | 0.16, −16.0 dB |
+| Halftime B | `--knee 50`: the drums' peaks only, 6 dB | 0.30, −10.6 dB |
+| Halftime C | `--knee 25`: 12 dB | 0.36, −8.9 dB |
+| Futurama C, Silence | as before | |
+
+**Heard, 2026-11-13: "WAV plays correctly on the host. All 'halftime'
+are distorted with strong bass, very low trebles. Do we have the same
+in PCM?"** The host's samples are right to the ear as well, then, and
+what is wrong happens after them, on the clock, to this tune and not
+to Futurama. Halftime PCM in the build before last was the player's
+own output as PCM and was heard as the module was. What differs from
+Futurama is the bass: 58 % of Halftime's energy is under 150 Hz, so
+the bit density sits near its ends for milliseconds at a time, where
+a stage with uneven edges gives way, and what rides on the bass (the
+treble) goes with it. A guess until heard; the fifth build, at 256
+bits, is to tell:
+
+| melody | what it is |
+| --- | --- |
+| Halftime A | the module, limiter off, as before |
+| Halftime WAV | openmpt123's render, the WAV heard on the host, its first 20 s as PCM, normalised and nothing else |
+| Tone | 1 kHz at a quarter of full scale, 5 s |
+| Tone Bass | the same tone on 80 Hz at 0.6 of full scale |
+| Futurama C, Silence | as before |
+
+Halftime WAV wrong as well: nothing of the player is in it, the
+output is. The tone pure alone and rough or fading on the bass: the
+stage (or the converter) does not carry a small signal on a large
+slow one.
+
+**The stage, not the player: heard 2026-11-13.** "2.2K base to
+emitter made it almost crisp clear" (the user, on the build above).
+The breadboard's BC557 had 5.1 k into its base and nothing to take
+the base's charge out when GPIO5 lets go, as the clock's S8550 has
+nothing: about 0.84 mA of base current for a 50 mA load is three to
+four times what it needs, so it saturated and turned off late, each
+pulse stretched by a time that is a good part of a bit, and the error
+grows with how often the stream toggles. A resistor from the base to
+the emitter is the way out for the charge and leaves 0.5 mA of drive.
+`bench/buzzer-sim.png` has it now.
+
+What this takes back: everything heard of Halftime before it, the
+limiter rounds included, was heard through that stage, and so was the
+hiss at 128 bits a sample, which may have been the stage folding the
+stream's noise down and not the converter's own. Both are asked
+again in the sixth build, at the default 128 bits, with the resistor
+in:
+
+| melody | what it is |
+| --- | --- |
+| Halftime A | limiter off (`--knee 100`) |
+| Halftime B | `--knee 50 --release 10` |
+| Halftime C | `--knee 25 --release 10` |
+| Halftime D | the clocks' limiter, the cut at 60 Hz |
+| Futurama C, Tone Bass, Silence | as before |
+
+And what it leaves open for the clocks: a stock board has no such
+resistor. Whether its S8550 saturates depends on the load (a buzzer's
+coil, or the 32 Ω speaker at about 156 mA, which 0.84 mA of base
+current may not saturate at all); a scope on the collector with the
+speaker in will say, and if it does saturate, 2.2 k from base to
+emitter is a third part for the buzzer mod.

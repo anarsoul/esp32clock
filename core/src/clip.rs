@@ -396,10 +396,10 @@ impl<'a> Player<'a> {
 
 /// Bits the chip's PCM-to-PDM converter makes of a sample, in a build
 /// that sends PCM clips and modules through it (`CLIP_MODULATOR=pdm`,
-/// the default) and not through a modulator here. 128 is its ratio of
-/// two; at 64, a ratio of one, the line carried white noise
-/// (2026-11-13).
-pub const CONVERTER: Option<u32> = if config::CLIP_PDM { Some(128) } else { None };
+/// the default) and not through a modulator here: `CLIP_PDM_BITS`, 128
+/// unless the build says otherwise, its ratio of two; at 64, a ratio
+/// of one, the line carried white noise (2026-11-13).
+pub const CONVERTER: Option<u32> = if config::CLIP_PDM { Some(config::CLIP_PDM_BITS) } else { None };
 /// One step of the 8-bit sample for the chip's converter, in the
 /// units of `LEVEL`: 127 steps are 0.85 of the rail. By ear, on two
 /// hard-limited modules (2026-11-13): 0.70, the software loop's, was
@@ -1222,6 +1222,9 @@ mod tests {
         // The clock: whole dividers of 160 MHz, within a quarter of a percent.
         assert_eq!(converter_clock(16_000, 128), (13, 256_410));
         assert_eq!(converter_clock(8_000, 128), (12, 128_205));
+        // More bits a sample are a smaller master divider, the same rate.
+        assert_eq!(converter_clock(16_000, 256), (13, 256_410));
+        assert_eq!(converter_clock(16_000, 384), (13, 256_410));
     }
 
     #[test]

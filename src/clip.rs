@@ -76,9 +76,10 @@ use crate::melody;
 const RING_BYTES: usize = if melody::HAS_CLIP { SLOTS * CHUNK } else { 0 };
 /// Bits in one TDM frame: two channels of eight.
 const FRAME_BITS: u32 = 16;
-/// The converter's up-sampling denominator, the largest the driver
-/// takes and the IDF's default; the numerator over it is the ratio.
-const PDM_FS: u32 = 480;
+/// The converter's up-sampling numerator, the IDF's; the denominator
+/// under it gives the ratio: 480, the largest the driver takes, for
+/// two, 240 for four, 160 for six.
+const PDM_FP: u32 = 960;
 /// Bits a sample at a ratio of one.
 const PDM_BASE_RATIO: u32 = 64;
 /// The DMA channel the ring is on, as the register block counts them.
@@ -274,8 +275,8 @@ impl Sampler {
             // are levels, and the tune has had its own.
             Some(ratio) => {
                 let mut config = PdmTxConfig::new_dac_default(Rate::from_hz(sample_rate), PdmSlotMode::Mono);
-                config.clock.up_sample_fs = PDM_FS;
-                config.clock.up_sample_fp = PDM_FS * ratio / PDM_BASE_RATIO;
+                config.clock.up_sample_fp = PDM_FP;
+                config.clock.up_sample_fs = PDM_FP * PDM_BASE_RATIO / ratio;
                 config.clock.bclk_div = bclk_div;
                 config.slot = config.slot.with_hp_en(false);
                 let i2s = I2s::new_pdm(self.hw.i2s.reborrow(), self.hw.dma.reborrow(), PdmConfig::tx_only(config));
