@@ -433,7 +433,12 @@ module ends with its `#[cfg(test)] mod tests`.
   kicks to −10…−15 V at each turn-off; the clip is still much quieter
   than the beeps, which sit on the buzzer's resonance. The phantom
   presses seen while a clip played were the user's adapter, pins 9
-  and 10 of the DIP-16 shorted, not interference.
+  and 10 of the DIP-16 shorted, not interference. The user's mod, in
+  the README as optional: a 1N4148 across the buzzer as a flyback
+  diode (cathode to the collector side), which takes the negative
+  peak away, and R5 at 5.1 kΩ instead of 10 kΩ, whose doubled base
+  current squares the collector's falling edge (a slope with 10 kΩ)
+  and makes the buzzer louder. The firmware assumes neither.
 - **The GDMA's `out_dscr` is not the descriptor being read.** On the
   C3 it names the one two further on, from the moment a transfer
   starts (traced against the clock, 2026-11-12). The clip's pacer took

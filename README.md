@@ -42,6 +42,7 @@ generator with DMA, so the scan is cycle-exact and immune to Wi-Fi.
 | pin header | the one that comes with the module |
 | 2 × 10 kΩ 0603 resistors, ideally 1 % | R1 and R2 on the adapter; only needed for the temperature and light sensors |
 | 10 µF 25 V electrolytic capacitor | replaces the kit's C3, optional but recommended |
+| 1N4148 diode and a 5.1 kΩ resistor | the buzzer mod, optional: a flyback diode across LS1 and a lower R5, for a louder and cleaner sound |
 | 5 V USB power supply | 1 A recommended; 500 mA works |
 
 ### Building the clock board
@@ -56,7 +57,7 @@ to.
 | --- | --- | --- |
 | SW1, SW2 | 6 × 6 mm tactile switches | the two buttons |
 | Q1 | S8550 PNP | buzzer driver |
-| R5 | 10 kΩ | base resistor of Q1 |
+| R5 | 10 kΩ, or 5.1 kΩ with the buzzer mod below | base resistor of Q1 |
 | LS1 | buzzer | the alarm |
 | USB1 | micro USB | 5 V in |
 
@@ -80,6 +81,22 @@ The drivers draw their current in bursts and the ESP32-C3 adds Wi-Fi
 transmit peaks. Fit it last, after the adapter is in place, since it
 stands next to the adapter and gets in the way of soldering it. Mind
 the polarity: the negative lead goes towards the top of the board.
+
+**Optional, the buzzer mod:** two changes to the kit's buzzer circuit
+make the alarm louder and cleaner, the sampled clips most of all.
+
+- Solder a flyback diode, a 1N4148 will do, across the buzzer's two
+  pins on the solder side: the cathode (the end with the band) to the
+  pin Q1's collector drives, the buzzer's `+`, and the anode to the
+  ground pin. The kit has no diode there, and every time Q1 turns off
+  the buzzer's coil kicks its pin to 10 to 15 V below ground. The
+  diode takes that negative peak away.
+- Fit 5.1 kΩ for R5 instead of the kit's 10 kΩ. That doubles Q1's base
+  current, so the transistor switches harder: the voltage at its
+  collector, and so at the buzzer, is squarer (with 10 kΩ its falling
+  edge is a slope), and the buzzer is louder.
+
+The clock works without either; the firmware is the same.
 
 **Leave out everything else:** the STC8G1K17 MCU (U4), the kit's R1
 and R2, and the timekeeping parts of your variant. On the HU-058 and

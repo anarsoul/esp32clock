@@ -6663,3 +6663,19 @@ The set on the two clocks is now built with
 `ALARM_CLIP=clips/trantor.bpr,wav/futurama.pcm` and, for Futurama,
 `CLIP_MODULATOR=sd CLIP_KBPS=256`; white-clock and martin-clock still
 run the earlier set with the four tunes until they are flashed again.
+
+**The buzzer mod in the README, 2026-11-12.** The user's two changes
+to the buzzer circuit are now documented as an optional mod: a 1N4148
+across the buzzer as a flyback diode, and R5 at 5.1 k instead of the
+kit's 10 k (the hearings above were at 3.2 k; 5.1 k is the value the
+user gives for the README). The user's account of what they do: the
+diode removes the negative peak at turn-off and improves the sound;
+the lower R5 raises the base current, so the collector's signal, and
+the buzzer's, is squarer (with 10 k the falling edge is a slope) and
+louder. This supersedes the fourth hearing's "no difference" for the
+diode alone. In `README.md` (the parts list, the R5 row, a paragraph
+under "Building the clock board") and in `AGENTS.md` under the buzzer.
+The diode's orientation in the README is derived from the circuit
+(emitter at +5 V, buzzer from the collector to ground, the kick
+negative), not read off the user's board.
+
