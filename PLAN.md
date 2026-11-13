@@ -6999,3 +6999,21 @@ takes the first now that the rate is higher. `xm::DRIVE` is 127 and
 `RELEASE_SHIFT` 7 again; the clips in `clips/` name neither and so
 follow, unchanged as files. `--drive 160 --release 5` is the louder
 one for a clip that wants it.
+
+**A PCM clip at 16 kHz, to compare, 2026-11-12.** After the modules,
+the user asked for Futurama at the higher rate beside the 8 kHz one.
+PCM had no header to say so; now a clip may start with `PCM1` and its
+rate (`clip::PCM_MAGIC`; `PCM_HZ` or twice it), and bare PCM is at
+`PCM_HZ` as before. The modulator is untouched: the same bits a
+sample, the line at twice the rate (512 kbit/s here), as for a module
+at 16 kHz. `scripts/wav2pcm.sh` takes the rate as a fifth argument
+and writes the header. `wav/futurama_hi.pcm` is 442 KB against 221 KB;
+the recording is 22 kHz, so the band from 4 to 8 kHz is really there.
+White-clock has both, `futurama` and `futurama_hi`, with the three
+default clips. 112 host tests. Not yet heard.
+
+**16 kHz kept for PCM too, 2026-11-12.** "Sounds way better" (the
+user, of Futurama Hi against the 8 kHz one). `scripts/wav2pcm.sh`
+converts at 16 kHz unless told 8000; `wav/futurama.pcm` is the 16 kHz
+clip now and the old one `wav/futurama_8k.pcm`. White-clock: Trantor,
+Halftime, Keygen, Futurama.

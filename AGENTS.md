@@ -54,7 +54,7 @@ scripts/ota.sh                          # just the image file, for http://<ip>/u
 API_TOKEN='…' scripts/reload.sh <ip>   # software reset with the carry record, waits for the clock to come back
 scripts/pin.sh <ip> <serial-log>        # POST /pin, then the four digits read back from the monitor's log
 AP_PASSWORD='…' cargo build --release   # optional: the clock's own access point's password (default esp32clock)
-scripts/wav2pcm.sh in.wav wav/tune.pcm [seconds]   # a sound file as the clip's raw PCM (sox): mono, 8 kHz, 8 bits unsigned
+scripts/wav2pcm.sh in.wav wav/tune.pcm [seconds] [skip] [rate]   # a sound file as the clip's raw PCM (sox): mono, 8 bits unsigned, 16 kHz behind a PCM1 header, or bare at 8 kHz for half the flash
 ~/.local/pipx/venvs/skoolkit/bin/python scripts/zxbeeper.py game.tap tap/tune.bpr --seconds 60 [--stretch 4] [--settle 20 --start 64000]   # what a ZX Spectrum program plays on its beeper, as a clip (needs SkoolKit; --start for a loader that waits for a key)
 scripts/xm2clip.py tune.xm mods/tune.xmc [--highpass 900 --passes 2] [--raise 1:2] [--drive 160 --release 5] [--rate 8000]   # a FastTracker 2 module for the clock's own player; lists what it uses that the player lacks; the bass cut, an instrument's octave and the limiter are the clip's
 ALARM_CLIP=clips/trantor.bpr,wav/tune.pcm cargo build --release   # other clips than the three in clips/ (PCM, beeper or tracker module), as the last melodies, named after their files; ALARM_CLIP_LABEL='A,B' for other labels; a ringing alarm loops a beeper clip or a module with no gap and repeats PCM after a pause, unless the file is given as file:once or file:loop
@@ -593,8 +593,8 @@ module ends with its `#[cfg(test)] mod tests`.
   of buffers, and what the statics leave of DRAM is the main stack,
   66.9 KB on 2026-11-08 (67.1 on 2026-11-07; the ring's descriptors and
   conf words are 160 bytes, the gap statistics and buffer channels went) (`Settings` is a 385-byte record and sits in several task futures: the 49-byte timezone rule cost 2.2 KB of stack); check `.stack` in `llvm-readelf -S` after adding one, and compare with a build of `HEAD` in a worktree when in doubt: one `Response` per listener loop, since a second one in another arm of the same loop was not overlapped by the compiler and cost 6 KB per listener until it was hoisted (2026-11-07). `src/tz.js` (5.8 KB) is sent from one response buffer and a `const` assert in `src/http.rs` keeps it under `RESPONSE_BUF` with its header; it was trimmed to comments of a line each to fit.
-- The sampled clip is 8 KB of flash a second (the 27.6 s test clip is
-  221 KB of `.rodata`, held once: `melody::CLIP_DATA` is a `static`; a beeper clip is 1 to 3 KB a second, a tracker module some 10 KB whatever its length)
+- A PCM clip is 16 KB of flash a second at 16 kHz, 8 KB at 8 kHz (the
+  27.6 s test clip is 442 KB of `.rodata`, held once: `melody::CLIP_DATA` is a `static`; a beeper clip is 1 to 3 KB a second, a tracker module some 10 KB whatever its length)
   and must leave the image inside its slot; the ring is 16 KB of
   static RAM, sized 0 in a build without a clip (2026-11-12: the main
   stack is 67.2 KB without, 50.6 KB with). A chunk is 16 ms at
@@ -640,7 +640,7 @@ module ends with its `#[cfg(test)] mod tests`.
 
 ## Verifying without a board
 
-`cargo host-test` runs the tests of `core/` on the host (111 on 2026-11-12): the AiP33628 encoder against a behavioural model of the
+`cargo host-test` runs the tests of `core/` on the host (112 on 2026-11-12): the AiP33628 encoder against a behavioural model of the
 chip (shift on CLK rise, latch on DIN rise while CLK high), the panel
 map, the palette and brightness tables, the hostname, password and
 token rules, the record round trip and every older version, the form

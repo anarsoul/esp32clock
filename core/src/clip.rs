@@ -119,6 +119,8 @@ pub struct Player<'a> {
     len: Option<usize>,
     /// Whether the body starts over when it ends, with no ramp between.
     looping: bool,
+    /// Samples a second of a PCM body.
+    pcm_hz: u32,
     /// Index of the next point of the level sequence: the up ramp, the
     /// samples, the down ramp.
     next: usize,
@@ -131,8 +133,17 @@ pub struct Player<'a> {
 }
 
 impl<'a> Player<'a> {
+    /// A player of bare PCM at `PCM_HZ`.
     pub const fn new(pcm: &'a [u8]) -> Self {
         Self::with(Body::Pcm(pcm), Some(pcm.len()))
+    }
+
+    /// A player of a PCM clip: bare samples at `PCM_HZ`, or behind
+    /// `PCM_MAGIC` at the rate its header gives.
+    pub fn pcm(data: &'a [u8]) -> Self {
+        let mut player = Self::new(pcm_samples(data));
+        player.pcm_hz = pcm_rate(data);
+        player
     }
 
     /// A player of a tracker module.
@@ -141,7 +152,7 @@ impl<'a> Player<'a> {
     }
 
     const fn with(body: Body<'a>, len: Option<usize>) -> Self {
-        Self { body, len, looping: false, next: 1, cur: -FULL, s1: 0, s2: 0, fb: if SIGMA_DELTA { -FULL * OSR as i32 } else { -FB } }
+        Self { body, len, looping: false, pcm_hz: PCM_HZ, next: 1, cur: -FULL, s1: 0, s2: 0, fb: if SIGMA_DELTA { -FULL * OSR as i32 } else { -FB } }
     }
 
     /// Play the body round and round, or once. For the alarm: PCM goes
@@ -182,7 +193,7 @@ impl<'a> Player<'a> {
     /// Samples a second the body gives.
     pub fn sample_rate(&self) -> u32 {
         match &self.body {
-            Body::Pcm(_) => PCM_HZ,
+            Body::Pcm(_) => self.pcm_hz,
             Body::Tune(tune) => tune.rate(),
         }
     }
@@ -284,7 +295,29 @@ impl<'a> Player<'a> {
     }
 }
 
-/// The first bytes of a beeper clip; a clip without them is PCM.
+/// The first bytes of a PCM clip at another rate than `PCM_HZ`: the
+/// magic, then the samples a second as a little-endian `u32`, which
+/// must be `PCM_HZ` or twice it. PCM with no header is at `PCM_HZ`.
+/// The modulator writes the same bits a sample either way, so the line
+/// runs twice as fast for the higher rate (`Stream::bit_rate`).
+pub const PCM_MAGIC: &[u8; 4] = b"PCM1";
+const PCM_HEADER: usize = 8;
+
+/// Samples a second of the PCM clip `data`.
+pub const fn pcm_rate(data: &[u8]) -> u32 {
+    if has_magic(data, PCM_MAGIC, PCM_HEADER) && u32::from_le_bytes([data[4], data[5], data[6], data[7]]) == 2 * PCM_HZ {
+        2 * PCM_HZ
+    } else {
+        PCM_HZ
+    }
+}
+
+/// The samples of the PCM clip `data`, without its header if it has one.
+pub const fn pcm_samples(data: &[u8]) -> &[u8] {
+    if has_magic(data, PCM_MAGIC, PCM_HEADER) { data.split_at(PCM_HEADER).1 } else { data }
+}
+
+/// The first bytes of a beeper clip; a clip with no magic is PCM.
 pub const BEEPER_MAGIC: &[u8; 4] = b"BPR2";
 /// Bytes before a beeper clip's runs: the magic and the length in ticks.
 const BEEPER_HEADER: usize = 8;
@@ -323,7 +356,7 @@ pub const fn duration_ms(data: &[u8]) -> u32 {
     } else if xm::is_tune(data) {
         xm::duration_ms(data)
     } else {
-        (data.len() as u64 * 1000 / PCM_HZ as u64) as u32
+        (pcm_samples(data).len() as u64 * 1000 / pcm_rate(data) as u64) as u32
     }
 }
 
@@ -455,7 +488,7 @@ impl<'a> Stream<'a> {
         } else if xm::is_tune(data) {
             Self::Pcm(Player::tune(xm::Tune::new(data)).looped(looping))
         } else {
-            Self::Pcm(Player::new(data).looped(looping))
+            Self::Pcm(Player::pcm(data).looped(looping))
         }
     }
 
@@ -807,6 +840,31 @@ mod tests {
         assert!(matches!(Stream::new(&[128; 100], false), Stream::Pcm(_)));
         assert_eq!((Stream::new(&data, false).bit_rate(), Stream::new(&[128; 100], false).bit_rate()), (BEEPER_BIT_RATE, BIT_RATE));
         assert!(is_old_beeper(b"BPR1\0\0\0\0") && !is_old_beeper(&data));
+    }
+
+    #[test]
+    fn pcm_at_twice_the_rate_runs_the_line_twice_as_fast() {
+        let samples = [128u8; 16_000];
+        let mut clip = PCM_MAGIC.to_vec();
+        clip.extend((2 * PCM_HZ).to_le_bytes());
+        clip.extend(samples);
+        assert_eq!((pcm_rate(&clip), pcm_rate(&samples)), (2 * PCM_HZ, PCM_HZ));
+        assert_eq!((pcm_samples(&clip).len(), pcm_samples(&samples).len()), (16_000, 16_000));
+        assert_eq!((duration_ms(&clip), duration_ms(&samples)), (1000, 2000));
+        assert_eq!((Stream::new(&clip, false).bit_rate(), Stream::new(&samples, false).bit_rate()), (2 * BIT_RATE, BIT_RATE));
+        // The same samples make the same bits; only the line's clock differs.
+        let fill = |data: &[u8]| {
+            let mut s = Stream::new(data, false);
+            let mut out = vec![0u8; 64 * BYTES_PER_SAMPLE];
+            s.fill(&mut out);
+            out
+        };
+        assert_eq!(fill(&clip), fill(&samples));
+        // A header with a rate the player does not have is PCM at the
+        // usual rate, header and all: nothing worse than eight odd samples.
+        let mut odd = clip.clone();
+        odd[4..8].copy_from_slice(&11_025u32.to_le_bytes());
+        assert_eq!(pcm_rate(&odd), PCM_HZ);
     }
 
     #[test]
