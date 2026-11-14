@@ -182,6 +182,20 @@ calculated with the coil's inductance left out:
 | 100 Ω, 0.5 W | −8 dB (16 %) | 0.17 W | 0.25 W | 80 mA |
 | 1 kΩ | about −25 dB | | | 10 mA |
 
+The two 32 Ω speakers are the same here, since the speaker's own
+power is under 0.1 W with either RP: the rating no longer decides
+anything. The 8 Ω 0.25 W speaker, with no RS and C1 at 220 µF:
+
+| RP | level against 32 Ω direct | speaker | RP, clip or tone | RP, stuck on | current while on |
+| --- | --- | --- | --- | --- | --- |
+| 33 Ω, 1 W | −3.7 dB (43 %) | 0.08 W | 0.55 W | 0.76 W | 255 mA |
+| 47 Ω, 1 W | −5.9 dB (26 %) | 0.05 W | 0.41 W | 0.53 W | 185 mA |
+
+That is the 8 Ω speaker at the level its 22 Ω RS gives it (−5.5 dB)
+with 47 Ω, or 1.8 dB louder with 33 Ω at half as much current again,
+and RP need not be near the speaker's 8 Ω: it only has to pass the
+discharge.
+
 - Three parts on LS1's pads in place of one, the resistor larger and
   hotter than any RS above, and with 33 Ω more supply current than
   the bare speaker draws.
@@ -190,8 +204,8 @@ calculated with the coil's inductance left out:
 - A tone starts with a thump as C1 charges and ends with one as it
   discharges; only the clips ramp up from and down to the released
   line.
-- It does not help the 8 Ω speaker: RP would be some 10 Ω, 0.5 A
-  through Q1 whenever it is on, so it needs RS as well.
+- With 33 Ω the current while on is past what 5.1 kΩ at R5 saturates
+  Q1 for; step 2's base resistors belong with it.
 
 The series resistor stays the recommendation for the fewest parts.
 This variant is the one to take when the speaker's safety against a
