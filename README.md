@@ -109,6 +109,11 @@ stays cold when idle, on the beeps and on a beeper clip such as
 Trantor. A 2.2 kΩ resistor from Q1's base to its emitter does not
 change it. A clock without the mod has not been checked for this.
 
+Q1 stands next to the thermometer's NTC, and five minutes of such a
+clip made it read 9 °C high. The firmware holds the temperature at
+what it was before the clip, for the clip's length and up to twenty
+minutes after.
+
 **Leave out everything else:** the STC8G1K17 MCU (U4), the kit's R1
 and R2, and the timekeeping parts of your variant. On the HU-058 and
 HU-058SE that is the DS1302 (U3), the 32.768 kHz crystal Y1 with C5

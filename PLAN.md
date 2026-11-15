@@ -8666,7 +8666,7 @@ buzzer. Read back from the session with `GET`s only: `"clips":"pack"`,
 built in. That closes the page in a browser and the sound; the access
 point, the web installer's fifth part and the release workflow remain.
 
-### The thermometer held while Q1 is hot — measured on white-clock 2026-11-14, the hold only planned
+### The thermometer held while Q1 is hot — measured on white-clock 2026-11-14, the hold built and run there 2026-11-15; a short preview and the serial log's lines not yet seen
 
 The user, 2026-11-14: with the buzzer mod (flyback diode, R5 at
 5.1 k) Q1 gets hot while a clip plays through the PDM converter, and
@@ -8736,3 +8736,28 @@ hold.
 - To check on white-clock: the same five-minute ring with `temp_c`
   logged, flat throughout; a 30 s preview the same way, for the short
   end; a stock board, whether it heats at all.
+
+**Built, 2026-11-15**, as planned but for two things. The rule is
+`sensors::Hold`, told once a reading (a second) whether
+`clip::converting()`, a flag the clip task sets while a converter
+clip is on the line; it counts for itself, so the clip task keeps no
+seconds. And the NTC's average is not frozen: it goes on underneath,
+only the published cell is held, so the reading steps to the live
+average when the hold ends and the log line shows the live
+millivolts with `held, N s after the clip`. `thermometer held for a
+clip's heat` and `released` are logged at the edges. Host tests: the
+hold's length at 1, 30, 60, 300 and 3000 s played, and two plays
+adding up.
+
+**On white-clock, 2026-11-15** (`v0.4-36-g7b0e0c6-dirty` over the
+air, built without `ALARM_CLIP`; the same script: Halftime rung for
+its five minutes through the alarm, `temp_c` of `/api` every 5 s, the
+settings put back). The reading was 24.1 from half a minute before
+the ring to 1200 s after its end, 310 samples alike, and moved again
+at the next sample, to 24.3: no step at the release, the board cool
+by then. The run without the hold peaked at 33.3. Not seen: the
+log's `held` and `released` lines (no serial port on this clock), a
+short preview's hold, a reset during a hold. Outside the hold the
+reading moved by 0.1 to 0.3 between samples, with single ones 0.4
+up, where the first run's moved by 0.1; the average's code is as it
+was, and the cause was not looked for.

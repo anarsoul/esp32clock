@@ -54,7 +54,7 @@
 //! DMA channel's descriptor register, which the pacer only checks the
 //! clock against (it names the slot two on from the one being read).
 
-use core::sync::atomic::{AtomicUsize, Ordering, fence};
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering, fence};
 
 use embassy_futures::select::{Either, select};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
@@ -159,6 +159,17 @@ static PLAYING: AtomicUsize = AtomicUsize::new(0);
 /// mapped clip pack, which must not be written while one is.
 pub fn playing_in(start: usize, len: usize) -> bool {
     PLAYING.load(Ordering::Relaxed).wrapping_sub(start) < len
+}
+
+/// Set while a clip goes through the chip's converter.
+static CONVERTING: AtomicBool = AtomicBool::new(false);
+
+/// Whether a clip is on the line through the chip's PDM converter: its
+/// pulses are shorter than the buzzer's transistor switches, which
+/// then runs hot beside the thermometer. For `sensors`, which holds
+/// the reading.
+pub fn converting() -> bool {
+    CONVERTING.load(Ordering::Relaxed)
 }
 
 /// Play clip `index` of the melody table (`melody::clip_data`) on the clip task: once,
@@ -328,6 +339,7 @@ impl Sampler {
             .into_peripheral_output()
             .with_output_inverter(true);
         OutputSignal::I2SO_SD.connect_to(&line);
+        CONVERTING.store(converter.is_some(), Ordering::Relaxed);
 
         let mut pacer = Pacer::new();
         let mut chunks = 0;
@@ -349,6 +361,7 @@ impl Sampler {
         // The pin first, back to a plain released output with no
         // inverter; then the transfer.
         release(pin);
+        CONVERTING.store(false, Ordering::Relaxed);
         let (_, ring) = transfer.stop();
         self.ring = Some(ring);
         let (busy, whole) = (busy_us / 1000, started.elapsed().as_millis());

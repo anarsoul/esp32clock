@@ -90,7 +90,8 @@ that owns the receiving side and wrapped in functions:
   the display, goodbye to MQTT, rescan to the access point.
 - One `Channel` of button events.
 - Atomics for readings and counters (sensor millivolts, RSSI, probe
-  and MQTT counts) with a single writer each; the target has no
+  and MQTT counts, the clip task's flag for a clip on the PDM
+  converter, which the sensor task holds the thermometer by) with a single writer each; the target has no
   atomic read-modify-write, so anything with two writers is behind a
   critical section.
 

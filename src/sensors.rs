@@ -15,21 +15,27 @@
 //! from zero. The cells have this task as their single writer; the page
 //! and the heartbeat only read them.
 //!
+//! The thermometer is held while a clip plays through the chip's PDM
+//! converter and for a time after (`sensors::Hold`, told once a
+//! reading): such a clip heats the buzzer's transistor, which sits
+//! beside the NTC. The average goes on underneath and is what the log
+//! shows; the published cell keeps the reading from before the clip.
+//!
 //! The calibration scheme is `AdcCalCurve`: on the C3 it corrects the
 //! raw code with the eFuse two-point data and a polynomial, and hands
 //! back millivolts. It is the scheme that reads straight on this chip
 //! (the plain line fit is a few percent off).
 
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use embassy_time::{Duration, Timer};
 use esp_hal::analog::adc::{Adc, AdcCalCurve, AdcConfig, Attenuation};
 use esp_hal::peripherals::{ADC1, GPIO0, GPIO1};
 use log::info;
 
-use crate::settings;
+use crate::{clip, settings};
 
-pub use esp32clock_core::sensors::{Tenths, face, fahrenheit_tenths, light_pct, temperature_dc};
+pub use esp32clock_core::sensors::{Hold, Tenths, face, fahrenheit_tenths, light_pct, temperature_dc};
 
 /// Conversions averaged into one reading.
 const SAMPLES: u32 = 8;
@@ -53,6 +59,12 @@ const EMPTY: u32 = u32::MAX;
 /// reading.
 static NTC_MV: AtomicU32 = AtomicU32::new(EMPTY);
 static LDR_MV: AtomicU32 = AtomicU32::new(EMPTY);
+/// The NTC's average as it is, the hold aside, for the log.
+static NTC_RAW_MV: AtomicU32 = AtomicU32::new(EMPTY);
+/// Whether the thermometer is held, and the seconds the hold runs on
+/// after the clip.
+static HELD: AtomicBool = AtomicBool::new(false);
+static HOLD_LEFT: AtomicU32 = AtomicU32::new(0);
 
 /// The filtered millivolts of both dividers, NTC then LDR, `None`
 /// until the first reading.
@@ -106,6 +118,7 @@ pub async fn sensor_task(hw: SensorHardware) {
     let mut adc = Adc::new(hw.adc, config).into_async();
     let (mut ntc_avg, mut ldr_avg) = (Filter(None), Filter(None));
     let mut first = true;
+    let mut hold = Hold::new();
     loop {
         let (mut ntc_sum, mut ldr_sum) = (0u32, 0u32);
         for _ in 0..SAMPLES {
@@ -116,7 +129,18 @@ pub async fn sensor_task(hw: SensorHardware) {
         }
         let ntc_mv = ntc_avg.push(ntc_sum / SAMPLES);
         let ldr_mv = ldr_avg.push(ldr_sum / SAMPLES);
-        NTC_MV.store(ntc_mv as u32, Ordering::Relaxed);
+        NTC_RAW_MV.store(ntc_mv as u32, Ordering::Relaxed);
+        // A held thermometer keeps what it read before the clip; a
+        // clock that has read nothing yet takes what there is.
+        let held = hold.tick(clip::converting());
+        if !held || first {
+            NTC_MV.store(ntc_mv as u32, Ordering::Relaxed);
+        }
+        if held != HELD.load(Ordering::Relaxed) {
+            info!("sensors: thermometer {}", if held { "held for a clip's heat" } else { "released" });
+        }
+        HELD.store(held, Ordering::Relaxed);
+        HOLD_LEFT.store(hold.left(), Ordering::Relaxed);
         LDR_MV.store(ldr_mv as u32, Ordering::Relaxed);
         if first {
             first = false;
@@ -128,13 +152,17 @@ pub async fn sensor_task(hw: SensorHardware) {
 
 /// The readings as the log says them: the filtered millivolts of both
 /// dividers, then the temperature in both units (offset applied, and
-/// said so when it is not zero) and the light index, or why not.
+/// said so when it is not zero) and the light index, or why not. With
+/// the thermometer held, the NTC's millivolts are the live ones, the
+/// temperature the held one, and the line says so.
 pub struct Report;
 
 impl core::fmt::Display for Report {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let Some((ntc, ldr)) = readings() else { return f.write_str("not read yet") };
-        write!(f, "ntc {ntc} mV, ldr {ldr} mV, ")?;
+        let held = HELD.load(Ordering::Relaxed);
+        let live = if held { NTC_RAW_MV.load(Ordering::Relaxed) as u16 } else { ntc };
+        write!(f, "ntc {live} mV, ldr {ldr} mV, ")?;
         let offset = settings::get().temp_offset_dc;
         match temperature_dc(ntc) {
             Some(dc) => {
@@ -145,6 +173,9 @@ impl core::fmt::Display for Report {
                 }
             }
             None => f.write_str("no thermometer")?,
+        }
+        if held {
+            write!(f, " held, {} s after the clip", HOLD_LEFT.load(Ordering::Relaxed))?;
         }
         write!(f, ", light {} %", light_pct(ldr))
     }

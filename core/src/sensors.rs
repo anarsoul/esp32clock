@@ -137,6 +137,58 @@ pub fn face(tenths: i16, unit: char) -> [char; 4] {
     out
 }
 
+/// Seconds the thermometer is held for each second of a clip through
+/// the chip's PDM converter: such a clip keeps the buzzer's transistor
+/// half on, 0.2 W beside the NTC, and five minutes of one read 9 °C
+/// high and took sixteen to come back (white-clock, 2026-11-14).
+pub const HOLD_PER_SECOND: u32 = 4;
+/// The shortest hold, whatever the clip's length.
+pub const HOLD_MIN_SECS: u32 = 120;
+/// The longest: what five minutes of a clip, a ring's length, earn.
+pub const HOLD_MAX_SECS: u32 = 1200;
+
+/// Whether the thermometer's reading is held at what it was, for the
+/// transistor's heat: while a converter clip plays and for a time after
+/// it that grows with what was played. Told once a second.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Hold {
+    /// Seconds of hold earned and not yet run down.
+    left: u32,
+    /// Whether a clip was playing at the last tick.
+    playing: bool,
+}
+
+impl Hold {
+    pub const fn new() -> Self {
+        Self { left: 0, playing: false }
+    }
+
+    /// A second has passed, with a converter clip `playing` or not.
+    /// Answers whether the reading is held.
+    pub fn tick(&mut self, playing: bool) -> bool {
+        let ended = self.playing && !playing;
+        self.playing = playing;
+        if playing {
+            // What is left of an earlier hold counts, so plays add up.
+            self.left = (self.left + HOLD_PER_SECOND).min(HOLD_MAX_SECS);
+            return true;
+        }
+        if ended {
+            self.left = self.left.max(HOLD_MIN_SECS);
+        }
+        if self.left == 0 {
+            return false;
+        }
+        self.left -= 1;
+        true
+    }
+
+    /// Seconds of hold earned so far and not yet run down, 0 for none.
+    pub fn left(&self) -> u32 {
+        self.left
+    }
+}
+
 /// Tenths as a decimal with one place: `23.4`, `-0.5`.
 pub struct Tenths(pub i16);
 
@@ -151,6 +203,45 @@ impl core::fmt::Display for Tenths {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Seconds held after `played` seconds of a clip from cold.
+    fn held_after(played: u32) -> u32 {
+        let mut hold = Hold::new();
+        for _ in 0..played {
+            assert!(hold.tick(true));
+        }
+        let mut n = 0;
+        while hold.tick(false) {
+            n += 1;
+        }
+        n
+    }
+
+    #[test]
+    fn hold_grows_with_the_clip_between_its_bounds() {
+        assert!(!Hold::new().tick(false));
+        assert_eq!(held_after(1), HOLD_MIN_SECS);
+        assert_eq!(held_after(30), HOLD_MIN_SECS);
+        assert_eq!(held_after(60), 240);
+        assert_eq!(held_after(300), HOLD_MAX_SECS);
+        assert_eq!(held_after(3000), HOLD_MAX_SECS);
+    }
+
+    #[test]
+    fn plays_within_a_hold_add_up() {
+        let mut hold = Hold::new();
+        for _ in 0..60 {
+            hold.tick(true);
+        }
+        for _ in 0..100 {
+            assert!(hold.tick(false));
+        }
+        assert_eq!(hold.left(), 140);
+        for _ in 0..60 {
+            hold.tick(true);
+        }
+        assert_eq!(hold.left(), 380);
+    }
 
     const B: f64 = 3950.0;
     const R25: f64 = 10_000.0;
