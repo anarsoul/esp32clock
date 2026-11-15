@@ -35,12 +35,13 @@ of. `CLAUDE.md` is a symlink to this file; edit this one.
   for this trailer in this project).
 - `3rdparty/` is the reverse-engineering reference (public domain), ignored
   by git. Read it; do not modify it.
-- `clips/` holds the clips every build takes in unless `ALARM_CLIP`
-  says otherwise (`core/build.rs`, `DEFAULT_CLIPS`): Trantor's title
+- `clips/` holds the clips of the default clip pack
+  (`scripts/clips.sh`, the CI and the release make it): Trantor's title
   music and two of Orion's modules, whose sources are in `mods/`. They
   are other people's music, not under the project's licence;
   `clips/README.md` credits each and must go on doing so. A clip
-  nobody may redistribute stays in the ignored `wav/`, `tap/`, `sid/` and `pt3/`.
+  nobody may redistribute stays in the ignored `wav/`, `tap/`, `sid/` and `pt3/`,
+  and a pack made of such in the ignored `packs/`.
 - The project is licensed MIT OR Apache-2.0 (`LICENSE-MIT`,
   `LICENSE-APACHE`, the `license` field of both manifests). Every `.rs`
   and `.sh` file starts with an `SPDX-License-Identifier` line and the
@@ -69,8 +70,11 @@ scripts/wav2pcm.sh in.wav wav/tune.pcm [seconds] [skip] [rate]   # a sound file 
 scripts/xm2clip.py tune.xm mods/tune.xmc [--highpass 900 --passes 2] [--raise 1:2] [--drive 160 --release 5] [--knee 100] [--rate 16000] [--bits 8]   # a FastTracker 2 module for the clock's own player; lists what it uses that the player lacks; the bass cut, an instrument's octave and the limiter are the clip's (--knee is the level the limiter starts at, in 1024s of the mix where one voice is 32; the default is 20 dB of drive, for the buzzer, and a knee above the tune's peak is the limiter off, for a speaker; the clip is at `clip::FAST_HZ`, 31 250 samples a second, here and in the two below, which the chip's converter at 256 bits a sample sends at 8 Mbit/s exactly: the default since 2026-11-13, heard on the breadboard stage and on white-clock; 32 kHz is not among the converter's whole dividers, and at CLIP_PDM_BITS=384 such a clip is refused; --rate 16000 is the rate before it, half a module's share of the processor, and 8000 a module's third)
 scripts/sid2clip.py tune.sid sid/tune.sidc [--song 2] [--seconds 90] [--mute 2] [--model 8580] [--steps 4] [--rate 16000] [--highpass 300 --passes 1]   # a Commodore 64 tune (PSID) for the clock's own SID: runs the tune's 6502 code on the host and keeps each frame's register writes, to the point where the tune loops; --mute keeps the voices' gates closed for the first frames, for a routine that clicks as it starts; says what it does that the clock will not play
 scripts/pt32clip.py tune.pt3 pt3/tune.pt3c [--machine pentagon|spectrum] [--clock 1773400] [--chip ym] [--restart] [--highpass 100 --passes 1] [--drive 180] [--rate 16000] [--limiter --highpass 300 --noise 11] [--noise-lowpass 3000]   # a ZX Spectrum tune (Pro Tracker 3 or Vortex Tracker II module) for the clock's own player and AY-3-8910: the module as it is behind a header with the machine's clock and frame rate (by the module's tone table unless told), the length and where it goes round; --restart for a module whose loop is only its ending; the clip is the chip as it is but for a 100 Hz high-pass, at a plain gain 3 dB over three channels at full scale, the user's choice of 2026-11-13 on headphones and on white-clock over the limiter, which --limiter brings back as the first PT3 clips had it
-ALARM_CLIP=clips/trantor.bpr,wav/tune.pcm cargo build --release   # other clips than the three in clips/ (PCM, beeper, tracker module, SID tune or PT3 module), as the last melodies, named after their files; ALARM_CLIP_LABEL='A,B' for other labels; a ringing alarm loops a beeper clip, a module, a SID tune or a PT3 module with no gap and repeats PCM after a pause, unless the file is given as file:once or file:loop
-ALARM_CLIP= cargo build --release   # no clips at all: the nine note melodies, 16 KB more stack
+scripts/mkpack.py packs/mine.bin clips/trantor.bpr wav/tune.pcm:loop=My\ Tune   # a clip pack for the `clips` partition: up to 16 clips, named and looped as ALARM_CLIP's are, `=Label` for another label
+CLIP_PACK_FILE=packs/mine.bin cargo host-test the_pack_file_parses -- --nocapture   # the pack through the parser the clock reads it with
+API_TOKEN='…' scripts/clips.sh <ip> [pack]   # POST /clips: write the pack (the default one, made of clips/, if none is named) and restart; with no arguments just make packs/clips-default.bin
+espflash write-bin 0x2e0000 packs/mine.bin && espflash reset   # the pack over USB
+ALARM_CLIP=clips/trantor.bpr,wav/tune.pcm cargo build --release   # the older way, clips built into the firmware, for a clock whose partition table has no `clips` partition; a pack takes their place where there is one (PCM, beeper, tracker module, SID tune or PT3 module), as the last melodies, named after their files; ALARM_CLIP_LABEL='A,B' for other labels; a ringing alarm loops a beeper clip, a module, a SID tune or a PT3 module with no gap and repeats PCM after a pause, unless the file is given as file:once or file:loop
 CLIP_MODULATOR=sd CLIP_KBPS=256 cargo build --release   # a PCM clip or module through the software sigma-delta and not the chip's PDM converter (the default, `pdm`, 256 bits a sample): for a buzzer circuit that the converter's rate is too fast for; CLIP_KBPS is 128, 256 or 512 (default; a 16 kHz clip runs at twice the figure)
 CLIP_MODULATOR=pwm cargo build --release   # the other software modulator: a pulse a carrier period (CLIP_CARRIER_KHZ, default 16)
 CLIP_PDM_BITS=128 cargo build --release   # the PDM converter at 128 bits a sample, 2.048 Mbit/s for a 16 kHz clip, as the clocks' buzzers have heard it (256, 4.096 Mbit/s, is the default; 384 is the third): more bits are less of the converter's own noise and shorter pulses for the transistor
@@ -141,7 +145,7 @@ hostname, Wi-Fi network, API token and MQTT broker (`mqtt_host`,
 are settings:
 saved in the `nvs` partition, editable from the buttons and from
 the clock's pages or `/api` (form-encoded keys, JSON back). The pages
-are four, each starting with a line of links to the others
+are five, each starting with a line of links to the others
 (`form::Page`): `/` (the alarm with Play and Stop, the display, the
 status lines), `/settings` (timezone, 12 hour, the temperature on the
 panel and its offset, hostname, and the local-time line), `/ha` (the
@@ -202,6 +206,21 @@ MSRV-aware resolver picks an esp-rom-sys that esp-storage cannot build with.
 | bottom long | arm or disarm the alarm (degree mark shows armed) |
 | both long | show the IP, one octet at a time, twice |
 | both held 10 s | reset into the access point; from the access point, back to the station if a network is stored |
+
+Clip packs (2026-11-14): `http://<ip>/clips` says where the clips
+come from (the pack in the `clips` partition with its size, the
+firmware, or that this clock's table has no such partition, in which
+case the page has no upload and asks for no PIN), lists their labels,
+and uploads a pack: the raw body of `POST /clips` with `Bearer` or
+`PIN`, as `/ota`. A bad header (`not a clip pack`, a length that is
+not the body's) is refused before anything is erased and the pack in
+use stays; a hash mismatch after the write leaves the clock without a
+pack until the next upload. A good one restarts the clock
+(`heal::reboot`). The melody setting is an index: after another pack
+it names whatever is at that place, and a place past the table's end
+is read as `beeps` (`Settings::from_record`), which is what a clock
+updated over the air onto the old table gets for a clip. `/api` has
+the read-only key `clips`, `pack` or `builtin`.
 
 Opening `http://<ip>/system` shows a four-digit PIN for a minute, or
 until it is used, right or wrong (the page's script asks for it with
@@ -416,13 +435,15 @@ answered or an HTTP request served bumps it, and the third such boot
 
 The pure modules live in `core/src/` and the firmware re-exports them
 from `src/lib.rs`, so firmware code says `crate::settings`; inside
-`core` the same `crate::` paths point at its own modules. Six modules
+`core` the same `crate::` paths point at its own modules. Seven modules
 are split, the pure half in `core/src/` under the same name and the
 hardware half in `src/`: `buttons` (event types / GPIO task), `clock`
 (calendar arithmetic / the offset and the carry), `carry` (record
 codec / RTC static and reset gate), `http` (head parser and
 `RESPONSE_BUF` / sockets), `ota` (image constants, `Slot`,
-`hash_chunk`, `version_from` / flash and partitions), `clip` (the
+`hash_chunk`, `version_from` / flash and partitions), `pack` (the
+clip pack's layout and checks / the partition, its mapping and the
+upload), `clip` (the
 pulse-width `Player` and the ring's `Pacer` / I2S0, its DMA ring and
 the pin). Each `core`
 module ends with its `#[cfg(test)] mod tests`.
@@ -440,14 +461,16 @@ module ends with its `#[cfg(test)] mod tests`.
 | `src/storage.rs` | the one flash handle (`with_flash`), nvs partition lookup, `sequential-storage` map over it, debounced persist task that compares records, not structs, and resets into station mode after a save that changed the credentials, or after any save on the access point with a network stored |
 | `src/heal.rs` | deliberate resets: `reboot` says the MQTT goodbye, blanks the panel through `scan::halt`, carries the time and resets, for `/reload` and the OTA reboot; `reset`, the self-heal, waits out a ringing alarm and counts itself first; `switch_mode`, the reset between station and access point, which starts the carry record over and freezes it |
 | `core/src/auth.rs` | the API token (a setting; constant-time compare) and the panel PIN with its TTL and lockout; `token`, `token_or_pin`, `issue_pin`, `pin_to_show`; `Refusal` with its HTTP status; pure rules with the clock and the random number passed in |
-| `core/src/form.rs` | key=value parsing, all-or-nothing `apply` on a copy with the `Allow` flags for the guarded keys, JSON, the four pages (`Page`; `write_page`, `write_settings_page`, `write_ha_page`, `write_system_page`) over the shared `write_top` (head, heading, the line of links, the error notice), `Check` (a checkbox with its hidden `0`), `SAVE` and `UNSAVED_JS` (a script compares the form with the defaults it was served with), the read-only `Status` lines, the system page's `SYSTEM_JS` (one PIN, four requests), the setup form, `JsonStr`/`HtmlStr` escaping for the SSID, `parse_token`; pure logic |
+| `core/src/form.rs` | key=value parsing, all-or-nothing `apply` on a copy with the `Allow` flags for the guarded keys, JSON, the five pages (`Page`; `write_page`, `write_settings_page`, `write_ha_page`, `write_clips_page`, `write_system_page`) over the shared `write_top` (head, heading, the line of links, the error notice), `Check` (a checkbox with its hidden `0`), `SAVE` and `UNSAVED_JS` (a script compares the form with the defaults it was served with), the read-only `Status` lines, the script of the two pages that need the PIN, `PIN_JS` (`say`, `go`, `back`, `up` for an upload) and `PIN_ASK_JS` around the system page's `SYSTEM_JS` (one PIN, four requests) or the clips page's `up('/clips')`, the setup form, `JsonStr`/`HtmlStr` escaping for the SSID, `parse_token`; pure logic |
 | `core/src/http.rs` | `Method`, `Head` (`content_length` is `None` when the header is absent, and `transfer_encoding` says one was sent), `parse_head`; `RESPONSE_BUF` and `PAGE_MAX`, which the page tests assert against |
 | `core/src/mqtt.rs` | Home Assistant over MQTT, pure: `DeviceId` and its topics, `Link` (the state for the page), `Route` and `Command`, `SET_KEYS` and `apply_set` over `form::apply_one`, `write_discovery` (the device payload with every entity) and `DISCOVERY_MAX` |
 | `src/mqtt.rs` | the MQTT task: resolve, connect with the will, subscribe, discovery and state publishes, keepalive pings, the select loop over `poll_header`, the back-off, `goodbye` for the reset paths, `link()` and `Report` for the page and the heartbeat |
-| `src/http.rs` | HTTP/1.0 server, `LISTENERS` sockets each in its own task: every request goes through `http::admit` first and one it refuses is answered by `turn_away` (a `302` to the address for a `GET` under another `Host`, else `403`; not counted as served) and `status_line` sends `X-Frame-Options: DENY`; a `POST` without `Content-Length` to a route that reads a body (`/`, `/settings`, `/ha`, `/api`, `/play`, `/token`, `/ota`; `reads_body`) is answered `411` and any `Transfer-Encoding` `400` before a route is looked at (`NoRequest`), since a bodiless post is not an empty form, while the command posts (`/reload`, `/ap`, `/pin`, `/scan`, `/stop`) take a bare `curl -X POST`; `GET`/`POST` on `/`, `/settings` and `/ha` (the three forms, on the station; `/` is the setup form on the access point) and `/api`, `POST /play`, `POST /stop`, `GET /system` (issues no PIN; its script posts `/pin`), `GET /update` and `GET /token` (redirects to it), `POST /ota` with the body streamed to `ota::install`, `POST /reload`, `POST /ap` and `POST /token` with the token or the PIN, `POST /pin`, `POST /scan` on the access point, `GET /favicon.ico` and `GET /tz.js` (`src/favicon.ico` and `src/tz.js` embedded, the two cacheable responses; the page loads the script as `/tz.js?v=<version>` so an update is not served the cached one); the four pages are titled and headed `Clock: <hostname>`; a refused form redirects to its own page with `?error=…`; per-listener state and counters for the heartbeat |
+| `src/http.rs` | HTTP/1.0 server, `LISTENERS` sockets each in its own task: every request goes through `http::admit` first and one it refuses is answered by `turn_away` (a `302` to the address for a `GET` under another `Host`, else `403`; not counted as served) and `status_line` sends `X-Frame-Options: DENY`; a `POST` without `Content-Length` to a route that reads a body (`/`, `/settings`, `/ha`, `/api`, `/play`, `/token`, `/ota`; `reads_body`) is answered `411` and any `Transfer-Encoding` `400` before a route is looked at (`NoRequest`), since a bodiless post is not an empty form, while the command posts (`/reload`, `/ap`, `/pin`, `/scan`, `/stop`) take a bare `curl -X POST`; `GET /clips` (the clips page) and `POST /clips` (a pack streamed to `pack::install`, read as `/ota`'s body is; `411` without a length); `GET`/`POST` on `/`, `/settings` and `/ha` (the three forms, on the station; `/` is the setup form on the access point) and `/api`, `POST /play`, `POST /stop`, `GET /system` (issues no PIN; its script posts `/pin`), `GET /update` and `GET /token` (redirects to it), `POST /ota` with the body streamed to `ota::install`, `POST /reload`, `POST /ap` and `POST /token` with the token or the PIN, `POST /pin`, `POST /scan` on the access point, `GET /favicon.ico` and `GET /tz.js` (`src/favicon.ico` and `src/tz.js` embedded, the two cacheable responses; the page loads the script as `/tz.js?v=<version>` so an update is not served the cached one); the four pages are titled and headed `Clock: <hostname>`; a refused form redirects to its own page with `?error=…`; per-listener state and counters for the heartbeat |
 | `core/src/buttons.rs` | `Button`, `Kind`, `Event` |
 | `src/buttons.rs` | debounced short/long press events, the two-button long press, and the 10 s two-button `Hold` |
-| `core/src/melody.rs` | alarm tunes as pitch and length data with tempo; `RANDOM` and the pure `pick` that turns it into a tune; `CLIP_COUNT`, `CLIP_NAMES` and `CLIP_DATA` (included from `clips.rs`, which `core/build.rs` writes from `ALARM_CLIP`), `HAS_CLIP`, and one melody a clip (`Melody::clip`) after the nine tunes of `MELODIES`; pure |
+| `core/src/melody.rs` | alarm tunes as pitch and length data with tempo; `RANDOM` and the pure `pick` that turns it into a tune; `CLIP_COUNT`, `CLIP_NAMES` and `CLIP_DATA` (included from `clips.rs`, which `core/build.rs` writes from `ALARM_CLIP`; none by default); the table at run time, the nine note melodies and then the clips of the pack `install` was given, else the built-in ones: `count`, `get` (a `Melody` by value, the beeps past the end), `all`, `clip_data`, `clip_loops`, `LIMIT` (what a settings index is held under), `RANDOM` (`usize::MAX`); the pack in force sits in a `critical_section` cell, a thread-local in the tests; pure |
+| `core/src/pack.rs` | the clip pack: `CLPK`, a version, up to `MAX_CLIPS` (16) entries of offset, length, loop flag, API name (20 bytes) and label (32), the clips' data, a SHA-256 at the end; `declared_len` from a header, `Pack::parse` with every check (`PackError`), `clip(k)`; the test `the_pack_file_parses` reads the file `CLIP_PACK_FILE` names |
+| `src/pack.rs` | the `clips` partition: found by its label in the table (absent on a clock flashed before 2026-11-14, which is not an error), its pages written into the flash MMU's entries below the last (`map`; refused if any is in use), the pack parsed through the mapping and installed, all in `init` before the settings load; `install`, the upload of `POST /clips`: header checked, pack out of the table, a clip playing from it stopped (`clip::playing_in`), scan stopped, `ota::write_hashed`, the cache invalidated, the pack parsed in place (its first sector erased if refused), then the caller reboots; `room` for the page |
 | `core/src/carry.rs` | `Carried`, `MARK` with its layout version, `encode`/`decode` |
 | `src/carry.rs` | RTC-RAM record used only after a software reset (`CoreSw`/`Cpu0Sw`; anything else zeroes it at boot): self-heal count and time, the skip flag, the local second the alarm last rang, the Unix time last written, boots of an unconfirmed OTA image, the access-point flag for the next boot; the mark carries a layout version; `freeze` for a mode switch |
 | `src/buzzer.rs` | LEDC PWM on an open-drain pin; plays a melody on command, looped or once, stops within a note; a clip goes to `clip::play`, which hands it to the clip task on the same pin, and for a ringing alarm is asked to loop with no gap if `melody::CLIP_LOOPS` says the clip is made to (`Stream::new(data, looping)`: a beeper clip starts over, a module follows its own jump back, PCM wraps) where the note melodies repeat after `repeat_gap_ms` |
@@ -465,7 +488,7 @@ module ends with its `#[cfg(test)] mod tests`.
 | `core/src/clock.rs` | `LocalTime` (with the `offset_secs` it was computed with and `local_secs`), `weekday_of_days`, `local_time(unix, offset_secs)` |
 | `src/clock.rs` | Unix time = uptime + NTP offset; `period_at` and `local_time` under the settings' rule; `carry_time`/`restore_carried` move the time across a software reset as plain Unix time, written every second by the display tick; `RESET_PAUSE` for every deliberate reset |
 | `core/src/ota.rs` | image header and descriptor offsets, `Slot` names, `hash_chunk` for the appended SHA-256, `version_from` |
-| `src/ota.rs` | firmware upload: slot lookup and the boot-time rollback, sector writer with read-back, activate, reboot; `VERSION` from `build.rs` |
+| `src/ota.rs` | firmware upload: slot lookup and the boot-time rollback, sector writer with read-back and the appended hash (`write_hashed`, shared with `pack::install`, as are the buffers), activate, reboot; `VERSION` from `build.rs` |
 | `src/net.rs` | Wi-Fi station on the stored credentials with a scan before every connect, the connect pinned to the BSSID and channel that scan heard loudest (a new choice each time; the driver chooses only when the scan heard nothing), and a transmit-power ceiling, minute RSSI line, connect failures logged with their meaning (`wrong password?`, `no such network in range`) and a budget that ends in `heal::reset`; DHCP switched on 500 ms after each connect and off at disconnect; link and address monitor, gateway ping probe with the self-heal trigger, SNTP, DHCP renew on hostname change; the boot's `Mode`, the access-point task (AP+STA, scans on request into the network list) and its static stack config |
 | `src/dhcpd.rs` | DHCP server for the access point: `parse`, `build` and the lease table pure, the socket task around them; every reply broadcast |
 | `src/dnsd.rs` | captive DNS for the access point: `answer` pure (every A question is the clock, anything else an empty answer), the socket task around it |
@@ -525,9 +548,9 @@ module ends with its `#[cfg(test)] mod tests`.
   pull of a bare pin it takes, but leaves a `Flex` alone (it arrives as a
   frozen signal), so `main.rs` sets the idle pull-downs on `Flex` pins and
   the scan task builds the bus from those. No PAC access for the pins;
-  `ring.rs` and `clip.rs` are the modules that touch registers, SPI2's
-  segmented-mode bits and each DMA channel's current descriptor, through
-  esp-hal's `regs()`.
+  `ring.rs`, `clip.rs` and `pack.rs` are the modules that touch registers, SPI2's
+  segmented-mode bits, each DMA channel's current descriptor and the
+  flash MMU's table, through esp-hal's `regs()`.
 - **Buttons:** GPIO4 is the upper button, GPIO3 the lower. No board
   pull-ups; the internal ones are used.
 - **Sensors (GPIO0, GPIO1):** the adapter's 10 kΩ pull-ups from 3V3
@@ -659,17 +682,23 @@ module ends with its `#[cfg(test)] mod tests`.
 - `http::RX_BUF` (4096) is the TCP receive window; 1 KB made an upload
   one segment per round trip. `REQUEST_BUF` (1536) still bounds the
   head; an upload's body stays on the socket.
-- An OTA image must fit a slot (`partitions.csv`, 0x1E0000 = 1920 KB);
-  the release image is about 1040 KB with the three clips in `clips/`
-  (865 KB with none). Static RAM: `ota.rs` holds 11 KB
+- An OTA image must fit a slot (`partitions.csv`, 0x160000 = 1408 KB
+  since the `clips` partition took half a megabyte of each, 2026-11-14;
+  1920 KB on a clock with the old table); the release image is 877 KB,
+  and 1045 KB with the three clips of `clips/` built in. A build with
+  Futurama in `ALARM_CLIP` as well no longer fits. A clip pack must
+  fit its megabyte (`scripts/mkpack.py` refuses a larger one), and its
+  SHA-256 is checked in software at every boot before the settings
+  load: 119 ms for the default pack's 172 KB, 482 ms for 700 KB
+  (test-clock, 2026-11-14). Static RAM: `ota.rs` holds 11 KB
   of buffers, and what the statics leave of DRAM is the main stack,
   66.9 KB on 2026-11-08 (67.1 on 2026-11-07; the ring's descriptors and
   conf words are 160 bytes, the gap statistics and buffer channels went) (`Settings` is a 385-byte record and sits in several task futures: the 49-byte timezone rule cost 2.2 KB of stack); check `.stack` in `llvm-readelf -S` after adding one, and compare with a build of `HEAD` in a worktree when in doubt: one `Response` per listener loop, since a second one in another arm of the same loop was not overlapped by the compiler and cost 6 KB per listener until it was hoisted (2026-11-07). `src/tz.js` (5.8 KB) is sent from one response buffer and a `const` assert in `src/http.rs` keeps it under `RESPONSE_BUF` with its header; it was trimmed to comments of a line each to fit.
 - A PCM clip is 16 KB of flash a second at 16 kHz, 8 KB at 8 kHz (the
   27.6 s test clip is 442 KB of `.rodata`, held once: `melody::CLIP_DATA` is a `static`; a beeper clip is 1 to 3 KB a second, a tracker module some 10 KB whatever its length)
-  and must leave the image inside its slot; the ring is 16 KB of
-  static RAM, sized 0 in a build without a clip (2026-11-12: the main
-  stack is 67.2 KB without, 50.6 KB with). A chunk is 16 ms at
+  and must leave the pack inside its partition, or the image inside its slot; the ring is 16 KB of
+  static RAM in every build, since any build may meet a pack (2026-11-14: the main
+  stack is 49.9 KB). A chunk is 16 ms at
   512 kbit/s (a beeper clip) and the ring holds fourteen ahead of the
   DMA, so the clip task not running for about 220 ms (twice that for
   the 16-bit samples of a 16 kHz clip under the PDM converter) is an
@@ -713,12 +742,12 @@ module ends with its `#[cfg(test)] mod tests`.
 
 ## Verifying without a board
 
-`cargo host-test` runs the tests of `core/` on the host (143 on 2026-11-14): the AiP33628 encoder against a behavioural model of the
+`cargo host-test` runs the tests of `core/` on the host (151 on 2026-11-14, and the players' tests over real clips only with `ALARM_CLIP` naming some, which the CI does in a second run): the AiP33628 encoder against a behavioural model of the
 chip (shift on CLK rise, latch on DIN rise while CLK high), the panel
 map, the palette and brightness tables, the hostname, password and
 token rules, the record round trip and every older version, the form
 parser and the page sizes against `PAGE_MAX`, the head parser, the
-appended-hash split, the carry codec, the calendar arithmetic, the POSIX TZ parser with its rejects and the 2026 transitions of both hemispheres, the melodies, the clip's modulator (a sine back out of the bits, one centred pulse a period, the ramps, full-scale stability), the beeper clip's runs bit for bit, the module player (pitch, volumes, each effect's periods tick by tick, the song's order, the envelope, the shaping; `CLIP_PCM_DUMP=file cargo host-test dump_the_tune -- --ignored` writes a built-in module's, SID tune's or PT3 module's samples for comparison with another player's render, `CLIP_INDEX` saying which clip), the SID (pitch, each waveform's shape, ring modulation, sync, the envelope's times and its late note, the filter's modes and its stability at every setting, the frames' timing and the loop; a tune was compared with libsidplayfp's render once, by hand, see PLAN.md), the AY (`run` against a tick-by-tick model of the chip over random registers, pitch, the mixer, noise, each envelope shape, the levels), the PT3 player on modules built in the test (notes by table and version, rows and tempo, sample lines and their sums, ornaments, slides and portamento, the envelope, the positions, the loop and the fresh start, cut and random modules; `CLIP_REG_DUMP=file CLIP_INDEX=n cargo host-test dump_the_registers -- --ignored` writes a built-in module's registers, fourteen a frame, for a reference player), and the ring's pacer, run against a model of the DMA (`CLIP_KBPS` and `CLIP_CARRIER_KHZ` change what is tested; `ALARM_CLIP=… cargo host-test` covers the table with the clip in it), the UI's alarm, grace, skip and daylight-saving logic, the PIN and token
+appended-hash split, the carry codec, the clip pack's layout with every refusal and the melody table with and without a pack, the calendar arithmetic, the POSIX TZ parser with its rejects and the 2026 transitions of both hemispheres, the melodies, the clip's modulator (a sine back out of the bits, one centred pulse a period, the ramps, full-scale stability), the beeper clip's runs bit for bit, the module player (pitch, volumes, each effect's periods tick by tick, the song's order, the envelope, the shaping; `CLIP_PCM_DUMP=file cargo host-test dump_the_tune -- --ignored` writes a built-in module's, SID tune's or PT3 module's samples for comparison with another player's render, `CLIP_INDEX` saying which clip), the SID (pitch, each waveform's shape, ring modulation, sync, the envelope's times and its late note, the filter's modes and its stability at every setting, the frames' timing and the loop; a tune was compared with libsidplayfp's render once, by hand, see PLAN.md), the AY (`run` against a tick-by-tick model of the chip over random registers, pitch, the mixer, noise, each envelope shape, the levels), the PT3 player on modules built in the test (notes by table and version, rows and tempo, sample lines and their sums, ornaments, slides and portamento, the envelope, the positions, the loop and the fresh start, cut and random modules; `CLIP_REG_DUMP=file CLIP_INDEX=n cargo host-test dump_the_registers -- --ignored` writes a built-in module's registers, fourteen a frame, for a reference player), and the ring's pacer, run against a model of the DMA (`CLIP_KBPS` and `CLIP_CARRIER_KHZ` change what is tested; `ALARM_CLIP=… cargo host-test` covers the table with the clip in it), the UI's alarm, grace, skip and daylight-saving logic, the PIN and token
 header rules, the NTC and LDR tables against their equations, and the
 MQTT topics, routes and discovery payload (parsed with `serde_json`, a
 host-only dev-dependency, and checked key by key against the `/api`

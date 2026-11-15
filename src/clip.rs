@@ -54,7 +54,7 @@
 //! DMA channel's descriptor register, which the pacer only checks the
 //! clock against (it names the slot two on from the one being read).
 
-use core::sync::atomic::{Ordering, fence};
+use core::sync::atomic::{AtomicUsize, Ordering, fence};
 
 use embassy_futures::select::{Either, select};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
@@ -72,8 +72,9 @@ use static_cell::ConstStaticCell;
 
 use crate::melody;
 
-/// The ring's bytes; none in a build without a clip.
-const RING_BYTES: usize = if melody::HAS_CLIP { SLOTS * CHUNK } else { 0 };
+/// The ring's bytes. In every build, with clips built in or not: the
+/// clips may be a pack's (`pack.rs`).
+const RING_BYTES: usize = SLOTS * CHUNK;
 /// Bits in one TDM frame: two channels of eight.
 const FRAME_BITS: u32 = 16;
 /// The converter's up-sampling numerator, the IDF's; the denominator
@@ -151,16 +152,22 @@ unsafe impl DmaTxBuffer for Ring {
     }
 }
 
-/// Play clip `index` of `melody::CLIP_DATA` on the clip task: once,
+/// Where the clip being played is in memory, 0 for none.
+static PLAYING: AtomicUsize = AtomicUsize::new(0);
+
+/// Whether a clip is being played from the `len` bytes at `start`: the
+/// mapped clip pack, which must not be written while one is.
+pub fn playing_in(start: usize, len: usize) -> bool {
+    PLAYING.load(Ordering::Relaxed).wrapping_sub(start) < len
+}
+
+/// Play clip `index` of the melody table (`melody::clip_data`) on the clip task: once,
 /// or `looping`, round and round with no gap until cancelled.
 /// Returns early with what `cancel` was signalled with, the line
 /// released by then; `None` when the clip has ended, or could not be
 /// started. For the buzzer task, which must leave the pin alone until
 /// this returns.
 pub async fn play<T: Send>(index: usize, looping: bool, cancel: &Signal<CriticalSectionRawMutex, T>) -> Option<T> {
-    if !melody::HAS_CLIP {
-        return None;
-    }
     STOP.reset();
     DONE.reset();
     START.signal((index, looping));
@@ -182,8 +189,14 @@ pub async fn clip_task(hw: Hardware, pin: GPIO5<'static>) -> ! {
     let mut pin = pin;
     loop {
         let (index, looping) = START.wait().await;
-        if let Some(data) = melody::CLIP_DATA.get(index) {
+        // The data and the note of where it is are taken in one step, with
+        // no await between: `pack::install`, on the thread executor, takes
+        // the pack out of the table and then waits for this to be clear
+        // of it.
+        if let Some(data) = melody::clip_data(index) {
+            PLAYING.store(data.as_ptr() as usize, Ordering::Relaxed);
             sampler.play(&mut pin, data, looping, &STOP).await;
+            PLAYING.store(0, Ordering::Relaxed);
         }
         DONE.signal(());
     }
@@ -193,14 +206,14 @@ pub async fn clip_task(hw: Hardware, pin: GPIO5<'static>) -> ! {
 /// buzzer pin for each clip.
 struct Sampler {
     hw: Hardware,
-    /// `None` in a build without a clip, and while a transfer holds it.
+    /// `None` while a transfer holds it.
     ring: Option<Ring>,
 }
 
 impl Sampler {
-    /// Panics if called twice in a build with a clip.
+    /// Panics if called twice.
     fn new(hw: Hardware) -> Self {
-        Self { hw, ring: melody::HAS_CLIP.then(Ring::new) }
+        Self { hw, ring: Some(Ring::new()) }
     }
 
     /// Play the clip `data`, PCM or beeper, once on `pin`. Returns early with what `cancel` was
@@ -213,10 +226,6 @@ impl Sampler {
         looping: bool,
         cancel: &Signal<CriticalSectionRawMutex, T>,
     ) -> Option<T> {
-        // A constant in a build without a clip, so none of this is in its image.
-        if !melody::HAS_CLIP {
-            return None;
-        }
         let mut ring = self.ring.take()?;
         // The slots are written through these while the transfer owns
         // the ring. The DMA is the only other party, and the pacer

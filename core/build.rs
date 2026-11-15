@@ -12,9 +12,13 @@ fn main() {
     clips();
 }
 
-/// The clips a build has when `ALARM_CLIP` is not set: the ones in the
-/// repository. Set it to nothing for a build with none.
-const DEFAULT_CLIPS: &str = "clips/trantor.bpr,clips/halftime.xmc,clips/keygen.xmc";
+/// The clips a build has when `ALARM_CLIP` is not set: none. A clock's
+/// clips are its clip pack, in the `clips` partition (`pack.rs`,
+/// `scripts/mkpack.py`); building them into the firmware is the older
+/// way, still here for a clock whose partition table has no such
+/// partition. The three of the default pack that way:
+/// `ALARM_CLIP=clips/trantor.bpr,clips/halftime.xmc,clips/keygen.xmc`.
+const DEFAULT_CLIPS: &str = "";
 
 /// `ALARM_CLIP` names the clips to build in as the last melodies, files
 /// separated by commas: raw PCM (`scripts/wav2pcm.sh`), a beeper clip

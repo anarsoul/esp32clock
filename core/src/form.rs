@@ -54,6 +54,10 @@ pub struct Status {
     pub mqtt: Link,
     /// Whether the alarm is ringing right now.
     pub ringing: bool,
+    /// The size of the `clips` partition in bytes: `None` on a clock
+    /// whose partition table has none, which plays the built-in clips
+    /// and takes no pack.
+    pub clips_room: Option<u32>,
     /// The local time right now under the settings' rule: `None` before
     /// the first time sync.
     pub local: Option<LocalNow>,
@@ -544,7 +548,8 @@ fn write_tz_script(out: &mut impl core::fmt::Write, st: &Status) -> core::fmt::R
 
 /// The settings as JSON (the SSID, then whether a password and a token
 /// are set, never their values), followed by the read-only status keys
-/// `version`, `slot`, `mode`, `uptime` (seconds), `heals`, `temp_c` and
+/// `version`, `slot`, `clips` (`pack` when the clips are the `clips`
+/// partition's, `builtin` when they are the firmware's), `mode`, `uptime` (seconds), `heals`, `temp_c` and
 /// `temp_f` (tenths, or null with no thermometer), `light` (0 to 100,
 /// or null before the first reading), `rssi` (dBm, or null while not
 /// connected), `utc_offset` and `dst` (the minutes east of UTC and
@@ -566,7 +571,7 @@ pub fn write_json(out: &mut impl core::fmt::Write, s: &Settings, st: &Status) ->
         out,
         "\",\"skip\":{},\"melody\":\"{}\",\"twelve_hour\":{},\"tz\":\"{}\",\"temp_offset\":{},\"temp_show\":\"{}\",\"hostname\":\"{}\",\"ssid\":\"{}\",\"password_set\":{},\"token_set\":{},\
 \"mqtt_host\":\"{}\",\"mqtt_port\":{},\"mqtt_user\":\"{}\",\"mqtt_password_set\":{},\"mqtt\":\"{}\",\"ringing\":{},\
-\"version\":\"{}\",\"slot\":\"{}\",\"mode\":\"{}\",\"uptime\":{},\"heals\":{},\"temp_c\":{},\"temp_f\":{},\"light\":{},\"rssi\":{},\
+\"version\":\"{}\",\"slot\":\"{}\",\"clips\":\"{}\",\"mode\":\"{}\",\"uptime\":{},\"heals\":{},\"temp_c\":{},\"temp_f\":{},\"light\":{},\"rssi\":{},\
 \"utc_offset\":{},\"dst\":{},\"last_heal\":",
         s.skip_next,
         melody::name(s.melody),
@@ -586,6 +591,7 @@ pub fn write_json(out: &mut impl core::fmt::Write, s: &Settings, st: &Status) ->
         st.ringing,
         st.version,
         st.slot,
+        if melody::pack().is_some() { "pack" } else { "builtin" },
         st.mode,
         st.uptime_secs,
         st.heals,
@@ -707,12 +713,14 @@ pub enum Page {
     Settings,
     /// `/ha`: the MQTT broker.
     HomeAssistant,
+    /// `/clips`: the clip pack.
+    Clips,
     /// `/system`: the firmware, the token, reboot and the access point.
     System,
 }
 
 impl Page {
-    pub const ALL: [Page; 4] = [Page::Clock, Page::Settings, Page::HomeAssistant, Page::System];
+    pub const ALL: [Page; 5] = [Page::Clock, Page::Settings, Page::HomeAssistant, Page::Clips, Page::System];
 
     /// Where the page is served, and where its form is posted.
     pub const fn path(self) -> &'static str {
@@ -720,6 +728,7 @@ impl Page {
             Page::Clock => "/",
             Page::Settings => "/settings",
             Page::HomeAssistant => "/ha",
+            Page::Clips => "/clips",
             Page::System => "/system",
         }
     }
@@ -729,6 +738,7 @@ impl Page {
             Page::Clock => "Clock",
             Page::Settings => "Settings",
             Page::HomeAssistant => "Home Assistant",
+            Page::Clips => "Clips",
             Page::System => "System",
         }
     }
@@ -738,7 +748,7 @@ impl Page {
 /// heading, the line of links with this page's own name in bold, and
 /// why the last post of its form was refused, if it was. On the access
 /// point (`ap`) `/` is the setup form and the two settings pages are
-/// not served, so the links are that form and the system page.
+/// not served, so the links are that form, the clips and the system page.
 fn write_top(out: &mut impl core::fmt::Write, hostname: &str, here: Page, ap: bool, error: Option<FormError>) -> core::fmt::Result {
     out.write_str(HEAD)?;
     // The hostname is letters, digits and dashes, so no escaping here.
@@ -827,8 +837,8 @@ pub fn write_page(
         DayOptions(s.alarm_days),
         Check("skip", s.skip_next),
     )?;
-    for (i, m) in melody::MELODIES.iter().enumerate() {
-        write!(out, "<option value={}{}>{}</option>", m.name, if i == s.melody { " selected" } else { "" }, m.label)?;
+    for (i, m) in melody::all().enumerate() {
+        write!(out, "<option value={}{}>{}</option>", m.name, if i == s.melody { " selected" } else { "" }, HtmlStr(m.label))?;
     }
     write!(
         out,
@@ -919,19 +929,17 @@ pub fn write_ha_page(
     out.write_str("</body></html>")
 }
 
-/// The system page's script. `say` writes the status line `s` (an error
+/// The start of the script of a page whose actions need the PIN, the
+/// system page and the clips page. `say` writes the status line `s` (an error
 /// in red) and brings it into view, since it is under the PIN field and
 /// the buttons are further down; `go` checks the PIN field holds four digits, disables every
 /// button (the PIN is spent by any answer) and opens a request with the
 /// PIN in the header, which is what a script sends with its token, so
-/// the server needs no multipart for the image; `back` polls `/api`
-/// until the clock answers again. `XMLHttpRequest` for the upload's
-/// progress bar. The access-point button is absent on the access point.
-/// It ends by asking for the PIN, `POST /pin`: the page's `GET` issues
-/// none, since any site can make a browser send a `GET`, and a post
-/// from this page is one the server can tell from theirs
-/// (`http::admit`). A clock locked out by a wrong PIN says so there.
-const SYSTEM_JS: &str = "<script>\
+/// the server needs no multipart for a file; `back` polls `/api`
+/// until the clock answers again; `up` makes the Upload button send
+/// the chosen file as the raw body of a route, with `XMLHttpRequest`
+/// for the progress bar.
+const PIN_JS: &str = "<script>\
 var $=function(i){return document.getElementById(i)},t=$('t'),s=$('s'),f=$('f'),p=$('p'),k=$('k'),a=$('a'),N=' Reload this page for a new PIN.';\
 function say(m,e){s.textContent=m;s.className=e?'err':'';s.scrollIntoView({block:'center'})}\
 function go(u,ok){if(!/^[0-9]{4}$/.test(t.value)){say('Enter the four digits the clock is showing.',1);return}\
@@ -940,21 +948,35 @@ x.onload=function(){var m=x.responseText.trim();if(x.status==200)ok(m);else say(
 x.onerror=function(){say('Request failed: connection lost.'+N,1)};\
 for(var b of document.querySelectorAll('button'))b.disabled=true;return x}\
 function poll(n){fetch('/api',{cache:'no-store'}).then(function(x){return x.json()})\
-.then(function(j){say('Back up: firmware '+j.version+' in '+j.slot+'.')})\
+.then(function(j){say('Back up: firmware '+j.version+' in '+j.slot+', clips: '+j.clips+'.')})\
 .catch(function(){if(n>0)setTimeout(function(){poll(n-1)},2000);else say('The clock has not come back; check it.',1)})}\
 function back(m){say(m+' Waiting for the clock to come back.');setTimeout(function(){poll(20)},5000)}\
-$('b').onclick=function(){if(!f.files[0]){say('Choose an image file.',1);return}\
-var x=go('/ota',back);if(!x)return;\
+function up(u){$('b').onclick=function(){if(!f.files[0]){say('Choose a file.',1);return}\
+var x=go(u,back);if(!x)return;\
 x.upload.onprogress=function(e){if(e.lengthComputable)p.value=e.loaded/e.total};\
-p.hidden=false;p.value=0;say('Uploading.');x.send(f.files[0])};\
+p.hidden=false;p.value=0;say('Uploading.');x.send(f.files[0])}}";
+
+/// How such a script ends: by asking for the PIN, `POST /pin`. The
+/// page's `GET` issues none, since any site can make a browser send a
+/// `GET`, and a post from this page is one the server can tell from
+/// theirs (`http::admit`). A clock locked out by a wrong PIN says so
+/// there.
+const PIN_ASK_JS: &str = "fetch('/pin',{method:'POST'}).then(function(r){if(!r.ok)r.text().then(function(m){say(m.trim()+'.'+N,1)})})\
+</script></body></html>";
+
+/// The system page's own part of the script: the four actions. The
+/// access-point button is absent on the access point.
+const SYSTEM_JS: &str = "up('/ota');\
 $('c').onclick=function(){if(!k.value&&!confirm('Clear the token? The scripts will be refused until one is set again.'))return;\
 var x=go('/token',function(m){say(m+'.'+N)});if(!x)return;\
 x.setRequestHeader('Content-Type','application/x-www-form-urlencoded');x.send('token='+encodeURIComponent(k.value))};\
 $('r').onclick=function(){var x=go('/reload',back);if(x)x.send()};\
 if(a)a.onclick=function(){if(!confirm('Leave the network? The clock becomes an access point until a network is saved there, or both buttons are held for ten seconds.'))return;\
-var x=go('/ap',function(m){say(m+'. Join the clock\\'s own network and open http://192.168.4.1/.')});if(x)x.send()};\
-fetch('/pin',{method:'POST'}).then(function(r){if(!r.ok)r.text().then(function(m){say(m.trim()+'.'+N,1)})})\
-</script></body></html>";
+var x=go('/ap',function(m){say(m+'. Join the clock\\'s own network and open http://192.168.4.1/.')});if(x)x.send()};";
+
+/// The one PIN field of a page whose actions need the PIN, with the
+/// status line under it; the page says first what the PIN is for.
+const PIN_FIELD: &str = "<label>PIN on the clock<input type=text inputmode=numeric pattern=[0-9]* maxlength=4 autocomplete=off id=t></label><p id=s></p>";
 
 /// The system page, `GET /system`: what needs someone who can see the
 /// clock. Its script puts a four-digit PIN on the panel, and the page
@@ -976,11 +998,9 @@ pub fn write_system_page(
 ) -> core::fmt::Result {
     let ap = st.mode == "ap";
     write_top(out, hostname, Page::System, ap, None)?;
-    out.write_str(
-        "<p><b>Every action on this page needs the PIN the clock is showing.</b> One PIN, one action.</p>\
-<label>PIN on the clock<input type=text inputmode=numeric pattern=[0-9]* maxlength=4 autocomplete=off id=t></label><p id=s></p>\
-<fieldset><legend>Firmware update</legend>",
-    )?;
+    out.write_str("<p><b>Every action on this page needs the PIN the clock is showing.</b> One PIN, one action.</p>")?;
+    out.write_str(PIN_FIELD)?;
+    out.write_str("<fieldset><legend>Firmware update</legend>")?;
     write_firmware_line(out, st, false)?;
     write!(
         out,
@@ -994,7 +1014,59 @@ pub fn write_system_page(
         if token_set { "one is set" } else { "none is set" },
         if ap { "" } else { "<button id=a>Access point</button>" },
     )?;
-    out.write_str(SYSTEM_JS)
+    out.write_str(PIN_JS)?;
+    out.write_str(SYSTEM_JS)?;
+    out.write_str(PIN_ASK_JS)
+}
+
+/// The clips page, `GET /clips`: where the clips come from now, the
+/// pack in the `clips` partition or the firmware, with their labels,
+/// and the upload of a pack, the raw body of `POST /clips` with the
+/// PIN as the system page's upload has it. A clock whose partition
+/// table has no `clips` partition (`st.clips_room`) is told so, and
+/// has nothing to upload to: no field, no script, no PIN asked for.
+pub fn write_clips_page(out: &mut impl core::fmt::Write, hostname: &str, st: &Status) -> core::fmt::Result {
+    write_top(out, hostname, Page::Clips, st.mode == "ap", None)?;
+    if st.clips_room.is_some() {
+        out.write_str("<p><b>Updating the clip pack needs the PIN the clock is showing.</b></p>")?;
+        out.write_str(PIN_FIELD)?;
+    }
+    out.write_str("<fieldset><legend>Clip pack</legend><p>")?;
+    let kb = |bytes: u32| bytes.div_ceil(1024);
+    match (melody::pack(), st.clips_room) {
+        (Some(pack), room) => {
+            write!(out, "Pack in flash: {} clips, {} KB", pack.count(), kb(pack.len() as u32))?;
+            if let Some(room) = room {
+                write!(out, " of {}", kb(room))?;
+            }
+            out.write_str(".")?;
+        }
+        (None, Some(room)) => write!(out, "No pack in flash ({} KB for one): the clips are those built into the firmware.", kb(room))?,
+        (None, None) => out.write_str(
+            "This clock's partition table has no <code>clips</code> partition, so its clips are those built into the firmware. \
+A pack needs the clock flashed once over USB or from the web installer.",
+        )?,
+    }
+    out.write_str("</p><p>")?;
+    let mut clips = melody::all().filter(|m| m.clip.is_some()).peekable();
+    if clips.peek().is_none() {
+        out.write_str("No clips: the note melodies only.")?;
+    }
+    for (i, m) in clips.enumerate() {
+        write!(out, "{}{}", if i == 0 { "" } else { " · " }, HtmlStr(m.label))?;
+    }
+    out.write_str("</p>")?;
+    if st.clips_room.is_none() {
+        return out.write_str("</fieldset></body></html>");
+    }
+    out.write_str(
+        "<label>Pack file<input type=file id=f></label>\
+<p><button id=b>Upload</button></p><progress id=p value=0 max=1 hidden></progress>\
+<p><small>The panel goes dark while the pack is written, and the clock restarts. Do not unplug.</small></p></fieldset>",
+    )?;
+    out.write_str(PIN_JS)?;
+    out.write_str("up('/clips');")?;
+    out.write_str(PIN_ASK_JS)
 }
 
 /// Bytes the setup page's list of networks may take, strongest first.
@@ -1179,6 +1251,7 @@ mod tests {
             rssi: Some(-100),
             mqtt: Link::Connecting { last_error: Some("connection refused by the broker") },
             ringing: true,
+            clips_room: Some(1 << 20),
             local: Some(LocalNow { weekday: 4, hour: 14, minute: 32, offset_secs: -8 * 3600, dst: false }),
         }
     }
@@ -1534,13 +1607,14 @@ mod tests {
         s
     }
 
-    /// The four pages as served, in `Page::ALL`'s order.
-    fn pages(s: &Settings, st: &Status, error: Option<FormError>) -> [String; 4] {
-        let mut out = [String::new(), String::new(), String::new(), String::new()];
+    /// The five pages as served, in `Page::ALL`'s order.
+    fn pages(s: &Settings, st: &Status, error: Option<FormError>) -> [String; 5] {
+        let mut out = [String::new(), String::new(), String::new(), String::new(), String::new()];
         write_page(&mut out[0], s, st, error).unwrap();
         write_settings_page(&mut out[1], s, st, error).unwrap();
         write_ha_page(&mut out[2], s, st, error).unwrap();
-        write_system_page(&mut out[3], s.hostname.as_str(), st, true).unwrap();
+        write_clips_page(&mut out[3], s.hostname.as_str(), st).unwrap();
+        write_system_page(&mut out[4], s.hostname.as_str(), st, true).unwrap();
         out
     }
 
@@ -1567,6 +1641,16 @@ mod tests {
             assert!(out.len() <= PAGE_MAX, "{page:?}: {} bytes", out.len());
             assert!(out.ends_with("</html>"), "{page:?}");
         }
+        // And with the fullest pack there can be in the table: sixteen
+        // clips, every name and label at its limit.
+        melody::install(Some(crate::pack::fullest()));
+        let full = pages(&worst_settings(), &status(true), Some(FormError::BrokerPassword));
+        for (page, full) in Page::ALL.iter().zip(&full) {
+            println!("{page:?} page with a full pack: {} bytes of {PAGE_MAX}", full.len());
+            assert!(full.len() <= PAGE_MAX, "{page:?}: {} bytes", full.len());
+        }
+        assert_eq!(full[0].matches("<option value=").count() - out[0].matches("<option value=").count() + melody::CLIP_COUNT, crate::pack::MAX_CLIPS);
+        melody::install(None);
         // Play and Stop, each posted by the script to its own address
         // without leaving the page.
         assert!(out[0].contains("<button formaction=/play id=p>Play</button> <button formaction=/stop id=q>Stop</button>"));
@@ -1583,7 +1667,7 @@ mod tests {
         assert_eq!(field_names(&out[0]), ["armed", "alarm", "days", "skip", "melody", "color", "brightness"]);
         assert_eq!(field_names(&out[1]), ["tz", "twelve_hour", "temp_show", "temp_offset", "hostname"]);
         assert_eq!(field_names(&out[2]), ["mqtt_host", "mqtt_port", "mqtt_user", "mqtt_password"]);
-        assert!(field_names(&out[3]).is_empty(), "the system page posts by script");
+        assert!(field_names(&out[3]).is_empty() && field_names(&out[4]).is_empty(), "the clips and system pages post by script");
         // One form with Save under both fieldsets; the display is also
         // posted to `/api` as it is chosen and is then not unsaved.
         assert_eq!(out[0].matches("<form").count(), 1);
@@ -1633,7 +1717,7 @@ mod tests {
         ap.mode = "ap";
         let mut out = String::new();
         write_system_page(&mut out, "clock", &ap, false).unwrap();
-        assert!(out.contains("<p><a href=/>Setup</a> · <b>System</b></p>"), "{out}");
+        assert!(out.contains("<p><a href=/>Setup</a> · <a href=/clips>Clips</a> · <b>System</b></p>"), "{out}");
         assert!(!out.contains("id=a>") && out.contains("id=r>Reboot</button></p>"), "no way to the access point from it");
         let mut setup = String::new();
         write_provision_page(&mut setup, &Settings::DEFAULT, &ap, &[], None).unwrap();
@@ -1678,7 +1762,7 @@ mod tests {
         let mut out = String::new();
         write_system_page(&mut out, "clock", &status(true), true).unwrap();
         assert_eq!(out.matches("id=t>").count(), 1, "one PIN field");
-        for route in ["go('/ota',", "go('/token',", "go('/reload',", "go('/ap',"] {
+        for route in ["up('/ota');", "go(u,back)", "go('/token',", "go('/reload',", "go('/ap',"] {
             assert!(out.contains(route), "{route}");
         }
         assert!(out.contains("x.setRequestHeader('Authorization','PIN '+t.value)"));
@@ -1690,6 +1774,44 @@ mod tests {
         out.clear();
         write_system_page(&mut out, "clock", &status(true), false).unwrap();
         assert!(out.contains("(none is set)"));
+    }
+
+    /// The clips page: where the clips come from, their labels, and the
+    /// upload with the PIN; nothing to upload to without the partition.
+    #[test]
+    fn clips_page_says_where_the_clips_are() {
+        let page = |st: &Status| {
+            let mut out = String::new();
+            write_clips_page(&mut out, "clock", st).unwrap();
+            out
+        };
+        let st = status(true);
+        let out = page(&st);
+        assert!(out.contains("No pack in flash (1024 KB for one): the clips are those built into the firmware."), "{out}");
+        assert_eq!(out.matches("id=t>").count(), 1, "one PIN field");
+        assert!(out.contains("up('/clips');") && out.contains("fetch('/pin',{method:'POST'})") && out.contains("<input type=file id=f>"));
+        assert!(!out.contains("go('/token'") && !out.contains("up('/ota')"), "none of the system page's actions");
+        for (_, label) in melody::CLIP_NAMES {
+            assert!(out.contains(label), "{label}");
+        }
+        let mut none = st;
+        none.clips_room = None;
+        let out = page(&none);
+        assert!(out.contains("has no <code>clips</code> partition") && out.ends_with("</fieldset></body></html>"), "{out}");
+        assert!(!out.contains("<script>") && !out.contains("id=t>") && !out.contains("id=f>"), "nothing to upload to, no PIN asked for");
+        let data = crate::pack::build(&[("one", "One's own", true, &[128; 8000]), ("two", "Two", false, &[128; 8000])]);
+        let len = data.len();
+        melody::install(Some(crate::pack::Pack::parse(Vec::leak(data)).unwrap()));
+        let out = page(&st);
+        assert!(out.contains(&format!("Pack in flash: 2 clips, {} KB of 1024.", len.div_ceil(1024))), "{out}");
+        assert!(out.contains("<p>One's own · Two</p>"), "{out}");
+        let mut json = String::new();
+        write_json(&mut json, &Settings::DEFAULT, &st).unwrap();
+        assert!(json.contains(r#""slot":"ota_1","clips":"pack","mode":"sta""#), "{json}");
+        melody::install(None);
+        json.clear();
+        write_json(&mut json, &Settings::DEFAULT, &st).unwrap();
+        assert!(json.contains(r#""clips":"builtin""#), "{json}");
     }
 
     #[test]

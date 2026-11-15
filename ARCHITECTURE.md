@@ -34,7 +34,7 @@ shape everything else:
 | root (`esp32clock`) | the tasks and drivers around it: `src/*.rs` and `src/bin/main.rs`. Re-exports `core`'s modules from `src/lib.rs`, so both halves are `crate::…` |
 
 A module with both halves has the same name in each crate (`clock`,
-`carry`, `http`, `ota`, `buttons`, `clip`, `mqtt`, `sensors`): types
+`carry`, `http`, `ota`, `pack`, `buttons`, `clip`, `mqtt`, `sensors`): types
 and rules in `core/src/`, the peripheral and the task in `src/`.
 Build-time configuration (credentials, timezone, token, clips) is read
 by `core/src/config.rs` and `core/build.rs`.
@@ -44,7 +44,9 @@ by `core/src/config.rs` and `core/build.rs`.
 `src/bin/main.rs`, in order:
 
 1. Release the buzzer pin (open drain, high) before anything else.
-2. Open the flash, load the settings record, fill what it lacks from
+2. Open the flash; map the `clips` partition, if the table has one,
+   and put the clip pack it holds in the melody table (`pack::init`);
+   load the settings record, fill what it lacks from
    the build's seeds, publish it (`settings::init`).
 3. Read the reset reason and the RTC-RAM carry record (`carry::init`);
    check the OTA slot and roll back an image that never confirmed
@@ -133,7 +135,12 @@ level, so the pin is open drain throughout and released means silent.
 
 - **Note melodies**: `buzzer_task` plays pitch-and-length tables from
   `core::melody` as LEDC PWM.
-- **Clips**: files built into the image, one of five kinds told apart
+- **Clips**: the files of the clip pack (`core::pack`), a partition
+  of its own that `src/pack.rs` maps through the flash MMU so they are
+  read in place, checked by a SHA-256 at boot; or, with no pack, files
+  built into the image (`ALARM_CLIP`). The melody table is the note
+  melodies and then the clips of whichever is in force
+  (`melody::get`). A clip is one of five kinds told apart
   by their first bytes (`clip::Stream`): raw PCM, a ZX Spectrum beeper
   bitstream, a FastTracker module (`xm`), a Commodore 64 register log
   played through a software SID (`sid`), a Pro Tracker 3 module played
@@ -152,8 +159,8 @@ executor.
 
 - **HTTP** (`src/http.rs` over `core::http` and `core::form`): an
   HTTP/1.0 server, one request per connection, a fixed response buffer
-  per listener that holds a whole page. Four pages (`/`, `/settings`,
-  `/ha`, `/system`), each a partial-update form, and `/api` with the
+  per listener that holds a whole page. Five pages: `/`, `/settings`
+  and `/ha`, each a partial-update form, `/clips` and `/system`, and `/api` with the
   same keys as form-encoded in, JSON out. `form::apply` works on a copy
   of the settings and commits all or nothing. Every request passes
   `http::admit` before a route is looked at: a `Host` header,
@@ -171,6 +178,10 @@ executor.
   for one device, a retained state topic carrying the `/api` JSON, and
   `set/<key>` and `cmd` topics restricted to an allow list. Reconnects
   with back-off; says goodbye before a deliberate reset.
+- **Clip pack upload** (`src/pack.rs`): `POST /clips`, streamed into
+  the `clips` partition with the OTA's sector writer and hash check;
+  the pack leaves the melody table first, what was written is parsed
+  in place, and the clock reboots into it.
 - **OTA** (`src/ota.rs`): the image is streamed from the socket into
   the other app slot a sector at a time with read-back and a SHA-256
   check, then `otadata` is switched. A new image must answer a gateway
@@ -195,6 +206,7 @@ argument.
 | `nvs` partition | the settings record (`core::settings`): versioned, append-only, so an older image reads a newer record by its prefix | everything |
 | RTC RAM | the carry record (`carry`): Unix time, alarm bookkeeping, the skip flag, self-heal count, OTA boot count, the access-point flag | software resets only |
 | `otadata` | which app slot boots | everything |
+| `clips` partition | the clip pack (`core::pack`); absent on a clock flashed before it existed, which the firmware allows for | everything but a web install, which writes the default pack |
 
 All flash access goes through `storage::with_flash`, one blocking
 operation at a time; there is exactly one flash handle.

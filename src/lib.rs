@@ -20,6 +20,7 @@ pub mod http;
 pub mod mqtt;
 pub mod net;
 pub mod ota;
+pub mod pack;
 pub mod ring;
 pub mod scan;
 pub mod sensors;

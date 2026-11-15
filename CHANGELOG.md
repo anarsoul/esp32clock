@@ -11,7 +11,31 @@ from `http://<ip>/update`; its settings survive the update.
 
 ## [Unreleased]
 
+### Changed
+
+- The clips (the alarm melodies that are not notes) are no longer
+  part of the firmware: they are a *clip pack* in a new 1 MB flash
+  partition, `clips`, for which each of the two firmware slots gave
+  up half a megabyte. A pack is made with `scripts/mkpack.py` (up to
+  16 clips), checked by a SHA-256 at upload and at every boot, and
+  played in place from the flash. The default pack, the three clips
+  below, is `esp32clock-clips-<tag>.bin` on a release, and the web
+  installer writes it.
+- **A clock flashed before this release has the old partition table,
+  which an update over the LAN does not change.** It runs this
+  firmware with the note melodies only, and an alarm set to a clip
+  plays the beeps, until it is flashed once over USB or from the web
+  installer (the settings survive). `ALARM_CLIP` at build time still
+  builds clips into the firmware, for such a clock; it is empty by
+  default now.
+
 ### Added
+
+- A fifth page, `/clips`: the pack in use and its clips, and the
+  upload of another with the PIN from the panel (`POST /clips`, also
+  `scripts/clips.sh <ip> [pack]` with the token). The clock restarts
+  into the new pack. `/api` has a read-only `clips` key, `pack` or
+  `builtin`.
 
 - Three more alarm melodies that are not beeps: the title music of
   *Trantor: The Last Stormtrooper* by David Whittaker, as the ZX

@@ -8464,3 +8464,179 @@ Not run: anything on the
 access point (the host would leave its LAN): a phone's sign-in sheet
 now gets a `302` for `/` too when its probe names another host. For
 the user.
+
+### Clips in a partition of their own: the clip pack — built and run on test-clock 2026-11-14; the page in a browser and the sound for the user
+
+The user, 2026-11-14: "move clips into a separate partition on the
+flash. Carve out 0.5M out of each app partition and create a new 1M
+partition with clips. The legacy way to store the clips (built-in into
+the app) should still be there. HTTP should get a separate page to
+upload new clip pack. The setting must be backwards-compatible with
+older partition table, i.e. app checks whether 'clips' partition
+exists, whether its contents is valid and loads it only in this case."
+A default pack (Trantor and the two modules), a local one not to be
+committed (those, the SID tune, Futurama, the three PT3 modules), the
+default one built by the CI and attached to a release as its own file.
+
+**The table.** `ota_0` and `ota_1` shrink from 0x1E0000 to 0x160000
+(1408 KB; the release image is about 1040 KB) and `clips` takes the
+megabyte they give up:
+
+| name | type | offset | size |
+| --- | --- | --- | --- |
+| `ota_0` | app | 0x20000 | 0x160000 |
+| `ota_1` | app | 0x180000 | 0x160000 |
+| `clips` | data, `undefined` (0x06) | 0x2E0000 | 0x100000 |
+
+The subtype is one esp-bootloader-esp-idf 0.6 knows: its
+`partition_type()` unwraps the conversion, so a custom subtype (0x40
+and up) would panic every image that walks the table, the released
+ones included. The partition is found by its label, `clips`. A clock
+gets the new table only over USB or from the web installer; an OTA
+leaves the old one, with `ota_1` at 0x200000, and the firmware must
+run on either.
+
+**The pack** (`core/src/pack.rs`, made by `scripts/mkpack.py`):
+
+| at | what |
+| --- | --- |
+| 0 | `CLPK` |
+| 4 | version, 1 |
+| 5 | number of clips, 1 to 16 (`pack::MAX_CLIPS`) |
+| 6 | two zero bytes |
+| 8 | length of the whole pack, the hash included, little endian |
+| 12 | an entry of 64 bytes a clip: offset and length of its data (u32 each), flags (bit 0: made to loop), three zero bytes, the API name (20 bytes, NUL padded, `a-z` and `_`), the label (32 bytes, NUL padded, UTF-8 without control characters and without `< > & "`) |
+| after | the clips' data, each as `ALARM_CLIP` takes it |
+| end | SHA-256 of everything before it, 32 bytes, as espflash ends an image |
+
+`Pack::parse` checks all of it: the structure, every entry inside the
+data, names unique and not a note melody's nor `random`, each clip a
+second of sound at least and not of an old format (what the `const`
+asserts ask of a built-in clip), and the hash. Sixteen clips with the
+longest names and labels must fit the clock page and the discovery
+payload; the tests measure both with such a pack.
+
+**Reading it.** The players read a clip in place as `&'static [u8]`,
+so the partition is mapped: at boot `src/pack.rs` reads the table,
+finds `clips`, and writes its 64 KB pages into free entries of the
+flash MMU (the sixteen below the last, 0x3C6F0000 up for an aligned
+megabyte; refused if any of them is in use), as esp-storage does for
+its encrypted reads: the entry, then `Cache_Invalidate_Addr`. Then the
+header through the mapping, `Pack::parse`, and `melody::install`. The
+hash is the software `sha2` the upload already uses: about 0.3 s for a
+full megabyte by estimate, 50 ms for the default pack, logged at boot.
+All of it before the settings are loaded, since a record's melody
+index is clamped to the table.
+
+**The melody table at run time.** `melody::MELODIES` was a constant.
+Now: the nine note melodies, then the clips of the pack if one is
+installed, else the built-in ones (`ALARM_CLIP`, unchanged, the three
+of `clips/` by default, so a clock updated over the air keeps its
+sounds). A valid pack replaces the built-in clips and is not added to
+them: the default pack is the same three. `melody::count()`, `get`,
+`all`, `clip_data`, `clip_loops`; `RANDOM` becomes a fixed value out
+of any table's reach (it was the table's length) and `is_valid` holds
+the index under `melody::LIMIT`, the largest table there can be. The
+registry is a `critical_section` cell, and a thread-local in the
+tests, which run in parallel. The clip ring (16 KB) is in every build
+now, since any build may meet a pack; `HAS_CLIP` goes.
+
+A stored melody is an index, as before: a pack with other clips, or
+their order changed, changes what the index means, as a build with
+other clips always did.
+
+**Upload.** `POST /clips`, the pack as the raw body, `Bearer` or `PIN`
+as `/ota`; `GET /clips` is the fifth page, "Clips": what is playing
+now (pack or built in, the clips' labels, the room used) or why not
+(no partition in this clock's table: flash over USB or the web
+installer), the PIN field, the file and Upload. The script is the
+system page's, its shared part split off. The upload: the credentials,
+the partition, the size, the first sector's header (magic, version,
+the length against `Content-Length`); then the pack is taken out of
+the table (`melody::install(None)`), a clip playing from it stopped
+and waited for, the scan stopped, and the body written a sector at a
+time with read-back and hashed as `ota::install` does, with its
+buffers. Then the mapped range's cache is invalidated and the pack
+parsed in place: one the clock would refuse at boot is refused now,
+its first sector erased, with the reason. On success the clock reboots
+(`heal::reboot`), so the settings, the pages and Home Assistant's
+options all see the new table from a clean start. A failed upload
+leaves the built-in clips until the next one.
+
+`/api` gets a read-only key `clips`: `pack` or `builtin`.
+
+**Scripts and CI.** `scripts/mkpack.py out file[:loop|:once][=Label]…`
+names and labels as `core/build.rs` does. `scripts/clips.sh <ip>
+[pack]` uploads with the token (the default pack built if none is
+named). `packs/` is ignored by git: `packs/clips-default.bin` and the
+local `packs/clips-local.bin`. A host test parses the file
+`CLIP_PACK_FILE` names, so the script's output is checked by the
+firmware's own parser; the CI builds the default pack, runs that test
+and publishes the file beside the OTA image; a release attaches
+`esp32clock-clips-<tag>.bin`. The web installer does not write it:
+the default build has the same three clips built in.
+
+Checks on the host: the pack round trip and every refusal, the table
+with and without a pack, the pages and the discovery payload with a
+full pack, both packs through `CLIP_PACK_FILE`. On a clock, for the
+user: the new table over USB, the boot line, `/clips`, an upload, the
+melodies on `/`, a preview of each; an OTA of this build onto a clock
+with the old table, which must say there is no partition and play the
+built-in three.
+
+**Changed while building, 2026-11-14.** The user: "we now should
+account for alarm melody if the clips are missing, since there is no
+built-in clips anymore, only beeper melodies. In this case, it should
+be set to 'beeps'". So `ALARM_CLIP` is empty by default
+(`DEFAULT_CLIPS`), the clips of a default build are its pack alone,
+and `Settings::from_record` reads a melody past the table's end as
+index 0, the beeps, where it used to land on the last melody. The
+value is in memory only until something is saved. With no clips built
+in, the web installer writes the default pack too (a fifth part at
+0x2E0000, which replaces a pack the clock had), and the CI runs the
+host tests a second time with the three clips built in, since the
+players' tests over real clips have none otherwise. The session's
+`.env` still exported `ALARM_CLIP` with Futurama: that build is
+1476 KB and does not fit the 1408 KB slot; the builds here were made
+with the variable unset.
+
+Sizes: the image 877 KB (1045 KB with the three built in), the main
+stack 49.9 KB, the default pack 171 862 bytes, the local one (eight
+clips) 700 557. Pages at their worst with a full pack of sixteen: the
+clock page 5443 of 5984, the clips page 3631, the discovery payload
+4542 of 4608.
+
+**On test-clock, 2026-11-14** (`v0.4-31-gd90b57d` plus this work):
+
+- By OTA onto the old table (the clock had Futurama built in and
+  `melody` at it): booted from `ota_1` at 0x200000, `clips: no
+  `clips` partition in the table: 0 clips built in`, `melody` read as
+  `beeps`, `/clips` says the table has no partition and has no upload,
+  `POST /clips` is `409`.
+- Over USB with the new table: `clips: partition at 0x2e0000, 1048576
+  bytes, holds no pack` (the old `ota_1`'s bytes are there).
+- `scripts/clips.sh test-clock.lan`: 10 s for the default pack, then
+  `clips: pack of 3 clips, 171862 of 1048576 bytes at 0x2e0000, mapped
+  at 0x3c6f0000, checked in 119 ms`, `"clips":"pack"`. Each of the
+  three previewed with `/play`: no underruns, no stray positions.
+- The local pack over it while Trantor was playing: the clip was cut,
+  31 s for 700 KB, `checked in 482 ms` at boot; the SID tune, Futurama
+  and the three PT3 modules previewed, clean lines for each.
+- Refused with the pack in use left alone: 20 KB of noise (`not a
+  clip pack`), the pack cut at 500 000 bytes (`length mismatch`), a
+  wrong token (`403`). A pack with one bit flipped is written, fails
+  its hash, the clock goes on with no clips, and the next boot says
+  `the pack at 0x2e0000 is refused: Hash`.
+- With the PIN (`scripts/pin.sh`, `Authorization: PIN`): the local
+  pack again, `200`. The scripts of `/clips` and `/system` pass `node
+  --check`. The clock was left with the local pack and `melody` back
+  at `futurama`, which a software reset kept.
+
+The boot's hash runs at about 1.4 MB/s, not the 3 MB/s guessed: half
+a second for the local pack, before the panel shows the time. The
+chip's SHA accelerator would shorten it; not done.
+
+Not run: the clips page in a browser (the PIN field, the progress
+bar, the wait for the clock to come back); the sound, on a clock with
+a buzzer; the web installer's fifth part and the release workflow,
+which run only on a tag; the access point.

@@ -53,3 +53,7 @@ sid/
 
 # ZX Spectrum modules for the PT3 player, and the clips made from them
 pt3/
+
+# Clip packs made by scripts/mkpack.py: the default one is built by the
+# CI, a local one holds music that may not be redistributed
+packs/

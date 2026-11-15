@@ -1,5 +1,5 @@
 # Build, lint and test on every push and pull request, and publish the
-# OTA image as a workflow artifact. The image is built with no network
+# OTA image and the default clip pack as workflow artifacts. The image is built with no network
 # (the clock boots as an access point), Vancouver time and the
 # API token `esp32clock`; the README's "Prebuilt image" section says how
 # to use it and what to change after the first boot.
@@ -34,6 +34,21 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Test the core crate on the host
         run: cargo host-test
+      # The default clip pack, read back by the parser the clock reads
+      # it with.
+      - name: Make the default clip pack and check it
+        run: |
+          scripts/clips.sh
+          CLIP_PACK_FILE=packs/clips-default.bin cargo host-test the_pack_file_parses -- --nocapture
+      # The older way, the clips built into the firmware: the players'
+      # tests over the repository's clips run only with clips built in.
+      - name: Test with the clips built in
+        run: ALARM_CLIP=clips/trantor.bpr,clips/halftime.xmc,clips/keygen.xmc cargo host-test
+      - uses: actions/upload-artifact@v6
+        with:
+          name: esp32clock-clips-${{ github.sha }}
+          path: packs/clips-default.bin
+          if-no-files-found: error
       - name: Clippy on the core crate and its tests
         run: cargo clippy -p esp32clock-core --target host-tuple --tests -- -D warnings
 

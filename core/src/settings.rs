@@ -430,7 +430,7 @@ pub struct Settings {
     pub hostname: Hostname,
     /// Days the alarm rings on: bit 0 Monday to bit 6 Sunday.
     pub alarm_days: u8,
-    /// Index into `melody::MELODIES`, or `melody::RANDOM`.
+    /// Index into the melody table (`melody::get`), or `melody::RANDOM`.
     pub melody: usize,
     /// Skip the next alarm that would ring, then clear. Not stored: a
     /// reboot clears it, and `to_record` leaves it out so toggling it
@@ -610,7 +610,7 @@ impl Settings {
             && (-TEMP_OFFSET_LIMIT_DC..=TEMP_OFFSET_LIMIT_DC).contains(&self.temp_offset_dc)
             && self.alarm_days != 0
             && self.alarm_days & !DAYS_ALL == 0
-            && self.melody <= melody::RANDOM
+            && (self.melody < melody::LIMIT || self.melody == melody::RANDOM)
             && self.wifi.is_valid()
             && valid_token(self.token.0.as_str())
             && self.mqtt.is_valid()
@@ -722,7 +722,10 @@ impl Settings {
         if version >= 5 {
             s.melody = match *r.get(RECORD_MELODY)? {
                 RECORD_MELODY_RANDOM => melody::RANDOM,
-                m => (m as usize).min(melody::MELODIES.len() - 1),
+                // A clip that is not there (another pack, none, a build
+                // without it): the beeps.
+                m if (m as usize) < melody::count() => m as usize,
+                _ => 0,
             };
         }
         if version >= 6 {
@@ -1037,7 +1040,17 @@ mod tests {
         assert_eq!(wild.map(|s| s.tz), Some(full().tz), "the old field is not checked in a version 11 record");
         // Indexes a newer image may have added land on the last entry.
         assert_eq!(with(&|r| r[1] = 200).map(|s| s.color), Some(PALETTE.len() - 1));
-        assert_eq!(with(&|r| r[RECORD_MELODY] = 200).map(|s| s.melody), Some(melody::MELODIES.len() - 1));
+        // A melody that is not in the table is the beeps: a clip of a
+        // pack that is gone, or of another build.
+        assert_eq!(with(&|r| r[RECORD_MELODY] = 200).map(|s| s.melody), Some(0));
+        assert_eq!(with(&|r| r[RECORD_MELODY] = melody::count() as u8).map(|s| s.melody), Some(0));
+        assert_eq!(with(&|r| r[RECORD_MELODY] = melody::count() as u8 - 1).map(|s| s.melody), Some(melody::count() - 1));
+        // With a pack in the table its clips are there to be named.
+        let last = melody::count() - melody::clip_count() + crate::pack::MAX_CLIPS - 1;
+        melody::install(Some(crate::pack::fullest()));
+        assert_eq!(with(&|r| r[RECORD_MELODY] = last as u8).map(|s| s.melody), Some(last));
+        assert_eq!(with(&|r| r[RECORD_MELODY] = last as u8 + 1).map(|s| s.melody), Some(0));
+        melody::install(None);
         // A record from a build with a higher current ceiling.
         if BRIGHTNESS_STEPS.len() < BRIGHTNESS_CHOICES.len() {
             assert_eq!(with(&|r| r[2] = BRIGHTNESS_CHOICES.len() as u8 - 1).map(|s| s.brightness), Some(BRIGHTNESS_STEPS.len() - 1));
@@ -1153,7 +1166,8 @@ mod tests {
         assert!(!Settings { color: PALETTE.len(), ..ok }.is_valid());
         assert!(!Settings { brightness: BRIGHTNESS_STEPS.len(), ..ok }.is_valid());
         assert!(Settings { melody: melody::RANDOM, ..ok }.is_valid());
-        assert!(!Settings { melody: melody::RANDOM + 1, ..ok }.is_valid());
+        assert!(!Settings { melody: melody::LIMIT, ..ok }.is_valid());
+        assert!(Settings { melody: melody::LIMIT - 1, ..ok }.is_valid(), "a pack's last clip, whichever table is in force");
         assert!(Settings { temp_offset_dc: TEMP_OFFSET_LIMIT_DC, ..ok }.is_valid());
         assert!(Settings { temp_offset_dc: -TEMP_OFFSET_LIMIT_DC, ..ok }.is_valid());
         assert!(!Settings { temp_offset_dc: TEMP_OFFSET_LIMIT_DC + 1, ..ok }.is_valid());

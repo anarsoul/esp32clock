@@ -1,9 +1,16 @@
-# ESP-IDF partition table for the clock: two OTA app slots and the
-# otadata that selects between them. nvs keeps espflash's default
-# offset so saved settings survive the repartition. See PLAN.md, M9.
-# Name,     Type, SubType, Offset,   Size,     Flags
-nvs,        data, nvs,     0x9000,   0x6000,
-phy_init,   data, phy,     0xF000,   0x1000,
-otadata,    data, ota,     0x10000,  0x2000,
-ota_0,      app,  ota_0,   0x20000,  0x1E0000,
-ota_1,      app,  ota_1,   0x200000, 0x1E0000,
+# ESP-IDF partition table for the clock: two OTA app slots, the
+# otadata that selects between them, and the clip pack. nvs keeps
+# espflash's default offset so saved settings survive the repartition.
+# See PLAN.md, M9, and "Clips in a partition of their own" for clips:
+# each app slot gave it half a megabyte (they were 0x1E0000, with ota_1
+# at 0x200000). Its subtype must be one esp-bootloader-esp-idf knows,
+# or every image that walks the table panics; it is found by its name.
+# A clock keeps the table it was flashed with over USB: the firmware
+# runs on the old one too, with no pack.
+# Name,     Type, SubType,   Offset,   Size,     Flags
+nvs,        data, nvs,       0x9000,   0x6000,
+phy_init,   data, phy,       0xF000,   0x1000,
+otadata,    data, ota,       0x10000,  0x2000,
+ota_0,      app,  ota_0,     0x20000,  0x160000,
+ota_1,      app,  ota_1,     0x180000, 0x160000,
+clips,      data, undefined, 0x2E0000, 0x100000,

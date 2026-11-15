@@ -284,20 +284,51 @@ The new image goes to the other slot; a failed or interrupted write
 leaves the running one in place, and a new image that cannot reach the
 network within three boots is rolled back. Settings are kept.
 
+### Clip packs
+
+The alarm melodies that are not notes (sampled sound, a ZX Spectrum
+beeper tune, tracker modules, Commodore 64 and AY tunes) are clips,
+and a clock's clips are a *clip pack* in a flash partition of their
+own, `clips`, one megabyte, so they can be changed without a new
+firmware. The default pack is the three clips in `clips/`; a release
+has it as `esp32clock-clips-<tag>.bin` and the web installer writes
+it.
+
+```
+scripts/mkpack.py packs/mine.bin clips/trantor.bpr wav/tune.pcm=My\ Tune   # up to 16 clips; see the script's head
+API_TOKEN='…' scripts/clips.sh <ip> packs/mine.bin    # upload; without a file, the default pack is made and sent
+espflash write-bin 0x2e0000 packs/mine.bin && espflash reset   # or over USB
+```
+
+or open `http://<ip>/clips`, which shows the pack in use and uploads
+one with the PIN from the panel. The clock checks a pack (a SHA-256
+at its end) when it is uploaded and at every boot, and restarts after
+an upload. The alarm sound is stored by its place in the list, so
+check it after changing packs; a sound that is no longer there is the
+beeps.
+
+A clock flashed before the partition existed keeps its old partition
+table through updates over the LAN: it runs the new firmware, with the
+note melodies only, until it is flashed once over USB or from the web
+installer (the settings survive both). `ALARM_CLIP=clips/trantor.bpr,…
+cargo build --release` still builds clips into the firmware, for such
+a clock; a pack, where there is one, takes their place.
+
 ### Prebuilt images
 
 The easiest first flash needs no toolchain: open
 <https://anarsoul.github.io/esp32clock/> in Chrome or Edge with the
 clock on USB, pick a release and press Install. The page is ESP Web
 Tools over Web Serial; it writes the bootloader, the partition table,
-an erased `otadata` and the firmware, leaving the settings partition
-alone, so a reflash keeps the settings unless you take the erase it
+an erased `otadata`, the firmware and the default clip pack, leaving
+the settings partition alone, so a reflash keeps the settings unless you take the erase it
 offers first. The [releases page](https://github.com/anarsoul/esp32clock/releases)
 has `esp32clock-<tag>.bin`, the whole flash from offset 0 for
 `espflash write-bin 0x0 esp32clock-<tag>.bin` (then `espflash reset`;
 this one covers the settings partition too and clears it), next to
 `esp32clock-ota-<tag>.bin`, the update image for `/system` and
-`scripts/ota.sh`. A release is made by pushing an annotated tag `v*`
+`scripts/ota.sh`, and `esp32clock-clips-<tag>.bin`, the default clip
+pack (see above; the whole-flash image does not include it). A release is made by pushing an annotated tag `v*`
 (`.github/workflows/release.yml`).
 
 Between releases, every push is built on GitHub Actions

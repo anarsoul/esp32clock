@@ -33,7 +33,7 @@ use esp32clock::buzzer;
 use esp32clock::clip;
 use esp32clock::settings::Settings;
 use esp32clock::net::Mode;
-use esp32clock::{buttons, carry, clock, dhcpd, display, dnsd, heal, http, mqtt, net, ota, scan, sensors, settings, storage};
+use esp32clock::{buttons, carry, clock, dhcpd, display, dnsd, heal, http, mqtt, net, ota, pack, scan, sensors, settings, storage};
 
 // The app descriptor the esp-idf bootloader requires, with the git
 // version in it so an image file says what it is before it is flashed.
@@ -136,6 +136,9 @@ async fn main(spawner: Spawner) -> ! {
     // Saved settings, so the first frame already has the user's colour.
     // Without a usable nvs partition they live in RAM for this boot.
     storage::init_flash(FlashStorage::new(peripherals.FLASH));
+    // The clip pack, if the table has a `clips` partition with one in
+    // it: before the settings, whose melody is held to the table.
+    pack::init();
     let mut store = storage::Store::open();
     let mut stored = None;
     if let Some(store) = store.as_mut() {

@@ -17,7 +17,7 @@
 //! read back under it, and `otadata` is switched under it; between those
 //! the body is awaited from the socket with nothing held.
 
-use core::sync::atomic::{AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::mutex::Mutex;
@@ -66,20 +66,24 @@ pub fn booted() -> Slot {
 /// A sector of image data, word aligned so `esp-storage` reads straight
 /// into it instead of through a buffer on the stack.
 #[repr(C, align(4))]
-struct Sector([u8; SECTOR]);
+pub(crate) struct Sector(pub(crate) [u8; SECTOR]);
 
-/// The buffers an upload needs, held by one listener at a time. `None`
-/// until `init`, or when the table has no OTA slots.
-struct Buffers {
-    table: [u8; PARTITION_TABLE_MAX_LEN],
-    sector: Sector,
-    check: Sector,
+/// The buffers an upload needs, held by one listener at a time: a
+/// firmware image's, or a clip pack's (`pack::install`). `None` until
+/// `init`.
+pub(crate) struct Buffers {
+    pub(crate) table: [u8; PARTITION_TABLE_MAX_LEN],
+    pub(crate) sector: Sector,
+    pub(crate) check: Sector,
 }
+
+/// Whether the table has OTA slots to write an image to.
+static OTA_LAYOUT: AtomicBool = AtomicBool::new(false);
 
 /// The buffers live in a `StaticCell` so they are zero-initialised RAM
 /// rather than 11 KB of image copied in at boot.
 static BUFFERS_CELL: StaticCell<Buffers> = StaticCell::new();
-static BUFFERS: Mutex<CriticalSectionRawMutex, Option<&'static mut Buffers>> = Mutex::new(None);
+pub(crate) static BUFFERS: Mutex<CriticalSectionRawMutex, Option<&'static mut Buffers>> = Mutex::new(None);
 
 /// Read the partition table once, remember the booted and selected
 /// slots, and roll back a new image that has not been confirmed in
@@ -138,10 +142,9 @@ pub fn init() {
         }
     }
 
-    if ota_layout {
-        let mut slot = BUFFERS.try_lock().expect("ota buffers lock at init");
-        *slot = Some(BUFFERS_CELL.init_with(|| Buffers { table, sector: Sector([0; SECTOR]), check: Sector([0; SECTOR]) }));
-    }
+    OTA_LAYOUT.store(ota_layout, Ordering::Relaxed);
+    let mut slot = BUFFERS.try_lock().expect("ota buffers lock at init");
+    *slot = Some(BUFFERS_CELL.init_with(|| Buffers { table, sector: Sector([0; SECTOR]), check: Sector([0; SECTOR]) }));
 }
 
 /// The running image has done something useful (a gateway probe
@@ -173,7 +176,10 @@ pub async fn install(first: &[u8], total: usize, body: &mut impl Read) -> Result
         return Err(refuse("400 Bad Request", "body too short for an image"));
     }
     let mut guard = BUFFERS.try_lock().map_err(|_| refuse("503 Service Unavailable", "an upload is in progress"))?;
-    let f = guard.as_mut().ok_or(refuse("500 Internal Server Error", "no OTA slots in the partition table"))?;
+    let f = guard
+        .as_mut()
+        .filter(|_| OTA_LAYOUT.load(Ordering::Relaxed))
+        .ok_or(refuse("500 Internal Server Error", "no OTA slots in the partition table"))?;
     let Buffers { table, sector, check } = &mut **f;
     // Where the image goes: the slot `otadata` would switch to, as an
     // absolute flash range, so that the sector writes need no updater.
@@ -197,7 +203,7 @@ pub async fn install(first: &[u8], total: usize, body: &mut impl Read) -> Result
 
     // The first sector is checked before anything is erased.
     let mut first = first;
-    let mut filled = fill(&mut sector.0, &mut first, body, SECTOR).await?;
+    let filled = fill(&mut sector.0, &mut first, body, SECTOR).await?;
     if sector.0[0] != IMAGE_MAGIC || u32::from_le_bytes(sector.0[DESC_OFFSET..DESC_OFFSET + 4].try_into().unwrap()) != DESC_MAGIC {
         return Err(refuse("400 Bad Request", "not an application image"));
     }
@@ -208,53 +214,15 @@ pub async fn install(first: &[u8], total: usize, body: &mut impl Read) -> Result
     info!("ota: writing image {version} of {total} bytes to {}", slot.name());
 
     scan::stop().await;
-    let mut written = 0usize;
-    let mut hasher = Sha256::new();
-    let mut tail = [0u8; HASH_LEN];
-    let result = async {
-        loop {
-            // Everything before the last 32 bytes is hashed; those 32 are
-            // the hash to compare with, wherever they fall in the sectors.
-            hash_chunk(&mut hasher, &mut tail, &sector.0[..filled], written, total);
-            // Pad a short last sector to the write granule with erased bytes.
-            let len = filled.div_ceil(4) * 4;
-            sector.0[filled..len].fill(0xFF);
-            let at = base + written as u32;
-            with_flash(|flash| {
-                flash
-                    .erase(at, at + SECTOR as u32)
-                    .and_then(|()| flash.write_nor(at, &sector.0[..len]))
-                    .and_then(|()| flash.read_nor(at, &mut check.0[..len]))
-            })
-            .map_err(|e| {
-                error!("ota: flash error at {at:#x}: {e:?}");
-                refuse("500 Internal Server Error", "flash write failed")
-            })?;
-            if check.0[..len] != sector.0[..len] {
-                error!("ota: read-back mismatch at {at:#x}");
-                return Err(refuse("500 Internal Server Error", "flash read-back mismatch"));
-            }
-            written += filled;
-            if written >= total {
-                break;
-            }
-            filled = fill(&mut sector.0, &mut first, body, SECTOR.min(total - written)).await?;
+    let result = write_hashed(sector, check, base, filled, &mut first, total, body).await;
+    let written = match result {
+        Ok(written) => written,
+        Err(e) => {
+            warn!("ota: upload of {total} bytes failed: {}; the running image stays", e.text);
+            scan::resume();
+            return Err(e);
         }
-        Ok(())
-    }
-    .await;
-    let result = result.and_then(|()| {
-        if hasher.finalize()[..] == tail[..] {
-            Ok(())
-        } else {
-            Err(refuse("400 Bad Request", "image hash mismatch: truncated or corrupt"))
-        }
-    });
-    if let Err(e) = result {
-        warn!("ota: upload failed after {written} of {total} bytes: {}; the running image stays", e.text);
-        scan::resume();
-        return Err(e);
-    }
+    };
     let activated = with_flash(|flash| OtaUpdater::new(flash, table).and_then(|mut u| u.activate_next_partition()));
     if let Err(e) = activated {
         error!("ota: cannot select {}: {e:?}", slot.name());
@@ -265,9 +233,64 @@ pub async fn install(first: &[u8], total: usize, body: &mut impl Read) -> Result
     Ok(Done { slot, bytes: written, version })
 }
 
+/// Write an upload of `total` bytes to the flash at `base`, a sector
+/// at a time, each erased, written and read back: `sector` holds the
+/// first `filled` bytes already, the rest comes from `first` and then
+/// `body`. The last 32 bytes are the SHA-256 of all before them, as
+/// espflash ends an image and `scripts/mkpack.py` a clip pack; a
+/// mismatch is an error, with the flash written all the same. Returns
+/// the bytes written. The caller has stopped the scan.
+pub(crate) async fn write_hashed(
+    sector: &mut Sector,
+    check: &mut Sector,
+    base: u32,
+    filled: usize,
+    first: &mut &[u8],
+    total: usize,
+    body: &mut impl Read,
+) -> Result<usize, Refusal> {
+    let mut filled = filled;
+    let mut written = 0usize;
+    let mut hasher = Sha256::new();
+    let mut tail = [0u8; HASH_LEN];
+    loop {
+        // Everything before the last 32 bytes is hashed; those 32 are
+        // the hash to compare with, wherever they fall in the sectors.
+        hash_chunk(&mut hasher, &mut tail, &sector.0[..filled], written, total);
+        // Pad a short last sector to the write granule with erased bytes.
+        let len = filled.div_ceil(4) * 4;
+        sector.0[filled..len].fill(0xFF);
+        let at = base + written as u32;
+        with_flash(|flash| {
+            flash
+                .erase(at, at + SECTOR as u32)
+                .and_then(|()| flash.write_nor(at, &sector.0[..len]))
+                .and_then(|()| flash.read_nor(at, &mut check.0[..len]))
+        })
+        .map_err(|e| {
+            error!("upload: flash error at {at:#x}: {e:?}");
+            refuse("500 Internal Server Error", "flash write failed")
+        })?;
+        if check.0[..len] != sector.0[..len] {
+            error!("upload: read-back mismatch at {at:#x}");
+            return Err(refuse("500 Internal Server Error", "flash read-back mismatch"));
+        }
+        written += filled;
+        if written >= total {
+            break;
+        }
+        filled = fill(&mut sector.0, first, body, SECTOR.min(total - written)).await?;
+    }
+    if hasher.finalize()[..] == tail[..] {
+        Ok(written)
+    } else {
+        Err(refuse("400 Bad Request", "hash mismatch: truncated or corrupt"))
+    }
+}
+
 /// Fill `buf[..want]` from what is left of `first`, then the body. The
 /// number of bytes read is `want` unless the body ends early.
-async fn fill(buf: &mut [u8], first: &mut &[u8], body: &mut impl Read, want: usize) -> Result<usize, Refusal> {
+pub(crate) async fn fill(buf: &mut [u8], first: &mut &[u8], body: &mut impl Read, want: usize) -> Result<usize, Refusal> {
     let head = first.len().min(want);
     buf[..head].copy_from_slice(&first[..head]);
     *first = &first[head..];

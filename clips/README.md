@@ -1,12 +1,12 @@
 # Clips
 
-The clips the firmware is built with as extra alarm melodies. A build
-takes all three unless `ALARM_CLIP` says otherwise (see `AGENTS.md`):
+The clips of the default clip pack, the extra alarm melodies a clock
+has in its `clips` partition (see the README's "Clip packs"):
 
 ```
-cargo build --release                                  # these three
-ALARM_CLIP=clips/trantor.bpr cargo build --release     # one of them
-ALARM_CLIP= cargo build --release                      # none
+scripts/clips.sh                                       # packs/clips-default.bin, these three
+scripts/mkpack.py packs/one.bin clips/trantor.bpr      # a pack of one of them
+ALARM_CLIP=clips/trantor.bpr cargo build --release     # or built into the firmware, the older way
 ```
 
 They are other people's music and are **not** covered by the project's

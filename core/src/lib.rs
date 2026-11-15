@@ -28,6 +28,7 @@ pub mod http;
 pub mod melody;
 pub mod mqtt;
 pub mod ota;
+pub mod pack;
 pub mod panel;
 pub mod pt3;
 pub mod sensors;

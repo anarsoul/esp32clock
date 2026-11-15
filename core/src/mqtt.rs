@@ -356,7 +356,7 @@ pub fn write_discovery(out: &mut impl core::fmt::Write, d: &Device<'_>) -> core:
     c.open("melody", "select", "Melody")?;
     c.template("melody")?;
     c.set("melody")?;
-    c.options(melody::MELODIES.iter().map(|m| m.name).chain([melody::RANDOM_NAME]))?;
+    c.options(melody::all().map(|m| m.name).chain([melody::RANDOM_NAME]))?;
     c.icon("music")?;
     c.close()?;
 
@@ -458,6 +458,7 @@ mod tests {
             rssi: Some(-60),
             mqtt: Link::Connected,
             ringing: false,
+            clips_room: None,
             local: None,
         }
     }
@@ -512,6 +513,16 @@ mod tests {
         let name = "h".repeat(HOSTNAME_MAX);
         let version = "v0.1.0-123-gabcdef0-dirty-and-long";
         let d = Device { id: &id, name: &name, ip: Some([255, 255, 255, 255]), version };
+        // The fullest clip pack's melodies among the options: sixteen
+        // names at their limit. Measured, then checked over the table
+        // without a pack below.
+        melody::install(Some(crate::pack::fullest()));
+        let mut full = String::new();
+        write_discovery(&mut full, &d).unwrap();
+        println!("discovery payload with a full pack: {} bytes of {DISCOVERY_MAX}", full.len());
+        assert!(full.len() <= DISCOVERY_MAX, "{} bytes", full.len());
+        serde_json::from_str::<Value>(&full).unwrap_or_else(|e| panic!("{e}: {full}"));
+        melody::install(None);
         let mut out = String::new();
         write_discovery(&mut out, &d).unwrap();
         println!("discovery payload: {} bytes of {DISCOVERY_MAX}", out.len());

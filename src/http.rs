@@ -48,7 +48,7 @@ use crate::buzzer;
 use crate::config::HTTP_PORT;
 use crate::form::{self, Allow, FormError, HealStamp, LocalNow, Page, Status};
 use crate::net::{self, Mode};
-use crate::{auth, clock, display, heal, mqtt, ota, sensors, settings};
+use crate::{auth, clock, display, heal, mqtt, ota, pack, sensors, settings};
 
 /// The tab icon: the panel as pixel art, a 32 px `12:34` and a 16 px
 /// `1:23` as PNG entries in one ICO, served at the path browsers ask
@@ -235,7 +235,7 @@ enum NoRequest {
 /// length there means none (found on the bench, 2026-11-08, when the
 /// first `411` rule refused `scripts/reload.sh`).
 fn reads_body(path: &str) -> bool {
-    matches!(path, "/" | "/settings" | "/ha" | "/api" | "/play" | "/token" | "/ota")
+    matches!(path, "/" | "/settings" | "/ha" | "/api" | "/play" | "/token" | "/ota" | "/clips")
 }
 
 /// Read the head and the body. `Err` for anything that is not a request
@@ -275,7 +275,7 @@ async fn read_request<'a>(socket: &mut TcpSocket<'_>, buf: &'a mut [u8; REQUEST_
             (Method::Post, None) if reads_body(head.path) => return Err(NoRequest::Refuse("411 Length Required")),
             (Method::Post, None) => 0,
         };
-        (head.method == Method::Post && head.path == "/ota", content_length)
+        (head.method == Method::Post && matches!(head.path, "/ota" | "/clips"), content_length)
     };
     if !upload {
         if content_length > BODY_MAX || head_end + content_length > buf.len() {
@@ -392,6 +392,7 @@ pub fn status() -> Status {
         rssi: net::rssi(),
         mqtt: mqtt::link(),
         ringing: display::ringing(),
+        clips_room: pack::room(),
         local: now.map(|n| {
             let t = clock::local_time(n);
             LocalNow { weekday: t.weekday, hour: t.hour, minute: t.minute, offset_secs: t.offset_secs, dst: clock::period_at(n).1 }
@@ -545,6 +546,12 @@ fn respond(out: &mut Response, req: &Request<'_>, body: &[u8]) -> Result<Then, c
             // this `GET`, which any site's `<img>` can send.
             status_line(out, "200 OK", "text/html; charset=utf-8")?;
             form::write_system_page(out, settings::get().hostname.as_str(), &status(), auth::token_enabled())?;
+        }
+        (Method::Get, "/clips") => {
+            // The clip pack and its upload, with the PIN as the system
+            // page's: this `GET` issues none either.
+            status_line(out, "200 OK", "text/html; charset=utf-8")?;
+            form::write_clips_page(out, settings::get().hostname.as_str(), &status())?;
         }
         (Method::Get, "/update" | "/token") => {
             // The pages the system page replaced: an older README, the
@@ -751,8 +758,15 @@ async fn upload(out: &mut Response, req: &Request<'_>, socket: &mut TcpSocket<'_
         return Ok(Then::Close);
     };
     let mut body = Counting { socket, taken: 0 };
+    // What was written, for the answer: a firmware image, or a clip
+    // pack (`POST /clips`), after either of which the clock restarts.
+    enum Written {
+        Image(ota::Done),
+        Clips(pack::Done),
+    }
     let result = match auth::token_or_pin(req.authorization) {
-        Ok(()) => ota::install(first, total, &mut body).await,
+        Ok(()) if req.path == "/clips" => pack::install(first, total, &mut body).await.map(Written::Clips),
+        Ok(()) => ota::install(first, total, &mut body).await.map(Written::Image),
         Err(e) => {
             warn!("http: upload refused: {}", e.text);
             Err(e)
@@ -765,10 +779,15 @@ async fn upload(out: &mut Response, req: &Request<'_>, socket: &mut TcpSocket<'_
         drain(socket, out, total.saturating_sub(consumed)).await;
     }
     match result {
-        Ok(done) => {
+        Ok(Written::Image(done)) => {
             status_line(out, "200 OK", "text/plain")?;
             writeln!(out, "updated: {} written to {}, {} bytes; rebooting", done.version, done.slot.name(), done.bytes)?;
             Ok(Then::NewImage)
+        }
+        Ok(Written::Clips(done)) => {
+            status_line(out, "200 OK", "text/plain")?;
+            writeln!(out, "clips: a pack of {} clips written, {} bytes; rebooting", done.clips, done.bytes)?;
+            Ok(Then::Reload)
         }
         Err(e) => {
             status_line(out, e.status, "text/plain")?;

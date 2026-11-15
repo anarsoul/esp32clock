@@ -9,6 +9,8 @@
 //! notes per minute, `Note::ms` gives the duration. Rests are notes at
 //! 0 Hz, written out so the rhythm is on the page and not in the player.
 
+use crate::pack::{self, Pack};
+
 /// One note, or a rest at 0 Hz.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Note {
@@ -54,15 +56,15 @@ pub struct Melody {
     pub notes: &'static [Note],
     /// Silence before the melody repeats while ringing.
     pub repeat_gap_ms: u16,
-    /// A clip: no notes, the sound is `CLIP_DATA` at this index.
+    /// A clip: no notes, the sound is `clip_data` at this index.
     pub clip: Option<usize>,
 }
 
 impl Melody {
     /// Length of one pass, without the repeat gap.
-    pub const fn duration_ms(&self) -> u32 {
+    pub fn duration_ms(&self) -> u32 {
         if let Some(k) = self.clip {
-            return crate::clip::duration_ms(CLIP_DATA[k]);
+            return clip_data(k).map_or(0, crate::clip::duration_ms);
         }
         let mut total = 0;
         let mut i = 0;
@@ -329,9 +331,6 @@ pub const JINGLE_BELLS: Melody = Melody {
 // The data is a `static`, so the image holds it once.
 include!(concat!(env!("OUT_DIR"), "/clips.rs"));
 
-/// Whether any clip was built in (`ALARM_CLIP` at build time).
-pub const HAS_CLIP: bool = CLIP_COUNT != 0;
-
 const fn same(a: &str, b: &str) -> bool {
     let (a, b) = (a.as_bytes(), b.as_bytes());
     if a.len() != b.len() {
@@ -350,13 +349,14 @@ const fn same(a: &str, b: &str) -> bool {
 /// The tunes written as notes.
 const TUNES: [Melody; 9] = [BEEPS, TWINKLE, ODE_TO_JOY, FRERE_JACQUES, MORNING_MOOD, WESTMINSTER, REVEILLE, FUR_ELISE, JINGLE_BELLS];
 
-/// Every melody, in the order the page lists them. The settings index
-/// points into this table; `beeps` first so the default is index 0,
-/// and new tunes go at the end so stored indexes keep their meaning.
-/// The clips of a build that has any come last, in `ALARM_CLIP`'s
-/// order: a record that names one, read by a build without it, lands
-/// on the last melody there is.
-pub const MELODIES: &[Melody] = &{
+/// The note melodies and the clips built in, in the order the page
+/// lists them: the table of a clock with no clip pack. The settings
+/// index points into the table in force (`get`); `beeps` first so the
+/// default is index 0, and new tunes go at the end so stored indexes
+/// keep their meaning. The clips come last, in `ALARM_CLIP`'s order,
+/// or the pack's: a record that names one that is not there, the pack
+/// gone or another in its place, is read as the beeps.
+const BUILT_IN: &[Melody] = &{
     let mut all = [BEEPS; TUNES.len() + CLIP_COUNT];
     let mut i = 0;
     while i < TUNES.len() {
@@ -367,7 +367,7 @@ pub const MELODIES: &[Melody] = &{
     // (`!=` and not `<`: clippy calls `k < 0` absurd in a build with no clip.)
     while k != CLIP_COUNT {
         let (name, label) = CLIP_NAMES[k];
-        // A second of sound at least, room left in the 1920 KB slot, and
+        // A second of sound at least, room left in the app slot, and
         // a name of its own, or the API could not pick it.
         assert!(crate::clip::duration_ms(CLIP_DATA[k]) >= 1000 && CLIP_DATA[k].len() <= 1_000_000, "ALARM_CLIP: a clip must be a second of sound at least and 1 MB at most");
         assert!(!crate::clip::is_old_beeper(CLIP_DATA[k]), "ALARM_CLIP: a beeper clip of the first format (BPR1); convert it again with scripts/zxbeeper.py");
@@ -377,22 +377,109 @@ pub const MELODIES: &[Melody] = &{
             assert!(!same(all[j].name, name) && !same(name, RANDOM_NAME), "ALARM_CLIP: two melodies with one name; rename the file");
             j += 1;
         }
-        all[TUNES.len() + k] = Melody { name, label, bpm: 120, notes: &[], repeat_gap_ms: 1500, clip: Some(k) };
+        all[TUNES.len() + k] = clip_melody(name, label, k);
         k += 1;
     }
     all
 };
 
-/// The setting value for "a different tune each time": one past the
-/// table. `pick` turns it into a tune when the buzzer starts.
-pub const RANDOM: usize = MELODIES.len();
+/// Clip `k` as a melody.
+const fn clip_melody(name: &'static str, label: &'static str, k: usize) -> Melody {
+    Melody { name, label, bpm: 120, notes: &[], repeat_gap_ms: 1500, clip: Some(k) }
+}
+
+// The clip pack in force, if the `clips` partition holds one
+// (`src/pack.rs` installs it at boot): its clips are then the table's,
+// in place of the built-in ones. The tests run in parallel and each
+// installs its own, so theirs is a cell a thread.
+#[cfg(not(test))]
+static INSTALLED: critical_section::Mutex<core::cell::Cell<Option<Pack<'static>>>> = critical_section::Mutex::new(core::cell::Cell::new(None));
+#[cfg(test)]
+thread_local! {
+    static INSTALLED: core::cell::Cell<Option<Pack<'static>>> = const { core::cell::Cell::new(None) };
+}
+
+/// Put a pack's clips in the table in place of the built-in ones, or
+/// with `None` take them out again: before an upload overwrites the
+/// partition the pack is read from.
+pub fn install(pack: Option<Pack<'static>>) {
+    #[cfg(not(test))]
+    critical_section::with(|cs| INSTALLED.borrow(cs).set(pack));
+    #[cfg(test)]
+    INSTALLED.with(|p| p.set(pack));
+}
+
+/// The pack in force.
+pub fn pack() -> Option<Pack<'static>> {
+    #[cfg(not(test))]
+    return critical_section::with(|cs| INSTALLED.borrow(cs).get());
+    #[cfg(test)]
+    INSTALLED.with(|p| p.get())
+}
+
+/// The number of clips in the table: the pack's, or those built in.
+pub fn clip_count() -> usize {
+    pack().map_or(CLIP_COUNT, |p| p.count())
+}
+
+/// The data of clip `k`, the index a clip's `Melody` carries.
+pub fn clip_data(k: usize) -> Option<&'static [u8]> {
+    match pack() {
+        Some(p) => p.clip(k).map(|c| c.data),
+        None => CLIP_DATA.get(k).copied(),
+    }
+}
+
+/// Whether a ringing alarm plays clip `k` round and round with no gap.
+pub fn clip_loops(k: usize) -> bool {
+    match pack() {
+        Some(p) => p.clip(k).is_some_and(|c| c.loops),
+        None => CLIP_LOOPS.get(k).copied().unwrap_or(false),
+    }
+}
+
+/// The number of melodies in the table.
+pub fn count() -> usize {
+    TUNES.len() + clip_count()
+}
+
+/// More melodies than any table has: what a settings index is held
+/// under, whichever table is in force when it is checked.
+pub const LIMIT: usize = TUNES.len() + larger(CLIP_COUNT, pack::MAX_CLIPS);
+
+const fn larger(a: usize, b: usize) -> usize {
+    if a > b { a } else { b }
+}
+
+/// The setting value for "a different tune each time": out of any
+/// table's reach. `pick` turns it into a tune when the buzzer starts.
+pub const RANDOM: usize = usize::MAX;
 
 /// The API name of `RANDOM`.
 pub const RANDOM_NAME: &str = "random";
 
+/// Whether a clip of a pack may not have this name: a note melody's, or
+/// the random draw's.
+pub fn is_reserved(name: &str) -> bool {
+    name == RANDOM_NAME || TUNES.iter().any(|m| m.name == name)
+}
+
 /// The melody at a settings index, falling back to the beeps.
-pub fn get(index: usize) -> &'static Melody {
-    MELODIES.get(index).unwrap_or(&MELODIES[0])
+pub fn get(index: usize) -> Melody {
+    if index < TUNES.len() {
+        return TUNES[index];
+    }
+    let k = index - TUNES.len();
+    match pack() {
+        Some(p) => p.clip(k).map(|c| clip_melody(c.name, c.label, k)),
+        None => BUILT_IN.get(index).copied(),
+    }
+    .unwrap_or(TUNES[0])
+}
+
+/// Every melody of the table, in order.
+pub fn all() -> impl Iterator<Item = Melody> {
+    (0..count()).map(get)
 }
 
 /// The API name of a setting value: a melody's name, or `random`.
@@ -405,7 +492,7 @@ pub fn index_of(name: &str) -> Option<usize> {
     if name == RANDOM_NAME {
         return Some(RANDOM);
     }
-    MELODIES.iter().position(|m| m.name == name)
+    all().position(|m| m.name == name)
 }
 
 /// The melody to play for a setting value. A melody's index is itself.
@@ -416,7 +503,7 @@ pub fn pick(index: usize, random: u32, avoid: Option<usize>) -> usize {
     if index != RANDOM {
         return index;
     }
-    let tunes = MELODIES.len() - 1;
+    let tunes = count() - 1;
     let mut i = 1 + random as usize % tunes;
     if Some(i) == avoid {
         i = 1 + i % tunes;
@@ -430,8 +517,9 @@ mod tests {
 
     #[test]
     fn every_tune_is_playable() {
-        assert_eq!(MELODIES[0].name, "beeps");
-        for (i, m) in MELODIES.iter().enumerate() {
+        assert_eq!(get(0).name, "beeps");
+        assert!(pack().is_none());
+        for (i, m) in all().enumerate() {
             assert!(m.name.bytes().all(|b| b.is_ascii_lowercase() || b == b'_'), "{}: the API name", m.name);
             if let Some(k) = m.clip {
                 assert!(i == TUNES.len() + k && m.notes.is_empty(), "the clips come last, in order");
@@ -463,9 +551,9 @@ mod tests {
                 assert!((2_000..=40_000).contains(&ms), "{}: {ms} ms", m.name);
             }
         }
-        assert_eq!(MELODIES.iter().filter(|m| m.clip.is_some()).count(), CLIP_COUNT);
-        assert_eq!(MELODIES.len(), 9 + CLIP_COUNT);
-        let names: Vec<&str> = MELODIES.iter().map(|m| m.name).collect();
+        assert_eq!(all().filter(|m| m.clip.is_some()).count(), CLIP_COUNT);
+        assert_eq!((count(), BUILT_IN.len()), (9 + CLIP_COUNT, 9 + CLIP_COUNT));
+        let names: Vec<&str> = all().map(|m| m.name).collect();
         let mut sorted = names.clone();
         sorted.sort_unstable();
         sorted.dedup();
@@ -486,7 +574,7 @@ mod tests {
 
     #[test]
     fn names_round_trip() {
-        for (i, m) in MELODIES.iter().enumerate() {
+        for (i, m) in all().enumerate() {
             assert_eq!(index_of(m.name), Some(i));
             assert_eq!(name(i), m.name);
             assert_eq!(get(i).name, m.name);
@@ -495,30 +583,66 @@ mod tests {
         assert_eq!(name(RANDOM), RANDOM_NAME);
         assert_eq!(index_of("9"), None);
         assert_eq!(index_of(""), None);
-        assert_eq!(get(99).name, MELODIES[0].name, "out of range falls back to the beeps");
+        assert_eq!(get(99).name, "beeps", "out of range falls back to the beeps");
     }
 
     #[test]
     fn random_pick_reaches_every_tune_but_the_beeps() {
-        for i in 0..MELODIES.len() {
+        random_pick();
+        // And over a pack's table, which is longer.
+        install(Some(pack::fullest()));
+        random_pick();
+    }
+
+    fn random_pick() {
+        for i in 0..count() {
             assert_eq!(pick(i, 12345, Some(i)), i, "a fixed index is itself");
         }
-        let mut seen = [false; MELODIES.len()];
+        let mut seen = vec![false; count()];
         let mut r: u32 = 1;
         for _ in 0..1000 {
             r = r.wrapping_mul(1_103_515_245).wrapping_add(12_345);
             let i = pick(RANDOM, r, None);
-            assert!(i >= 1 && i < MELODIES.len());
+            assert!(i >= 1 && i < count());
             seen[i] = true;
         }
         assert!(!seen[0] && seen[1..].iter().all(|&s| s), "{seen:?}");
-        for avoid in 1..MELODIES.len() {
+        for avoid in 1..count() {
             for r in 0..100 {
                 assert_ne!(pick(RANDOM, r, Some(avoid)), avoid);
             }
         }
         // The last tune is avoided by wrapping to the first.
-        let tunes = MELODIES.len() - 1;
+        let tunes = count() - 1;
         assert_eq!(pick(RANDOM, (tunes - 1) as u32, Some(tunes)), 1);
+    }
+
+    /// A pack's clips take the built-in ones' place after the note
+    /// melodies, and leave it again.
+    #[test]
+    fn a_pack_replaces_the_built_in_clips() {
+        let built_in: Vec<&str> = all().map(|m| m.name).collect();
+        let data = pack::build(&[("alpha", "Alpha", true, &pack::tests::SECOND), ("omega", "The Omega", false, &[127; 16_000])]);
+        install(Some(Pack::parse(Vec::leak(data)).unwrap()));
+        assert_eq!((count(), clip_count()), (TUNES.len() + 2, 2));
+        let names: Vec<&str> = all().map(|m| m.name).collect();
+        assert_eq!(names[..TUNES.len()], built_in[..TUNES.len()], "the note melodies keep their indexes");
+        assert_eq!(names[TUNES.len()..], ["alpha", "omega"]);
+        let m = get(TUNES.len() + 1);
+        assert_eq!((m.name, m.label, m.clip, m.notes.len()), ("omega", "The Omega", Some(1), 0));
+        assert_eq!(m.duration_ms(), 2000);
+        assert_eq!((clip_loops(0), clip_loops(1), clip_loops(2)), (true, false, false));
+        assert_eq!(clip_data(1), Some(&[127u8; 16_000][..]));
+        assert!(clip_data(2).is_none());
+        assert_eq!((index_of("omega"), index_of("random")), (Some(TUNES.len() + 1), Some(RANDOM)));
+        assert_eq!(name(TUNES.len()), "alpha");
+        assert_eq!(get(TUNES.len() + 2).name, "beeps", "past the pack's clips");
+        if let Some((built_in, _)) = CLIP_NAMES.first() {
+            assert_eq!(index_of(built_in), None, "the built-in clips are out of the table");
+        }
+        install(None);
+        assert_eq!(all().map(|m| m.name).collect::<Vec<_>>(), built_in);
+        assert!(count() <= LIMIT && TUNES.len() + pack::MAX_CLIPS <= LIMIT);
+        assert!(is_reserved("beeps") && is_reserved("random") && !is_reserved("alpha"));
     }
 }

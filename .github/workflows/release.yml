@@ -1,6 +1,6 @@
 # A release from a `v*` tag: the firmware with the prebuilt settings
-# (the same as ci.yml), the OTA image for `/update` and the merged image
-# for the web flasher, attached to the GitHub release; then the flasher
+# (the same as ci.yml), the OTA image for `/update`, the merged image
+# for espflash and the default clip pack, attached to the GitHub release; then the flasher
 # page in docs/ with the release's manifest and images deployed to the
 # gh-pages branch, keeping earlier releases, which the page offers in a
 # list. The firmware version comes from `git describe`, which sees
@@ -48,6 +48,8 @@ jobs:
       # A tag never publishes a build the CI would have failed.
       - name: Test the core crate on the host
         run: cargo host-test
+      - name: Test with the clips built in
+        run: ALARM_CLIP=clips/trantor.bpr,clips/halftime.xmc,clips/keygen.xmc cargo host-test
       - name: Build
         run: cargo build --release
       - name: Clippy
@@ -73,6 +75,14 @@ jobs:
           dd if="images/esp32clock-${GITHUB_REF_NAME}.bin" of=images/bootloader.bin bs=4096 count=8 status=none
           dd if="images/esp32clock-${GITHUB_REF_NAME}.bin" of=images/partition-table.bin bs=4096 skip=8 count=1 status=none
           head -c 8192 /dev/zero | tr '\0' '\377' > images/otadata.bin
+          # The default clip pack, for the `clips` partition: the Clips
+          # page, scripts/clips.sh or `espflash write-bin 0x2e0000`. The
+          # firmware has no clips built in, so the web installer writes
+          # it too. Checked by the parser the clock reads it with.
+          scripts/mkpack.py "images/esp32clock-clips-${GITHUB_REF_NAME}.bin" \
+            clips/trantor.bpr clips/halftime.xmc clips/keygen.xmc
+          CLIP_PACK_FILE="images/esp32clock-clips-${GITHUB_REF_NAME}.bin" \
+            cargo host-test the_pack_file_parses -- --nocapture
           ls -l images
       - uses: actions/upload-artifact@v6
         with:
@@ -100,9 +110,21 @@ jobs:
                 espflash write-bin 0x0 esp32clock-${{ github.ref_name }}.bin
                 espflash reset
 
-            Update a running clock from `http://<ip>/update` with
+            Update a running clock from `http://<ip>/system` with
             `esp32clock-ota-${{ github.ref_name }}.bin`, or with
             `API_TOKEN=… scripts/ota.sh <ip> esp32clock-ota-${{ github.ref_name }}.bin`.
+
+            The sampled alarm sounds are a clip pack in a partition of
+            their own, `esp32clock-clips-${{ github.ref_name }}.bin`:
+            the web installer writes it; after espflash, upload it from
+            `http://<ip>/clips` or write it with
+
+                espflash write-bin 0x2e0000 esp32clock-clips-${{ github.ref_name }}.bin
+                espflash reset
+
+            A clock flashed before this release has no such partition
+            until it is flashed again over USB or from the web installer:
+            updated over the air it has the note melodies only.
 
             The images carry no network (the clock boots as its own access
             point, `clock-xxxx`, password `esp32clock`, setup form at
@@ -123,9 +145,11 @@ jobs:
       - name: Stage the release for the page
         run: |
           TAG="$GITHUB_REF_NAME"
-          # Four parts at their offsets; nvs (0x9000) is not among them.
+          # Five parts at their offsets; nvs (0x9000) is not among them.
+          # The last is the default clip pack at the `clips` partition
+          # (0x2E0000), which replaces a pack the clock had.
           manifest() {
-            jq -n --arg version "${TAG#v}" --arg app "$1" '{
+            jq -n --arg version "${TAG#v}" --arg app "$1" --arg clips "$2" '{
               name: "esp32clock",
               version: $version,
               new_install_prompt_erase: true,
@@ -134,21 +158,23 @@ jobs:
                 {path: "bootloader.bin", offset: 0},
                 {path: "partition-table.bin", offset: 32768},
                 {path: "otadata.bin", offset: 65536},
-                {path: $app, offset: 131072}
+                {path: $app, offset: 131072},
+                {path: $clips, offset: 3014656}
               ]}]
             }'
           }
           # The release under its tag, as the page's list offers it.
           mkdir -p "docs/$TAG"
-          cp images/bootloader.bin images/partition-table.bin images/otadata.bin "images/esp32clock-ota-$TAG.bin" "docs/$TAG/"
-          manifest "esp32clock-ota-$TAG.bin" > "docs/$TAG/manifest.json"
+          cp images/bootloader.bin images/partition-table.bin images/otadata.bin "images/esp32clock-ota-$TAG.bin" "images/esp32clock-clips-$TAG.bin" "docs/$TAG/"
+          manifest "esp32clock-ota-$TAG.bin" "esp32clock-clips-$TAG.bin" > "docs/$TAG/manifest.json"
           # The same under fixed names as the fallback when the page
           # cannot ask GitHub for the list; keep_files below leaves earlier
           # tags in place, and these names are overwritten each release.
           mkdir -p docs/latest
           cp images/bootloader.bin images/partition-table.bin images/otadata.bin docs/latest/
           cp "images/esp32clock-ota-$TAG.bin" docs/latest/esp32clock-ota.bin
-          manifest "esp32clock-ota.bin" > docs/latest/manifest.json
+          cp "images/esp32clock-clips-$TAG.bin" docs/latest/esp32clock-clips.bin
+          manifest "esp32clock-ota.bin" "esp32clock-clips.bin" > docs/latest/manifest.json
           cat "docs/$TAG/manifest.json"
       - uses: peaceiris/actions-gh-pages@v4
         with:
