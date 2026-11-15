@@ -736,8 +736,9 @@ impl Page {
     const fn label(self) -> &'static str {
         match self {
             Page::Clock => "Clock",
-            Page::Settings => "Settings",
-            Page::HomeAssistant => "Home Assistant",
+            Page::Settings => "General",
+            // Short: five names must fit one line of a phone.
+            Page::HomeAssistant => "HA",
             Page::Clips => "Clips",
             Page::System => "System",
         }
@@ -911,7 +912,7 @@ pub fn write_ha_page(
     write_top(out, s.hostname.as_str(), Page::HomeAssistant, false, error)?;
     write!(
         out,
-        "<p>The clock announces itself to Home Assistant through an MQTT broker, which must speak MQTT 5; nothing is typed there.</p>\
+        "<p>Enter your MQTT broker (MQTT 5) and the clock shows up in Home Assistant by itself.</p>\
 <form method=post action=/ha><fieldset><legend>MQTT broker</legend>\
 <label>Host, empty for none <input type=text name=mqtt_host maxlength={bmax} pattern=\"[A-Za-z0-9.-]*\" value=\"{}\"></label>\
 <label>Port <input type=number name=mqtt_port min=1 max=65535 value={}></label>\
