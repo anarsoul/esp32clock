@@ -165,7 +165,29 @@ a colour that did not reach the clock goes back in its select. A
 saved form comes back to its page with `?saved=1` and the page says
 `Saved.`; a refused one with `?error=value&key=tz`, and the page
 names the field from `form::FIELDS` (the key's label, never the
-query's text); the script takes the query off the address. The
+query's text); the script takes the query off the address. A form's script posts
+it with `fetch` (since 2026-11-15): a refusal's notice is taken out
+of the answer and put above the form, which stays as typed, and a
+saved form goes on to the page the redirect named; without script the
+form is posted and reloaded as before. The alarm's days are seven
+checkboxes all named `days`, and `form::apply` reads a `days` key
+repeated in one body as a union (the first replaces, the rest add;
+none ticked sends no key and changes nothing), while `/api` takes
+`days=mon,wed` and `all`, `weekdays`, `weekend` as it did. Above the
+boxes is a select of the presets (Every day, Weekdays, Weekend,
+Custom), the user's of 2026-11-15: it has no name and is not posted,
+the script shows it, ticks the boxes from it and sets it from them.
+Under the
+skip box the page says `Next alarm: Mon 07:00.`, or `Tue 07:00 (Mon
+skipped)`, from `form::next_alarm` and the status's local time;
+nothing while disarmed or unsynced. `/ha`'s script asks `/api` every
+5 s for two minutes and loads the page again when `mqtt` is no longer
+what it was served with, unless the form has unsaved changes. The
+pages follow the browser's light or dark (`color-scheme`), a link is
+one colour whether visited or not (`a{color:LinkText}`), a page's
+title is `<hostname>: <page>` under the common heading, and the pages
+say nothing of `/api`: that is the README's (the user, 2026-11-15:
+"it should be in the documentation, not in the interface"). The
 network keys `ssid` and `password` are taken on `/api` only with the
 `Bearer` token, refused as `403` on the key alone (never on whether the
 value would change, which would make a password oracle), and never on
@@ -479,7 +501,7 @@ module ends with its `#[cfg(test)] mod tests`.
 | `core/src/http.rs` | `Method`, `Head` (`content_length` is `None` when the header is absent, and `transfer_encoding` says one was sent), `parse_head`; `RESPONSE_BUF` and `PAGE_MAX`, which the page tests assert against |
 | `core/src/mqtt.rs` | Home Assistant over MQTT, pure: `DeviceId` and its topics, `Link` (the state for the page), `Route` and `Command`, `SET_KEYS` and `apply_set` over `form::apply_one`, `write_discovery` (the device payload with every entity) and `DISCOVERY_MAX` |
 | `src/mqtt.rs` | the MQTT task: resolve, connect with the will, subscribe, discovery and state publishes, keepalive pings, the select loop over `poll_header`, the back-off, `goodbye` for the reset paths, `link()` and `Report` for the page and the heartbeat |
-| `src/http.rs` | HTTP/1.0 server, `LISTENERS` sockets each in its own task: every request goes through `http::admit` first and one it refuses is answered by `turn_away` (a `302` to the address for a `GET` under another `Host`, else `403`; not counted as served) and `status_line` sends `X-Frame-Options: DENY`; a `POST` without `Content-Length` to a route that reads a body (`/`, `/settings`, `/ha`, `/api`, `/play`, `/token`, `/ota`; `reads_body`) is answered `411` and any `Transfer-Encoding` `400` before a route is looked at (`NoRequest`), since a bodiless post is not an empty form, while the command posts (`/reload`, `/ap`, `/pin`, `/scan`, `/stop`) take a bare `curl -X POST`; `GET /clips` (the clips page) and `POST /clips` (a pack streamed to `pack::install`, read as `/ota`'s body is; `411` without a length); `GET`/`POST` on `/`, `/settings` and `/ha` (the three forms, on the station; `/` is the setup form on the access point) and `/api`, `POST /play`, `POST /stop`, `GET /system` (issues no PIN; its script posts `/pin`), `GET /update` and `GET /token` (redirects to it), `POST /ota` with the body streamed to `ota::install`, `POST /reload`, `POST /ap` and `POST /token` with the token or the PIN, `POST /pin`, `POST /scan` on the access point, `GET /favicon.ico` and `GET /tz.js` (`src/favicon.ico` and `src/tz.js` embedded, the two cacheable responses; the page loads the script as `/tz.js?v=<version>` so an update is not served the cached one); the four pages are titled and headed `Clock: <hostname>`; a saved form redirects to its own page with `?saved=1` and a refused one with `?error=…` and the bad field's `key`; per-listener state and counters for the heartbeat |
+| `src/http.rs` | HTTP/1.0 server, `LISTENERS` sockets each in its own task: every request goes through `http::admit` first and one it refuses is answered by `turn_away` (a `302` to the address for a `GET` under another `Host`, else `403`; not counted as served) and `status_line` sends `X-Frame-Options: DENY`; a `POST` without `Content-Length` to a route that reads a body (`/`, `/settings`, `/ha`, `/api`, `/play`, `/token`, `/ota`; `reads_body`) is answered `411` and any `Transfer-Encoding` `400` before a route is looked at (`NoRequest`), since a bodiless post is not an empty form, while the command posts (`/reload`, `/ap`, `/pin`, `/scan`, `/stop`) take a bare `curl -X POST`; `GET /clips` (the clips page) and `POST /clips` (a pack streamed to `pack::install`, read as `/ota`'s body is; `411` without a length); `GET`/`POST` on `/`, `/settings` and `/ha` (the three forms, on the station; `/` is the setup form on the access point) and `/api`, `POST /play`, `POST /stop`, `GET /system` (issues no PIN; its script posts `/pin`), `GET /update` and `GET /token` (redirects to it), `POST /ota` with the body streamed to `ota::install`, `POST /reload`, `POST /ap` and `POST /token` with the token or the PIN, `POST /pin`, `POST /scan` on the access point, `GET /favicon.ico` and `GET /tz.js` (`src/favicon.ico` and `src/tz.js` embedded, the two cacheable responses; the page loads the script as `/tz.js?v=<version>` so an update is not served the cached one); the pages are headed `Clock: <hostname>` and titled `<hostname>: <page>`; a saved form redirects to its own page with `?saved=1` and a refused one with `?error=…` and the bad field's `key`; per-listener state and counters for the heartbeat |
 | `core/src/buttons.rs` | `Button`, `Kind`, `Event` |
 | `src/buttons.rs` | debounced short/long press events, the two-button long press, and the 10 s two-button `Hold` |
 | `core/src/melody.rs` | alarm tunes as pitch and length data with tempo; `RANDOM` and the pure `pick` that turns it into a tune; `CLIP_COUNT`, `CLIP_NAMES` and `CLIP_DATA` (included from `clips.rs`, which `core/build.rs` writes from `ALARM_CLIP`; none by default); the table at run time, the nine note melodies and then the clips of the pack `install` was given, else the built-in ones: `count`, `get` (a `Melody` by value, the beeps past the end), `all`, `clip_data`, `clip_loops`, `LIMIT` (what a settings index is held under), `RANDOM` (`usize::MAX`); the pack in force sits in a `critical_section` cell, a thread-local in the tests; pure |
@@ -684,14 +706,14 @@ module ends with its `#[cfg(test)] mod tests`.
 
 ## Sizes that bite
 
-- `http::RESPONSE_BUF` (6 KB, one per listener task; raised from 4096
+- `http::RESPONSE_BUF` (8 KB since 2026-11-15, one per listener task; 6 KB before, raised from 4096
   on 2026-11-02) holds the whole page plus headers, and
   overflow is a 500, not a truncation. The headers are 126 bytes
   for a page (`HEADERS_MAX`; 103 before `X-Frame-Options`, and never
   the 88 this said);
-  `core::http::PAGE_MAX` (5984) is what a page may take, and the
+  `core::http::PAGE_MAX` (8032) is what a page may take, and the
   `form` tests build each page at its worst case and assert it
-  (2026-11-14, since the split in four, with the three clips of `clips/`: the clock page 4353 with the status lines, a stored SSID of 32 `"` and a 64-byte broker host in them; settings 2433 with a 48-byte timezone rule of `<`, four bytes each through `HtmlStr`; Home Assistant 2253 with a user of 32 `"`; system 3876; setup with twelve 32-character networks about 3200. The one page before it was 5564, and 5865 with nine clips. Since 2026-11-15, with the PIN asked for at the click and the notices: clock 4624, and 5840 with a full pack of sixteen clips at their longest, which leaves 144 bytes; settings 2495, Home Assistant 2281, clips 3459, system 4546, setup without a list 2547). `cargo host-test` after adding a field
+  (2026-11-14, since the split in four, with the three clips of `clips/`: the clock page 4353 with the status lines, a stored SSID of 32 `"` and a 64-byte broker host in them; settings 2433 with a 48-byte timezone rule of `<`, four bytes each through `HtmlStr`; Home Assistant 2253 with a user of 32 `"`; system 3876; setup with twelve 32-character networks about 3200. The one page before it was 5564, and 5865 with nine clips. Since 2026-11-15, with the PIN asked for at the click, the notices, the day checkboxes and the forms' own post: clock 5989, and 7205 with a full pack of sixteen clips at their longest, which leaves 827 bytes; settings 3138, Home Assistant 3110, clips 3686, system 4828, setup without a list 3084). `cargo host-test` after adding a field
   or label; the test prints the sizes with `-- --nocapture`. The setup
   page's network list stops at `form::NETWORK_LIST_BUDGET` (1900)
   bytes, strongest first, with a "N more not shown" line, because a
@@ -718,7 +740,7 @@ module ends with its `#[cfg(test)] mod tests`.
   27.6 s test clip is 442 KB of `.rodata`, held once: `melody::CLIP_DATA` is a `static`; a beeper clip is 1 to 3 KB a second, a tracker module some 10 KB whatever its length)
   and must leave the pack inside its partition, or the image inside its slot; the ring is 16 KB of
   static RAM in every build, since any build may meet a pack (2026-11-14: the main
-  stack is 49.9 KB). A chunk is 16 ms at
+  stack is 49.9 KB, and 43.7 KB since `RESPONSE_BUF` is 8 KB, 2026-11-15). A chunk is 16 ms at
   512 kbit/s (a beeper clip) and the ring holds fourteen ahead of the
   DMA, so the clip task not running for about 220 ms (twice that for
   the 16-bit samples of a 16 kHz clip under the PDM converter) is an
@@ -762,7 +784,7 @@ module ends with its `#[cfg(test)] mod tests`.
 
 ## Verifying without a board
 
-`cargo host-test` runs the tests of `core/` on the host (154 on 2026-11-15, and the players' tests over real clips only with `ALARM_CLIP` naming some, which the CI does in a second run): the AiP33628 encoder against a behavioural model of the
+`cargo host-test` runs the tests of `core/` on the host (157 on 2026-11-15, and the players' tests over real clips only with `ALARM_CLIP` naming some, which the CI does in a second run): the AiP33628 encoder against a behavioural model of the
 chip (shift on CLK rise, latch on DIN rise while CLK high), the panel
 map, the palette and brightness tables, the hostname, password and
 token rules, the record round trip and every older version, the form

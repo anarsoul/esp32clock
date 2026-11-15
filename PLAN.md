@@ -8855,3 +8855,127 @@ a save; no dark colour scheme; one title for five pages; `HA` and
 "next alarm" line; `/ha` does not say whether a password is stored;
 the status line has no `role=status`; Rescan was not traced for what
 it keeps of the typed fields.
+
+### The rest of the UX review — built 2026-11-15, run on test-clock in headless Chromium; the setup form not tried
+
+The user, of the findings left above: "do all". What each becomes:
+
+- **Typed input kept on a refusal** (9). The script of a settings form
+  posts it with `fetch` and follows the redirect: a refused form's
+  notice is taken out of the answer and put above the form, which
+  stays as typed; a saved one goes to the page the redirect named.
+  If the request fails the form is submitted the plain way.
+- **The token field is text** (6): it is copied into scripts.
+- **The MQTT line follows the connection** (10): `/ha`'s script asks
+  `/api` every 5 s for two minutes and reloads the page when `mqtt`
+  is no longer what the page was served with, unless the form has
+  unsaved changes.
+- **Dark colour scheme** (13): `color-scheme:light dark`, the error
+  colour by `light-dark()`.
+- **A title a page** (14): `<hostname>: <page>` with the page's full
+  name; the heading stays.
+- **The links** (15): the names stay `General` and `HA`, the user's
+  of 2026-11-14 for one line on a phone; the links get height to tap
+  (`nav a`).
+- **Seven day checkboxes** (16) in place of the three presets. They
+  are all named `days`, so `apply` now reads a `days` key repeated in
+  one body as a union (the first replaces, the rest add); `/api`'s
+  `days=mon,wed` and the three words are as before. None ticked
+  sends no key and changes nothing: an alarm for no day is the
+  armed box.
+- **`Next alarm: Mon 07:00`** (17) in the alarm's fieldset, from the
+  page's local time; with skip set, the one after and which is
+  skipped. Nothing while disarmed or before the time is known.
+- **Whether a broker password is stored** (18), in the field's label.
+  Going from a password to none on the same host still needs the
+  host cleared first: a key for it was not thought worth a place in
+  the API.
+- **Wording** (19): the colours capitalised, `Hostname, the clock's
+  name on the network`. The offset stays `°C`, which it says.
+- **`role=status`** (20) on the PIN pages' status line, `role=alert`
+  on the clock page's.
+- **Rescan keeps what was typed** (12): traced, it did not (the
+  answer is a redirect to the form as stored). The script posts
+  `/scan` itself and takes only the list out of the answer, keeping
+  the pick if it is still listed.
+
+The clock page had 144 bytes left at its worst; this needs some 700.
+`RESPONSE_BUF` goes from 6 to 7 KB, 3 KB of the main stack for the
+three listeners.
+
+Added by the user while it was built: the status lines of the clock
+page set closer (`.st p`, 0.2 em between them), and the `Scriptable:`
+line gone from it and from the setup form, "it should be in the
+documentation, not in the interface".
+
+**Built and run, 2026-11-15** (`v0.4-38-g368c53a-dirty` on
+test-clock; the settings as found afterwards). `RESPONSE_BUF` at
+7 KB leaves the main stack 46.8 KB (49.9 before); the clock page is
+5485 bytes and 6701 at its worst, of 7008. Seen in the browser: the
+titles (`test-clock: Settings`); the links 34 px high on one line;
+seven day boxes, two unticked and saved as `mon,wed,thu,fri,sat`,
+then put back; `Next alarm: Mon 01:00.` on a Sunday afternoon with
+Sunday and Tuesday unticked, `Wed 01:00 (Mon skipped)` with skip, and
+no line while disarmed; a bad timezone refused with the notice above
+the form, the field still `nonsense,` and another field's edit still
+there, the address unchanged; a second refusal replacing the first
+notice; then saved. `/ha` served while connecting to a wrong port
+loaded itself again 4 s after the port was put right and said
+`connected`. The token field is text. Under a dark scheme the text
+is white and the notice `#f66`; under a light one black and `#b00`.
+No script error on any page. Not tried: the setup form (Rescan by
+script, the title `Setup`), a form's post with the clock out of
+reach (the fallback to the browser's submit), a phone's width.
+
+Later the same day, the user's: the firmware section of the system
+page says `Uploading asks for a PIN, which the clock then shows on
+its panel.` before the dark-panel line, as the clips page does, and
+`RESPONSE_BUF` is 8 KB ("bump max page size to 8192"): `PAGE_MAX`
+8032, the main stack 43.7 KB. The clock page's worst stays 6701.
+
+And the presets back, above the boxes (the user: "let's have presets
+in addition to the check boxes as well, right above the check
+boxes"): a select of Every day, Weekdays, Weekend and Custom with no
+name, so only the boxes are posted; the script shows it, ticks the
+boxes when one is picked and shows `Custom` when the boxes match
+none. On test-clock in the browser: Weekdays and Weekend tick their
+boxes and raise the unsaved mark, Friday ticked on top of Weekend
+reads `Custom` and unticked `Weekend` again, the save posts
+`days=sat&days=sun` and `/api` says `weekend`. The clock page is
+5989 bytes, 7205 at its worst.
+
+One thing seen and not explained: after this build's upload (8 KB
+buffer, the presets) test-clock did not answer for three and a half
+minutes and came back by a self-heal (`heals` 1, 13:01:50), which is
+what three minutes of failed connects end in. No serial log was
+running. The three uploads before it that day came back within 20 s,
+and two `scripts/reload.sh` resets of the same image afterwards came
+back in 38 s and 10 s. Watch the next uploads with the monitor on.
+
+Links one colour (the user: the navigation links changed colour once
+visited): `a{color:LinkText}` in the shared head, the browser's link
+colour for either scheme. Not seen in a browser: a page cannot read
+a visited link's colour back, so it is for the eye.
+
+Play and Stop each half the row with a 1 em gap (the user found them
+inconsistent beside Reboot and Access point, which sit at the row's
+two ends; they stay a pair, being one control, and now fill the row
+as that one does).
+
+The heading a fifth smaller and centred,
+`h1{font-size:1.6em;text-align:center}`. The user found it "huge and
+repeated on every page" and asked for half the size; seen at 1 em on
+white-clock that "doesn't look good", and this is the second try.
+
+Centred as well, the user's: the line of links, Save (the unsaved
+mark now under it, so the button stays put when the mark shows) and
+the status lines under a form, on the settings and Home Assistant
+pages and the setup form too (`.c`, `.st`). The PIN pages' status
+line, which answers a button, stays where the button is.
+
+`Saved.` centred too (the user), and with it the refusals in the
+same place and the clock page's "did not answer" line above Save.
+
+The clips page warns, above the upload's small print, that a new
+pack replaces all the clips and does not add to them (the user).
+

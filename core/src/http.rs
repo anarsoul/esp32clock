@@ -9,8 +9,10 @@
 /// overflow is a 500, not a truncation. The worst-case pages are
 /// measured by the tests in `form`. One per listener task; raised
 /// from 4096 to 6 KB for the settings page's unsaved-changes script,
-/// with room for what comes after it.
-pub const RESPONSE_BUF: usize = 6 * 1024;
+/// and to 8 KB on 2026-11-15 (the user's figure) for the clock page's
+/// day checkboxes and the script that posts a form and keeps what was
+/// typed, with room for what comes after.
+pub const RESPONSE_BUF: usize = 8 * 1024;
 
 /// What a page body may take of it: the status line and headers the
 /// firmware writes first are 126 bytes for a page (`HEADERS_MAX`),

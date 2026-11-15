@@ -167,7 +167,7 @@ pub enum Note {
 fn write_note(out: &mut impl core::fmt::Write, note: Note) -> core::fmt::Result {
     match note {
         Note::None => Ok(()),
-        Note::Saved => out.write_str("<p><b>Saved.</b></p>"),
+        Note::Saved => out.write_str("<p class=c><b>Saved.</b></p>"),
         Note::Refused(FormError::BadValue, Some(key)) => match FIELDS.iter().find(|(k, _)| *k == key) {
             Some((_, label)) => write!(out, "<p class=err>Nothing was saved: bad value for <b>{label}</b>.</p>"),
             None => out.write_str("<p class=err>Nothing was saved: a field had a bad value.</p>"),
@@ -474,6 +474,7 @@ pub fn apply_naming(s: &mut Settings, body: &[u8], allow: Allow) -> Result<(), (
     let before = s.mqtt;
     let mut password_typed = false;
     let mut pick = None;
+    let mut days_seen = false;
     for (key, value) in Pairs(body) {
         let mut kbuf = [0u8; 16];
         let mut vbuf = [0u8; VALUE_MAX];
@@ -482,7 +483,16 @@ pub fn apply_naming(s: &mut Settings, body: &[u8], allow: Allow) -> Result<(), (
         let named = |e| (e, field(key));
         let vn = percent_decode(value, &mut vbuf).ok_or(FormError::BadValue).map_err(named)?;
         let value = core::str::from_utf8(&vbuf[..vn]).map_err(|_| FormError::BadValue).map_err(named)?;
+        let days = s.alarm_days;
         apply_one(s, key, value, allow).map_err(named)?;
+        // The page's seven checkboxes are one key sent once a ticked
+        // day: the first replaces the days, the rest add to them.
+        if key == "days" {
+            if days_seen {
+                s.alarm_days |= days;
+            }
+            days_seen = true;
+        }
         if key == "ssid_pick" && !value.is_empty() {
             pick = Some(s.wifi.ssid);
         }
@@ -757,11 +767,19 @@ fn write_firmware_line(out: &mut impl core::fmt::Write, st: &Status, link: bool)
     out.write_str("</small></p>")
 }
 
-/// Shared `<head>`: the viewport and the styles of every page.
+/// Shared `<head>`: the viewport and the styles of every page. Light
+/// or dark as the browser is; the heading, the same on every page, is
+/// a fifth smaller than a browser's and centred; a link is one colour, visited or not
+/// (`LinkText`, the browser's own for either scheme); the links of the first line (`nav`) are
+/// given height to tap and centred, as are Save and the notices above a form (`.c`, and a `p.err` that
+/// is not the PIN pages' status line) and the status
+/// lines under a page's form (`.st`), which are also set closer than
+/// paragraphs are; `.d` is the row of day checkboxes.
 const HEAD: &str = "<!doctype html><html><head><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\">\
-<style>body{font-family:sans-serif;max-width:22em;margin:2em auto;padding:0 1em}\
+<style>:root{color-scheme:light dark}body{font-family:sans-serif;max-width:22em;margin:2em auto;padding:0 1em}\
 label{display:block;margin:.8em 0}select,input{font-size:1em;width:100%;box-sizing:border-box}input[type=checkbox]{width:auto}input[type=file]{margin:.5em 0}\
-button{font-size:1em;padding:.5em 1.5em}p.err{color:#b00}progress{width:100%}[hidden]{display:none}\
+button{font-size:1em;padding:.5em 1.5em}p.err{color:#c33;color:light-dark(#b00,#f66)}h1{font-size:1.6em;text-align:center}a{color:LinkText}nav{margin:1em 0;text-align:center}.c,p.err:not(#s){text-align:center}nav a,nav b{display:inline-block;padding:.5em 0}\
+.d{margin:.8em 0}.d label{display:inline-block;margin:.3em .7em 0 0}.st{text-align:center}.st p{margin:.2em 0}progress{width:100%}[hidden]{display:none}\
 fieldset{border:1px solid #ccc;border-radius:.3em;margin:1em 0;padding:0 1em}</style>";
 
 /// The pages a visitor clicks between; each starts with a line of links
@@ -794,6 +812,19 @@ impl Page {
         }
     }
 
+    /// The page's name in full, for the title: tabs and the history
+    /// tell the pages apart by it.
+    const fn title(self) -> &'static str {
+        match self {
+            Page::Clock => "Clock",
+            Page::Settings => "Settings",
+            Page::HomeAssistant => "Home Assistant",
+            Page::Clips => "Clips",
+            Page::System => "System",
+        }
+    }
+
+    /// The page's name in the line of links.
     const fn label(self) -> &'static str {
         match self {
             Page::Clock => "Clock",
@@ -806,15 +837,16 @@ impl Page {
     }
 }
 
-/// What every page starts with: the head, the hostname as title and
-/// heading, the line of links with this page's own name in bold, and
+/// What every page starts with: the head, the hostname and the page's
+/// name as title, the hostname as heading, the line of links with this page's own name in bold, and
 /// what became of the last post of its form (`Note`). On the access
 /// point (`ap`) `/` is the setup form and the two settings pages are
 /// not served, so the links are that form, the clips and the system page.
 fn write_top(out: &mut impl core::fmt::Write, hostname: &str, here: Page, ap: bool, note: Note) -> core::fmt::Result {
     out.write_str(HEAD)?;
     // The hostname is letters, digits and dashes, so no escaping here.
-    write!(out, "<title>Clock: {hostname}</title></head><body><h1>Clock: {hostname}</h1><p>")?;
+    let title = if ap && here == Page::Clock { "Setup" } else { here.title() };
+    write!(out, "<title>{hostname}: {title}</title></head><body><h1>Clock: {hostname}</h1><nav>")?;
     let mut first = true;
     for page in Page::ALL {
         if ap && matches!(page, Page::Settings | Page::HomeAssistant) {
@@ -831,7 +863,7 @@ fn write_top(out: &mut impl core::fmt::Write, hostname: &str, here: Page, ap: bo
             write!(out, "<a href={}>{label}</a>", page.path())?;
         }
     }
-    out.write_str("</p>")?;
+    out.write_str("</nav>")?;
     write_note(out, note)
 }
 
@@ -846,15 +878,24 @@ impl core::fmt::Display for Check {
     }
 }
 
-/// How a settings form ends: Save, and the mark `UNSAVED_JS` shows.
-const SAVE: &str = "<p><button>Save</button> <b id=u hidden>Changes not saved yet.</b></p>";
+/// How a settings form ends: Save, centred, and under it the mark
+/// `UNSAVED_JS` shows, so the button does not move when it appears.
+const SAVE: &str = "<p class=c><button>Save</button><br><b id=u hidden>Changes not saved yet.</b></p>";
 
 /// The script of a page with a settings form, without its tags: the
 /// unsaved-changes mark, shown while any named control of the first
 /// form differs from what the page was served with. It also takes the
 /// notice's query (`?saved=1`, `?error=…`) off the address, so a reload
-/// does not say it again.
-const UNSAVED_JS: &str = "var D=document,f=D.forms[0],u=D.getElementById('u');history.replaceState(0,'',location.pathname);\
+/// does not say it again. And it posts the form itself (`X` is the
+/// notice of a refusal, in this page or in an answer): a refused
+/// form's notice is taken out of the answer and put above the form,
+/// which stays as it was typed, and a saved one goes on to the page
+/// the redirect named; a request that fails is left to the browser's
+/// own submit.
+const UNSAVED_JS: &str = "var D=document,f=D.forms[0],u=D.getElementById('u'),X='p.err:not([id])';history.replaceState(0,'',location.pathname);\
+f.onsubmit=function(e){e.preventDefault();fetch(f.action,{method:'POST',body:new URLSearchParams(new FormData(f))}).then(function(r){return r.text().then(function(h){\
+var n=new DOMParser().parseFromString(h,'text/html').querySelector(X),o=D.querySelector(X);if(!n){location.replace(r.url);return}\
+if(o)o.remove();f.before(n);n.scrollIntoView({block:'center'})})}).catch(function(){f.submit()})};\
 f.oninput=function(){var d=false;for(var e of f.elements)if(e.name&&(e.type=='checkbox'?e.checked!=e.defaultChecked:\
 e.options?!e.options[e.selectedIndex].defaultSelected:e.value!=e.defaultValue))d=true;u.hidden=!d};";
 
@@ -869,12 +910,18 @@ e.options?!e.options[e.selectedIndex].defaultSelected:e.value!=e.defaultValue))d
 /// opened a while ago cannot put an old colour back, nor does the
 /// unsaved mark count them; a change in one is posted to `/api` at
 /// once, one key, and becomes the select's default, and one that
-/// failed puts the select back.
+/// failed puts the select back. The days' presets (`y`) tick the
+/// seven boxes (`C`) when one is chosen, before the form's own input
+/// handler looks for unsaved changes, and say `Custom` when the boxes
+/// are ticked into none of them.
 const CLOCK_JS: &str = "var m=D.getElementById('m'),g=D.getElementById('e');function E(h){g.hidden=h}\
 function P(a,b){return fetch(a,{method:'POST',redirect:'manual',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:b})\
 .then(function(r){if(!r.ok&&r.type!='opaqueredirect')throw 0;E(1)})}\
 for(let i of'pq'){let b=D.getElementById(i);b.type='button';b.onclick=function(){P(b.formAction,'melody='+m.value).catch(function(){E(0)})}}\
 for(var c of D.querySelectorAll('#d select')){c.k=c.name;c.name=''}\
+var y=D.getElementById('y'),C=D.querySelectorAll('[name=days][type=checkbox]');y.hidden=false;\
+y.oninput=function(){if(y.value)C.forEach(function(c,i){c.checked=y.value>>i&1})};\
+f.addEventListener('input',function(e){if(e.target!=y){var k=0;C.forEach(function(c,i){if(c.checked)k|=1<<i});y.value=k;if(y.selectedIndex<0)y.value=''}});\
 D.getElementById('d').onchange=function(e){var t=e.target;P('/api',t.k+'='+t.value)\
 .then(function(){for(var o of t.options)o.defaultSelected=o.selected},function(){for(var o of t.options)o.selected=o.defaultSelected;E(0)})}";
 
@@ -882,7 +929,9 @@ D.getElementById('d').onchange=function(e){var t=e.target;P('/api',t.k+'='+t.val
 /// Save under both, as on the other pages, and the status lines. The
 /// display's two selects are applied as they are chosen (by script, to
 /// `/api`) and the script keeps them out of the form's post, so Save
-/// is for the alarm, and for the display without script. Above Save is
+/// is for the alarm, and for the display without script. The alarm's
+/// days are seven checkboxes under one name, and under them is when it
+/// rings next (`NextAlarm`). Above Save is
 /// the line the script shows when a post of its own failed. `note` is what became of the last post of
 /// a form; the page says so above them.
 pub fn write_page(
@@ -897,14 +946,15 @@ pub fn write_page(
         "<form method=post action=/><fieldset><legend>Alarm</legend>\
 <label>{} Alarm armed</label>\
 <label>Alarm time <input type=time name=alarm value={:02}:{:02}></label>\
-<label>Alarm days <select name=days>{}</select></label>\
-<label>{} Skip the next alarm</label>\
+<div class=d>Alarm days{}</div>\
+<label>{} Skip the next alarm</label>{}\
 <label>Alarm sound <select name=melody id=m>",
         Check("armed", s.alarm_armed),
         s.alarm_hour,
         s.alarm_minute,
-        DayOptions(s.alarm_days),
+        DayChecks(s.alarm_days),
         Check("skip", s.skip_next),
+        NextAlarm(s, st.local),
     )?;
     for (i, m) in melody::all().enumerate() {
         write!(out, "<option value={}{}>{}</option>", m.name, if i == s.melody { " selected" } else { "" }, HtmlStr(m.label))?;
@@ -912,26 +962,26 @@ pub fn write_page(
     write!(
         out,
         "<option value={}{}>Random tune</option></select></label>\
-<p><button formaction=/play id=p>Play</button> <button formaction=/stop id=q>Stop</button></p></fieldset>\
+<p style=display:flex;gap:1em><button formaction=/play id=p style=flex:1>Play</button><button formaction=/stop id=q style=flex:1>Stop</button></p></fieldset>\
 <fieldset id=d><legend>Display</legend><label>Colour <select name=color>",
         melody::RANDOM_NAME,
         if s.melody == melody::RANDOM { " selected" } else { "" }
     )?;
     for (i, name) in PALETTE_NAMES.iter().enumerate() {
-        write!(out, "<option value={name}{}>{name}</option>", if i == s.color { " selected" } else { "" })?;
+        // The names are lowercase ASCII; the label has a capital.
+        let (initial, rest) = (name.as_bytes()[0].to_ascii_uppercase() as char, &name[1..]);
+        write!(out, "<option value={name}{}>{initial}{rest}</option>", if i == s.color { " selected" } else { "" })?;
     }
     out.write_str("</select></label><label>Brightness <select name=brightness>")?;
     for (i, pct) in BRIGHTNESS_STEPS.iter().enumerate() {
         write!(out, "<option value={pct}{}>{pct} %</option>", if i == s.brightness { " selected" } else { "" })?;
     }
-    write!(out, "</select></label></fieldset><p class=err id=e hidden>The clock did not answer; nothing was changed.</p>{SAVE}</form><script>")?;
+    write!(out, "</select></label></fieldset><p class=err id=e role=alert hidden>The clock did not answer; nothing was changed.</p>{SAVE}</form><script>")?;
     out.write_str(UNSAVED_JS)?;
     out.write_str(CLOCK_JS)?;
-    out.write_str("</script>")?;
+    out.write_str("</script><div class=st>")?;
     write_status(out, s, st)?;
-    out.write_str(
-        "<p><small>Scriptable: <code>GET /api</code>, <code>POST /api</code> with the fields of these pages.</small></p></body></html>",
-    )
+    out.write_str("</div></body></html>")
 }
 
 /// The settings page, `GET /settings`: what is set once. The timezone
@@ -954,7 +1004,7 @@ pub fn write_settings_page(
 <label>Temperature on the panel <select name=temp_show>{}</select></label>\
 <label>Thermometer offset, °C <input type=number name=temp_offset min=-{tlim} max={tlim} step=0.1 value={}></label></fieldset>\
 <fieldset><legend>Network</legend>\
-<label>Hostname, for the DHCP server <input type=text name=hostname maxlength={hmax} pattern=\"[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?\" value=\"{}\"></label></fieldset>\
+<label>Hostname, the clock's name on the network <input type=text name=hostname maxlength={hmax} pattern=\"[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?\" value=\"{}\"></label></fieldset>\
 {SAVE}</form><script>{UNSAVED_JS}</script>",
         Check("twelve_hour", s.twelve_hour),
         TempShowOptions(s.temp_show),
@@ -964,13 +1014,18 @@ pub fn write_settings_page(
         hmax = HOSTNAME_MAX,
     )?;
     write_tz_script(out, st)?;
+    out.write_str("<div class=st>")?;
     write_local_line(out, s, st)?;
-    out.write_str("</body></html>")
+    out.write_str("</div></body></html>")
 }
 
 /// The Home Assistant page, `GET /ha`: the MQTT broker, and under the
 /// form what the clock's connection to it is doing. The password field
-/// is write-only; `apply` refuses a new host without it.
+/// is write-only and says whether one is stored; `apply` refuses a new
+/// host without it. The script asks `/api` every 5 s for two minutes
+/// and loads the page again when the connection is no longer in the
+/// state the page was served with (a save is followed by `connecting`,
+/// then `connected` or the error), unless the form has unsaved changes.
 pub fn write_ha_page(
     out: &mut impl core::fmt::Write,
     s: &Settings,
@@ -985,17 +1040,22 @@ pub fn write_ha_page(
 <label>Host, empty for none <input type=text name=mqtt_host maxlength={bmax} pattern=\"[A-Za-z0-9.-]*\" value=\"{}\"></label>\
 <label>Port <input type=number name=mqtt_port min=1 max=65535 value={}></label>\
 <label>User <input type=text name=mqtt_user maxlength={umax} autocomplete=off value=\"{}\"></label>\
-<label>Password, empty keeps the stored one for the same host <input type=password name=mqtt_password maxlength={pmax} autocomplete=new-password></label></fieldset>\
-{SAVE}</form><script>{UNSAVED_JS}</script>",
+<label>Password ({}) <input type=password name=mqtt_password maxlength={pmax} autocomplete=new-password></label></fieldset>\
+{SAVE}</form><script>{UNSAVED_JS}\
+var M='{}',c=24,i=setInterval(function(){{if(!c--)return clearInterval(i);fetch('/api',{{cache:'no-store'}}).then(function(r){{return r.json()}})\
+.then(function(j){{if(j.mqtt!=M&&u.hidden)location.replace('/ha')}})}},5000)</script>",
         s.mqtt.host.as_str(),
         s.mqtt.port,
         HtmlStr(s.mqtt.user.as_str()),
+        if s.mqtt.password.0.is_empty() { "none is stored" } else { "one is stored; empty keeps it for the same host" },
+        st.mqtt.name(),
         bmax = BROKER_HOST_MAX,
         umax = BROKER_USER_MAX,
         pmax = BROKER_PASSWORD_MAX,
     )?;
+    out.write_str("<div class=st>")?;
     write_mqtt_line(out, s, st)?;
-    out.write_str("</body></html>")
+    out.write_str("</div></body></html>")
 }
 
 /// The start of the script of a page whose actions need the PIN, the
@@ -1061,7 +1121,7 @@ ask(this,function(pin){go('/ap',pin,function(m){say(m+'. Join the clock\\'s own 
 /// been issued; the browser holds the field to four digits.
 const PIN_FORM: &str = "<div id=w><form id=q hidden><label>PIN the clock is showing\
 <input type=text inputmode=numeric pattern=[0-9]{4} maxlength=4 required autocomplete=off id=t></label>\
-<p><button>OK</button> <button type=button id=x>Cancel</button></p></form><p id=s></p></div>";
+<p><button>OK</button> <button type=button id=x>Cancel</button></p></form><p id=s role=status></p></div>";
 
 /// The system page, `GET /system`: what needs someone who can see the
 /// clock. It has four actions, each the request a script makes with
@@ -1088,9 +1148,9 @@ pub fn write_system_page(
         out,
         "<label>Image file (<code>esp32clock-ota-*.bin</code> from the <a href=https://github.com/anarsoul/esp32clock/releases target=_blank rel=noopener>releases</a>)<input type=file id=f></label>\
 <p><button id=b>Upload</button></p><progress id=p value=0 max=1 hidden></progress>\
-<p><small>The panel goes dark while the image is written. Do not unplug.</small></p></fieldset>\
+<p><small>Uploading asks for a PIN, which the clock then shows on its panel. The panel goes dark while the image is written. Do not unplug.</small></p></fieldset>\
 <fieldset><legend>API token</legend>\
-<label>New token, empty to clear ({})<input type=password maxlength={TOKEN_MAX} autocomplete=new-password id=k></label>\
+<label>New token, empty to clear ({})<input type=text maxlength={TOKEN_MAX} autocomplete=off id=k></label>\
 <p><button id=c>Set token</button></p></fieldset>\
 <fieldset><legend>Restart</legend><p style=display:flex;justify-content:space-between><button id=r>Reboot</button>{}</p></fieldset>",
         if token_set { "one is set" } else { "none is set" },
@@ -1141,6 +1201,7 @@ A pack needs the clock flashed once over USB or from the web installer.",
     out.write_str(
         "<label>Pack file (<code>esp32clock-clips-*.bin</code> from the <a href=https://github.com/anarsoul/esp32clock/releases target=_blank rel=noopener>releases</a>, or <code>scripts/mkpack.py</code> makes one)<input type=file id=f></label>\
 <p><button id=b>Upload</button></p><progress id=p value=0 max=1 hidden></progress>\
+<p><b>A new pack replaces all the clips of the one in flash; it does not add to them.</b></p>\
 <p><small>Uploading asks for a PIN, which the clock then shows on its panel. The panel goes dark while the pack is written, and the clock restarts. Do not unplug.</small></p></fieldset>",
     )?;
     out.write_str(PIN_FORM)?;
@@ -1241,12 +1302,13 @@ pub fn write_provision_page(
     write_tz_field(out, s)?;
     write!(
         out,
-        "<label>Hostname, for the DHCP server <input type=text name=hostname maxlength={hmax} pattern=\"[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?\" value=\"{}\"></label>\
-<button>Save and join</button> <button formaction=/scan formnovalidate>Rescan</button></form>",
+        "<label>Hostname, the clock's name on the network <input type=text name=hostname maxlength={hmax} pattern=\"[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?\" value=\"{}\"></label>\
+<p class=c><button>Save and join</button> <button formaction=/scan formnovalidate id=r>Rescan</button></p></form>",
         s.hostname.as_str(),
         hmax = HOSTNAME_MAX,
     )?;
     write_tz_script(out, st)?;
+    out.write_str("<div class=st>")?;
     if networks.is_empty() {
         out.write_str("<p><small>No networks seen yet; rescan, or type the name.</small></p>")?;
     } else if shown < networks.len() {
@@ -1255,16 +1317,21 @@ pub fn write_provision_page(
     // The typed-name field only when the list's choice is "Other":
     // disabled as well as hidden, since a hidden input is still posted.
     // The password's checkbox has no name, so it is not posted, and is
-    // shown by the script that makes it work.
+    // shown by the script that makes it work. Rescan by script keeps
+    // what was typed: it posts `/scan`, whose answer is the redirect
+    // to this form, and takes only the list out of that, with the
+    // pick kept if it is still listed.
     out.write_str(
         "<script>var $=function(i){return document.getElementById(i)},n=$('n'),o=$('o'),i=$('i'),k=$('k'),v=$('v');\
 function f(){o.hidden=i.disabled=n.value!=''}n.onchange=f;f();\
-$('l').hidden=false;v.onchange=function(){k.type=v.checked?'text':'password'}</script>",
+$('l').hidden=false;v.onchange=function(){k.type=v.checked?'text':'password'};\
+$('r').onclick=function(e){e.preventDefault();var b=this,p=n.value;b.disabled=true;b.textContent='Scanning…';\
+fetch('/scan',{method:'POST'}).then(function(r){return r.text()}).then(function(h){\
+n.innerHTML=new DOMParser().parseFromString(h,'text/html').getElementById('n').innerHTML;\
+for(var o of n.options)if(o.value==p)n.value=p;f()}).catch(function(){}).then(function(){b.disabled=false;b.textContent='Rescan'})}</script>",
     )?;
     write_firmware_line(out, st, true)?;
-    out.write_str(
-        "<p><small>Scriptable: <code>POST /api</code> with <code>ssid</code> and <code>password</code>.</small></p></body></html>",
-    )
+    out.write_str("</div></body></html>")
 }
 
 /// The answer to a provisioning save: the clock is about to restart
@@ -1284,8 +1351,6 @@ pub fn write_saved_page(out: &mut impl core::fmt::Write, s: &Settings) -> core::
     )
 }
 
-/// The options of the alarm-days select: the three presets, and the
-/// current list as a fourth when it is none of them.
 /// The `<option>`s of the temperature-on-the-panel select.
 struct TempShowOptions(TempShow);
 
@@ -1298,23 +1363,67 @@ impl core::fmt::Display for TempShowOptions {
     }
 }
 
-struct DayOptions(u8);
+/// The alarm's days as seven checkboxes, all named `days`: `apply`
+/// reads the repeats of one body as a union. Above them a select of
+/// the presets, which ticks the boxes and follows them.
+struct DayChecks(u8);
 
-impl core::fmt::Display for DayOptions {
+impl core::fmt::Display for DayChecks {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        for (mask, label) in [(DAYS_ALL, "Every day"), (DAYS_WEEKDAYS, "Weekdays"), (DAYS_WEEKEND, "Weekend")] {
-            write!(f, "<option value=")?;
-            write_days(f, mask)?;
-            write!(f, "{}>{label}</option>", if self.0 == mask { " selected" } else { "" })?;
+        // The presets, above the boxes: a select with no name, so it is
+        // not posted, whose value is the mask it ticks; shown by the
+        // script that makes it work (`CLOCK_JS`).
+        f.write_str("<select id=y hidden>")?;
+        let presets = [(DAYS_ALL, "Every day"), (DAYS_WEEKDAYS, "Weekdays"), (DAYS_WEEKEND, "Weekend")];
+        for (mask, label) in presets {
+            write!(f, "<option value={mask}{}>{label}</option>", if self.0 == mask { " selected" } else { "" })?;
         }
-        if ![DAYS_ALL, DAYS_WEEKDAYS, DAYS_WEEKEND].contains(&self.0) {
-            write!(f, "<option value=")?;
-            write_days(f, self.0)?;
-            write!(f, " selected>")?;
-            write_days(f, self.0)?;
-            write!(f, "</option>")?;
+        let custom = presets.iter().all(|(mask, _)| *mask != self.0);
+        write!(f, "<option value=\"\"{}>Custom</option></select><br>", if custom { " selected" } else { "" })?;
+        for (i, name) in DAY_NAMES.iter().enumerate() {
+            let checked = if self.0 & (1 << i) != 0 { " checked" } else { "" };
+            write!(f, "<label><input type=checkbox name=days value={name}{checked}> {}</label>", WEEKDAY_LABELS[i])?;
         }
         Ok(())
+    }
+}
+
+/// When the alarm rings next, by the weekday and the minute of the
+/// page's local time: the weekday it rings on and, with `skip_next`
+/// set, the weekday of the one skipped before it. `None` while it is
+/// disarmed or has no day. The minute it rings in counts as past.
+pub fn next_alarm(s: &Settings, now: &LocalNow) -> Option<(u8, Option<u8>)> {
+    if !s.alarm_armed {
+        return None;
+    }
+    let past = (now.hour, now.minute) >= (s.alarm_hour, s.alarm_minute);
+    let mut skipped = None;
+    for ahead in u8::from(past)..15 {
+        let day = (now.weekday % 7 + ahead) % 7;
+        if s.alarm_days & (1 << day) == 0 {
+            continue;
+        }
+        if s.skip_next && skipped.is_none() {
+            skipped = Some(day);
+            continue;
+        }
+        return Some((day, skipped));
+    }
+    None
+}
+
+/// The line under the skip checkbox that says so; nothing before the
+/// time is known.
+struct NextAlarm<'a>(&'a Settings, Option<LocalNow>);
+
+impl core::fmt::Display for NextAlarm<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let Some((day, skipped)) = self.1.and_then(|now| next_alarm(self.0, &now)) else { return Ok(()) };
+        write!(f, "<p><small>Next alarm: {} {:02}:{:02}", WEEKDAY_LABELS[day as usize], self.0.alarm_hour, self.0.alarm_minute)?;
+        if let Some(skipped) = skipped {
+            write!(f, " ({} skipped)", WEEKDAY_LABELS[skipped as usize])?;
+        }
+        f.write_str(".</small></p>")
     }
 }
 
@@ -1753,7 +1862,8 @@ mod tests {
         melody::install(None);
         // Play and Stop, each posted by the script to its own address
         // without leaving the page.
-        assert!(out[0].contains("<button formaction=/play id=p>Play</button> <button formaction=/stop id=q>Stop</button>"));
+        // Side by side as one control, each half the row, a gap between.
+        assert!(out[0].contains("<p style=display:flex;gap:1em><button formaction=/play id=p style=flex:1>Play</button><button formaction=/stop id=q style=flex:1>Stop</button></p>"));
         assert!(out[0].contains("for(let i of'pq')") && out[0].contains("P(b.formAction,"));
         // With script they are plain buttons, so Enter in the form is Save.
         assert!(out[0].contains("b.type='button'"));
@@ -1786,7 +1896,7 @@ mod tests {
         assert!(page(Note::Refused(FormError::BadValue, Some("tz"))).contains("<p class=err>Nothing was saved: bad value for <b>Timezone</b>.</p>"));
         assert!(page(Note::Refused(FormError::BadValue, None)).contains("<p class=err>Nothing was saved: a field had a bad value.</p>"));
         assert!(page(Note::Refused(FormError::BadValue, Some("no such key"))).contains("a field had a bad value"));
-        assert!(page(Note::Saved).contains("</p><p><b>Saved.</b></p><form"));
+        assert!(page(Note::Saved).contains("</nav><p class=c><b>Saved.</b></p><form"));
         assert!(!page(Note::None).contains("Saved") && !page(Note::None).contains("class=err>"));
         // The setup form names a field too, and keeps its own words for
         // what has none.
@@ -1805,6 +1915,121 @@ mod tests {
         assert_eq!(field_names(&out), ["ssid_pick", "ssid", "password", "tz", "hostname"]);
     }
 
+    /// The alarm's days: seven checkboxes under one name, read back as
+    /// a union, with `/api`'s lists and words as they were.
+    #[test]
+    fn days_are_seven_checkboxes() {
+        let mut s = Settings::DEFAULT;
+        s.alarm_days = 0b0010101;
+        let mut out = String::new();
+        write_page(&mut out, &s, &status(true), Note::None).unwrap();
+        assert_eq!(out.matches("<input type=checkbox name=days value=").count(), 7);
+        assert!(out.contains("<div class=d>Alarm days<select id=y hidden><option value=127>Every day</option><option value=31>Weekdays</option><option value=96>Weekend</option><option value=\"\" selected>Custom</option></select><br>\
+<label><input type=checkbox name=days value=mon checked> Mon</label><label><input type=checkbox name=days value=tue> Tue</label>"), "{out}");
+        // The presets are not a field: only the boxes are posted.
+        assert!(out.contains("y.oninput=function(){if(y.value)C.forEach(function(c,i){c.checked=y.value>>i&1})}"));
+        s.alarm_days = DAYS_WEEKDAYS;
+        let mut preset = String::new();
+        write_page(&mut preset, &s, &status(true), Note::None).unwrap();
+        assert!(preset.contains("<option value=31 selected>Weekdays</option>") && !preset.contains("\" selected>Custom"));
+        assert_eq!((DAYS_ALL, DAYS_WEEKDAYS, DAYS_WEEKEND), (127, 31, 96));
+        s.alarm_days = 0b0010101;
+        assert_eq!(out.split("name=days").skip(1).filter(|p| p.split('>').next().unwrap().ends_with(" checked")).count(), 3);
+        // What a browser posts for Tuesday and Thursday ticked.
+        apply(&mut s, b"armed=0&alarm=07%3A00&days=tue&days=thu&skip=0", Allow::PAGE).unwrap();
+        assert_eq!(s.alarm_days, 0b0001010);
+        // The first of a body replaces, whatever was stored.
+        apply(&mut s, b"days=sun", Allow::PAGE).unwrap();
+        assert_eq!(s.alarm_days, 0b1000000);
+        apply(&mut s, b"days=mon,wed&days=weekend", Allow::NONE).unwrap();
+        assert_eq!(s.alarm_days, 0b1100101);
+        apply(&mut s, b"days=weekdays", Allow::NONE).unwrap();
+        assert_eq!(s.alarm_days, DAYS_WEEKDAYS);
+        // None ticked sends no key: nothing changes.
+        apply(&mut s, b"armed=0&alarm=07%3A00&skip=0", Allow::PAGE).unwrap();
+        assert_eq!(s.alarm_days, DAYS_WEEKDAYS);
+        assert_eq!(apply_naming(&mut s, b"days=mon&days=funday", Allow::PAGE), Err((FormError::BadValue, Some("days"))));
+    }
+
+    /// When the alarm rings next, and what the page says of it.
+    #[test]
+    fn the_page_says_when_the_alarm_rings_next() {
+        let now = |weekday, hour, minute| LocalNow { weekday, hour, minute, offset_secs: 0, dst: false };
+        let mut s = Settings::DEFAULT;
+        (s.alarm_hour, s.alarm_minute, s.alarm_days) = (7, 30, DAYS_WEEKDAYS);
+        assert_eq!(next_alarm(&s, &now(0, 6, 0)), None, "disarmed");
+        s.alarm_armed = true;
+        assert_eq!(next_alarm(&s, &now(0, 7, 29)), Some((0, None)), "later today");
+        assert_eq!(next_alarm(&s, &now(0, 7, 30)), Some((1, None)), "the minute it rings in is past");
+        assert_eq!(next_alarm(&s, &now(4, 8, 0)), Some((0, None)), "Friday after it: Monday");
+        assert_eq!(next_alarm(&s, &now(5, 6, 0)), Some((0, None)), "Saturday: Monday");
+        s.skip_next = true;
+        assert_eq!(next_alarm(&s, &now(4, 6, 0)), Some((0, Some(4))), "Friday's skipped");
+        s.alarm_days = 0b0000100;
+        assert_eq!(next_alarm(&s, &now(2, 8, 0)), Some((2, Some(2))), "one day a week, after it: the week after next");
+        assert_eq!(next_alarm(&s, &now(2, 6, 0)), Some((2, Some(2))));
+        s.skip_next = false;
+        assert_eq!(next_alarm(&s, &now(2, 8, 0)), Some((2, None)));
+        s.alarm_days = 0;
+        assert_eq!(next_alarm(&s, &now(2, 8, 0)), None, "no day");
+        // On the page, under the skip box: `status` is Friday 14:32.
+        let page = |s: &Settings, st: &Status| {
+            let mut out = String::new();
+            write_page(&mut out, s, st, Note::None).unwrap();
+            out
+        };
+        let st = status(true);
+        let l = st.local.unwrap();
+        s.alarm_days = DAYS_ALL;
+        let today = (l.hour, l.minute) < (7, 30);
+        let day = WEEKDAY_LABELS[(l.weekday as usize + usize::from(!today)) % 7];
+        assert!(page(&s, &st).contains(&format!(" Skip the next alarm</label><p><small>Next alarm: {day} 07:30.</small></p>")), "{}", page(&s, &st));
+        s.skip_next = true;
+        assert!(page(&s, &st).contains(&format!("({day} skipped).</small></p>")));
+        s.alarm_armed = false;
+        assert!(!page(&s, &st).contains("Next alarm"));
+        s.alarm_armed = true;
+        let mut unsynced = st;
+        unsynced.local = None;
+        assert!(!page(&s, &unsynced).contains("Next alarm"));
+    }
+
+    /// A form is posted by its script, which keeps what was typed when
+    /// it is refused; the broker page follows the connection; Rescan
+    /// keeps the setup form.
+    #[test]
+    fn scripts_keep_what_was_typed() {
+        let out = pages(&Settings::DEFAULT, &status(true), Note::None);
+        for out in &out[..3] {
+            assert!(out.contains("f.onsubmit=function(e){e.preventDefault();fetch(f.action,{method:'POST',body:new URLSearchParams(new FormData(f))})"), "{out}");
+            assert!(out.contains("X='p.err:not([id])'") && out.contains("if(!n){location.replace(r.url);return}") && out.contains(".catch(function(){f.submit()})"));
+        }
+        // The broker page: whether a password is stored, and the poll
+        // with the state the page was served in.
+        assert!(out[2].contains("<label>Password (none is stored) <input type=password name=mqtt_password"));
+        assert!(out[2].contains(&format!("var M='{}',c=24,", status(true).mqtt.name())) && out[2].contains("if(j.mqtt!=M&&u.hidden)location.replace('/ha')"));
+        let mut s = Settings::DEFAULT;
+        apply(&mut s, b"mqtt_host=10.1.1.5&mqtt_password=secret", Allow::PAGE).unwrap();
+        let with = pages(&s, &status(true), Note::None);
+        assert!(with[2].contains("<label>Password (one is stored; empty keeps it for the same host) <input"));
+        // The token is typed in the open: it is copied into scripts.
+        assert!(out[4].contains("<input type=text maxlength=32 autocomplete=off id=k>") && out[4].contains("<p id=s role=status></p>"));
+        let mut setup = String::new();
+        write_provision_page(&mut setup, &Settings::DEFAULT, &status(false), &[], Note::None).unwrap();
+        assert!(setup.contains("<p class=c><button>Save and join</button> <button formaction=/scan formnovalidate id=r>Rescan</button></p></form>"));
+        assert!(setup.contains("fetch('/scan',{method:'POST'})") && setup.contains("getElementById('n').innerHTML;for(var o of n.options)if(o.value==p)n.value=p;f()"));
+        assert!(setup.ends_with("</small></p></div></body></html>") && !setup.contains("Scriptable"));
+        // Every page follows the browser's light or dark.
+        for out in out.iter().chain([&setup]) {
+            assert!(out.contains(":root{color-scheme:light dark}") && out.contains("a{color:LinkText}") && out.contains("h1{font-size:1.6em;text-align:center}"));
+            // The links, Save and the status under the form are centred.
+            assert!(out.contains("nav{margin:1em 0;text-align:center}.c,p.err:not(#s){text-align:center}") && out.contains(".st{text-align:center}"));
+        }
+        for out in out[..3].iter().chain([&setup]) {
+            assert!(out.contains("<p class=c><button>Save") && out.contains("<div class=st><p><small>") && out.ends_with("</small></p></div></body></html>"), "{out}");
+        }
+    }
+
     /// Each form carries its own keys and nothing of another page's,
     /// which is what makes its post a partial update; between them the
     /// forms have every key the one page had.
@@ -1820,7 +2045,9 @@ mod tests {
         // selects' names away, so Save posts the alarm only and a
         // stale tab's colour goes nowhere.
         assert_eq!(out[0].matches("<form").count(), 1);
-        assert!(out[0].contains("</select></label></fieldset><p class=err id=e hidden>The clock did not answer; nothing was changed.</p><p><button>Save</button>"), "{}", out[0]);
+        assert!(out[0].contains("</select></label></fieldset><p class=err id=e role=alert hidden>The clock did not answer; nothing was changed.</p><p class=c><button>Save</button>"), "{}", out[0]);
+        assert!(out[0].ends_with("</small></p></div></body></html>") && !out[0].contains("Scriptable"), "the page ends with the status lines");
+        assert!(out[0].contains("<option value=orange selected>Orange</option>"));
         assert!(out[0].contains("for(var c of D.querySelectorAll('#d select')){c.k=c.name;c.name=''}"));
         assert!(out[0].contains("D.getElementById('d').onchange=function(e){var t=e.target;P('/api',t.k+'='+t.value)"));
         // A post that failed says so, and the select goes back.
@@ -1863,13 +2090,14 @@ mod tests {
             }
             assert!(out.contains(&format!("<b>{}</b>", here.label())), "{here:?}");
             let host = Settings::DEFAULT.hostname.as_str();
-            assert!(out.contains(&format!("<title>Clock: {host}</title>")) && out.contains(&format!("<h1>Clock: {host}</h1>")), "{out}");
+            // The heading is the clock's; the title also says which page.
+            assert!(out.contains(&format!("<title>{host}: {}</title>", here.title())) && out.contains(&format!("<h1>Clock: {host}</h1>")), "{out}");
         }
         let mut ap = status(false);
         ap.mode = "ap";
         let mut out = String::new();
         write_system_page(&mut out, "clock", &ap, false).unwrap();
-        assert!(out.contains("<p><a href=/>Setup</a> · <a href=/clips>Clips</a> · <b>System</b></p>"), "{out}");
+        assert!(out.contains("<nav><a href=/>Setup</a> · <a href=/clips>Clips</a> · <b>System</b></nav>"), "{out}");
         assert!(!out.contains("id=a>") && out.contains("id=r>Reboot</button></p>"), "no way to the access point from it");
         let mut setup = String::new();
         write_provision_page(&mut setup, &Settings::DEFAULT, &ap, &[], Note::None).unwrap();
@@ -1896,7 +2124,7 @@ mod tests {
         // came with.
         let out = pages(&Settings::DEFAULT, &status(true), Note::None);
         for out in &out[..3] {
-            assert!(out.contains("<p><button>Save</button> <b id=u hidden>Changes not saved yet.</b></p>"), "{out}");
+            assert!(out.contains("<p class=c><button>Save</button><br><b id=u hidden>Changes not saved yet.</b></p>"), "{out}");
             assert!(out.contains("history.replaceState(0,'',location.pathname)"), "the notice's query leaves the address");
             assert_eq!(out.matches("<script>").count(), 1);
             assert!(out.contains("f=D.forms[0]") && out.contains("f.oninput=function(){"), "{out}");
@@ -1920,6 +2148,7 @@ mod tests {
         }
         assert!(out.contains("x.setRequestHeader('Authorization','PIN '+pin)"));
         assert!(out.contains("from the <a href=https://github.com/anarsoul/esp32clock/releases target=_blank rel=noopener>releases</a>)<input type=file id=f>"));
+        assert!(out.contains("<p><small>Uploading asks for a PIN, which the clock then shows on its panel. The panel goes dark while the image is written. Do not unplug.</small></p>"));
         assert!(out.contains("(one is set)") && out.contains("<p>Each action here asks for a PIN, which the clock then shows on its panel.</p>"));
         // The PIN's form is hidden, after the last fieldset (so its
         // buttons are not among the actions'), and nothing tells the
@@ -1957,6 +2186,7 @@ mod tests {
         let out = page(&st);
         assert!(out.contains("No pack in flash (1024 KB for one): the clips are those built into the firmware."), "{out}");
         assert_eq!(out.matches("id=t>").count(), 1, "one PIN field");
+        assert!(out.contains("<p><b>A new pack replaces all the clips of the one in flash; it does not add to them.</b></p>"));
         assert!(out.contains("up('/clips');") && out.contains("fetch('/pin',{method:'POST'})") && out.contains("<input type=file id=f>"));
         assert!(!out.contains("go('/token'") && !out.contains("up('/ota')"), "none of the system page's actions");
         for (_, label) in melody::CLIP_NAMES {
