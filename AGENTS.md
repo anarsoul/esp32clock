@@ -62,6 +62,7 @@ API_TOKEN='…' scripts/ota.sh <ip>      # later updates, over the LAN
 scripts/ota.sh                          # just the image file, for http://<ip>/system
 API_TOKEN='…' scripts/reload.sh <ip>   # software reset with the carry record, waits for the clock to come back
 scripts/pin.sh <ip> <serial-log>        # POST /pin, then the four digits read back from the monitor's log
+scripts/verify-csrf.sh <ip>             # a foreign Origin or Host is refused, the clock's own pages and a script are not
 AP_PASSWORD='…' cargo build --release   # optional: the clock's own access point's password (default esp32clock)
 scripts/wav2pcm.sh in.wav wav/tune.pcm [seconds] [skip] [rate]   # a sound file as the clip's raw PCM (sox): mono, 8 bits unsigned, 16 kHz behind a PCM1 header, or bare at 8 kHz for half the flash, or 31250 (see --rate 31250 below) for twice it
 ~/.local/pipx/venvs/skoolkit/bin/python scripts/zxbeeper.py game.tap tap/tune.bpr --seconds 60 [--stretch 4] [--settle 20 --start 64000]   # what a ZX Spectrum program plays on its beeper, as a clip (needs SkoolKit; --start for a loader that waits for a key)
@@ -203,7 +204,9 @@ MSRV-aware resolver picks an esp-rom-sys that esp-storage cannot build with.
 | both held 10 s | reset into the access point; from the access point, back to the station if a network is stored |
 
 Opening `http://<ip>/system` shows a four-digit PIN for a minute, or
-until it is used, right or wrong. The page has one field for it and
+until it is used, right or wrong (the page's script asks for it with
+`POST /pin`; the `GET` issues none, since any site can make a browser
+send one). The page has one field for it and
 four actions: the firmware upload, a new API token, Reboot and Access
 point. `/update` and `/token`, the pages it replaced on 2026-11-14,
 redirect to it.
@@ -365,9 +368,27 @@ reboots. The heartbeat carries an `mqtt:` line (state, connects,
 publishes, commands). Verify with `mosquitto_sub -v -t 'esp32clock/#'
 -t 'homeassistant/#'` on the host.
 
+Cross-site requests (2026-11-14): every request is held to
+`core::http::admit` before a route is looked at. `Host` must be absent
+(no browser), the clock's own IPv4 address, or on the station the
+hostname bare or with `.lan` or `.local` (`HOST_SUFFIXES`; a port and
+a trailing dot dropped, any case); on the access point the address
+only, since the captive DNS answers every name. Another `Host` is a
+`302` to `http://<ip>/` for a `GET` and `403` for a `POST`: that is
+DNS rebinding, a name made to resolve to the clock so a browser calls
+the attacker's page the clock's origin, and also a LAN with another
+domain, which gets there by address. A `POST` whose `Origin` is
+present and not `http://` plus one of those names (`null` included) is
+`403`; absent is `curl` and the scripts. `Sec-Fetch-Site` is not
+used, since a browser sends it only to HTTPS and localhost. No `GET`
+may have a side effect (an `<img>` on any site sends one), which is
+why `GET /system` issues no PIN. A new route that changes anything is
+a `POST`, and is covered without doing anything.
+
 Firmware updates: `POST /ota` with the application image as the body
 and an `Authorization` header: `Bearer <API_TOKEN>` from `scripts/ota.sh`,
-or `PIN <digits>` from the system page. Opening the page makes the
+or `PIN <digits>` from the system page. Opening the page (its script's
+`POST /pin`) makes the
 clock draw four random digits, show them on the panel for a minute
 (any press ends it; ringing and alarm-set take precedence) and log them,
 so the uploader must be able to see the clock or the serial port. A PIN
@@ -423,7 +444,7 @@ module ends with its `#[cfg(test)] mod tests`.
 | `core/src/http.rs` | `Method`, `Head` (`content_length` is `None` when the header is absent, and `transfer_encoding` says one was sent), `parse_head`; `RESPONSE_BUF` and `PAGE_MAX`, which the page tests assert against |
 | `core/src/mqtt.rs` | Home Assistant over MQTT, pure: `DeviceId` and its topics, `Link` (the state for the page), `Route` and `Command`, `SET_KEYS` and `apply_set` over `form::apply_one`, `write_discovery` (the device payload with every entity) and `DISCOVERY_MAX` |
 | `src/mqtt.rs` | the MQTT task: resolve, connect with the will, subscribe, discovery and state publishes, keepalive pings, the select loop over `poll_header`, the back-off, `goodbye` for the reset paths, `link()` and `Report` for the page and the heartbeat |
-| `src/http.rs` | HTTP/1.0 server, `LISTENERS` sockets each in its own task: a `POST` without `Content-Length` to a route that reads a body (`/`, `/settings`, `/ha`, `/api`, `/play`, `/token`, `/ota`; `reads_body`) is answered `411` and any `Transfer-Encoding` `400` before a route is looked at (`NoRequest`), since a bodiless post is not an empty form, while the command posts (`/reload`, `/ap`, `/pin`, `/scan`, `/stop`) take a bare `curl -X POST`; `GET`/`POST` on `/`, `/settings` and `/ha` (the three forms, on the station; `/` is the setup form on the access point) and `/api`, `POST /play`, `POST /stop`, `GET /system` (issues a PIN), `GET /update` and `GET /token` (redirects to it), `POST /ota` with the body streamed to `ota::install`, `POST /reload`, `POST /ap` and `POST /token` with the token or the PIN, `POST /pin`, `POST /scan` on the access point, `GET /favicon.ico` and `GET /tz.js` (`src/favicon.ico` and `src/tz.js` embedded, the two cacheable responses; the page loads the script as `/tz.js?v=<version>` so an update is not served the cached one); the four pages are titled and headed `Clock: <hostname>`; a refused form redirects to its own page with `?error=…`; per-listener state and counters for the heartbeat |
+| `src/http.rs` | HTTP/1.0 server, `LISTENERS` sockets each in its own task: every request goes through `http::admit` first and one it refuses is answered by `turn_away` (a `302` to the address for a `GET` under another `Host`, else `403`; not counted as served) and `status_line` sends `X-Frame-Options: DENY`; a `POST` without `Content-Length` to a route that reads a body (`/`, `/settings`, `/ha`, `/api`, `/play`, `/token`, `/ota`; `reads_body`) is answered `411` and any `Transfer-Encoding` `400` before a route is looked at (`NoRequest`), since a bodiless post is not an empty form, while the command posts (`/reload`, `/ap`, `/pin`, `/scan`, `/stop`) take a bare `curl -X POST`; `GET`/`POST` on `/`, `/settings` and `/ha` (the three forms, on the station; `/` is the setup form on the access point) and `/api`, `POST /play`, `POST /stop`, `GET /system` (issues no PIN; its script posts `/pin`), `GET /update` and `GET /token` (redirects to it), `POST /ota` with the body streamed to `ota::install`, `POST /reload`, `POST /ap` and `POST /token` with the token or the PIN, `POST /pin`, `POST /scan` on the access point, `GET /favicon.ico` and `GET /tz.js` (`src/favicon.ico` and `src/tz.js` embedded, the two cacheable responses; the page loads the script as `/tz.js?v=<version>` so an update is not served the cached one); the four pages are titled and headed `Clock: <hostname>`; a refused form redirects to its own page with `?error=…`; per-listener state and counters for the heartbeat |
 | `core/src/buttons.rs` | `Button`, `Kind`, `Event` |
 | `src/buttons.rs` | debounced short/long press events, the two-button long press, and the 10 s two-button `Hold` |
 | `core/src/melody.rs` | alarm tunes as pitch and length data with tempo; `RANDOM` and the pure `pick` that turns it into a tune; `CLIP_COUNT`, `CLIP_NAMES` and `CLIP_DATA` (included from `clips.rs`, which `core/build.rs` writes from `ALARM_CLIP`), `HAS_CLIP`, and one melody a clip (`Melody::clip`) after the nine tunes of `MELODIES`; pure |
@@ -622,10 +643,12 @@ module ends with its `#[cfg(test)] mod tests`.
 
 - `http::RESPONSE_BUF` (6 KB, one per listener task; raised from 4096
   on 2026-11-02) holds the whole page plus headers, and
-  overflow is a 500, not a truncation. The headers are 88 bytes;
-  `core::http::PAGE_MAX` (6016) is what a page may take, and the
+  overflow is a 500, not a truncation. The headers are 126 bytes
+  for a page (`HEADERS_MAX`; 103 before `X-Frame-Options`, and never
+  the 88 this said);
+  `core::http::PAGE_MAX` (5984) is what a page may take, and the
   `form` tests build each page at its worst case and assert it
-  (2026-11-14, since the split in four, with the three clips of `clips/`: the clock page 4353 with the status lines, a stored SSID of 32 `"` and a 64-byte broker host in them; settings 2433 with a 48-byte timezone rule of `<`, four bytes each through `HtmlStr`; Home Assistant 2253 with a user of 32 `"`; system 3756; setup with twelve 32-character networks about 3200. The one page before it was 5564, and 5865 with nine clips). `cargo host-test` after adding a field
+  (2026-11-14, since the split in four, with the three clips of `clips/`: the clock page 4353 with the status lines, a stored SSID of 32 `"` and a 64-byte broker host in them; settings 2433 with a 48-byte timezone rule of `<`, four bytes each through `HtmlStr`; Home Assistant 2253 with a user of 32 `"`; system 3876; setup with twelve 32-character networks about 3200. The one page before it was 5564, and 5865 with nine clips). `cargo host-test` after adding a field
   or label; the test prints the sizes with `-- --nocapture`. The setup
   page's network list stops at `form::NETWORK_LIST_BUDGET` (1900)
   bytes, strongest first, with a "N more not shown" line, because a
@@ -690,7 +713,7 @@ module ends with its `#[cfg(test)] mod tests`.
 
 ## Verifying without a board
 
-`cargo host-test` runs the tests of `core/` on the host (139 on 2026-11-14): the AiP33628 encoder against a behavioural model of the
+`cargo host-test` runs the tests of `core/` on the host (143 on 2026-11-14): the AiP33628 encoder against a behavioural model of the
 chip (shift on CLK rise, latch on DIN rise while CLK high), the panel
 map, the palette and brightness tables, the hostname, password and
 token rules, the record round trip and every older version, the form

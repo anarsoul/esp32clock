@@ -927,6 +927,10 @@ pub fn write_ha_page(
 /// the server needs no multipart for the image; `back` polls `/api`
 /// until the clock answers again. `XMLHttpRequest` for the upload's
 /// progress bar. The access-point button is absent on the access point.
+/// It ends by asking for the PIN, `POST /pin`: the page's `GET` issues
+/// none, since any site can make a browser send a `GET`, and a post
+/// from this page is one the server can tell from theirs
+/// (`http::admit`). A clock locked out by a wrong PIN says so there.
 const SYSTEM_JS: &str = "<script>\
 var $=function(i){return document.getElementById(i)},t=$('t'),s=$('s'),f=$('f'),p=$('p'),k=$('k'),a=$('a'),N=' Reload this page for a new PIN.';\
 function say(m,e){s.textContent=m;s.className=e?'err':'';s.scrollIntoView({block:'center'})}\
@@ -948,11 +952,12 @@ var x=go('/token',function(m){say(m+'.'+N)});if(!x)return;\
 x.setRequestHeader('Content-Type','application/x-www-form-urlencoded');x.send('token='+encodeURIComponent(k.value))};\
 $('r').onclick=function(){var x=go('/reload',back);if(x)x.send()};\
 if(a)a.onclick=function(){if(!confirm('Leave the network? The clock becomes an access point until a network is saved there, or both buttons are held for ten seconds.'))return;\
-var x=go('/ap',function(m){say(m+'. Join the clock\\'s own network and open http://192.168.4.1/.')});if(x)x.send()}\
+var x=go('/ap',function(m){say(m+'. Join the clock\\'s own network and open http://192.168.4.1/.')});if(x)x.send()};\
+fetch('/pin',{method:'POST'}).then(function(r){if(!r.ok)r.text().then(function(m){say(m.trim()+'.'+N,1)})})\
 </script></body></html>";
 
 /// The system page, `GET /system`: what needs someone who can see the
-/// clock. Opening it puts a four-digit PIN on the panel, and the page
+/// clock. Its script puts a four-digit PIN on the panel, and the page
 /// has one field for it and four actions, each the request a script
 /// makes with `Bearer`, sent with `PIN` instead: the firmware image as
 /// the raw body of `/ota`, a new API token to `/token` (empty clears
@@ -960,25 +965,20 @@ var x=go('/ap',function(m){say(m+'. Join the clock\\'s own network and open http
 /// paths), `/reload` and `/ap`. A PIN is one action: the buttons stay
 /// disabled after an answer either way and the status line says to
 /// reload for another. The page says little: what the token is for and
-/// its rules are the README's, and a bad one is refused with them. `token_set` says whether a token is set now;
-/// `lockout_secs` is set when no PIN was issued because of a wrong
-/// attempt just before. On the access point (`st.mode`) the button
+/// its rules are the README's, and a bad one is refused with them. `token_set` says whether a token is set now.
+/// On the access point (`st.mode`) the button
 /// that leads there is left out.
 pub fn write_system_page(
     out: &mut impl core::fmt::Write,
     hostname: &str,
     st: &Status,
     token_set: bool,
-    lockout_secs: Option<u64>,
 ) -> core::fmt::Result {
     let ap = st.mode == "ap";
     write_top(out, hostname, Page::System, ap, None)?;
-    match lockout_secs {
-        Some(secs) => write!(out, "<p class=err>A wrong PIN was entered. Reload this page in {secs} s to get a new one.</p>")?,
-        None => out.write_str("<p><b>Every action on this page needs the PIN the clock is showing.</b> One PIN, one action.</p>")?,
-    }
     out.write_str(
-        "<label>PIN on the clock<input type=text inputmode=numeric pattern=[0-9]* maxlength=4 autocomplete=off id=t></label><p id=s></p>\
+        "<p><b>Every action on this page needs the PIN the clock is showing.</b> One PIN, one action.</p>\
+<label>PIN on the clock<input type=text inputmode=numeric pattern=[0-9]* maxlength=4 autocomplete=off id=t></label><p id=s></p>\
 <fieldset><legend>Firmware update</legend>",
     )?;
     write_firmware_line(out, st, false)?;
@@ -1540,7 +1540,7 @@ mod tests {
         write_page(&mut out[0], s, st, error).unwrap();
         write_settings_page(&mut out[1], s, st, error).unwrap();
         write_ha_page(&mut out[2], s, st, error).unwrap();
-        write_system_page(&mut out[3], s.hostname.as_str(), st, true, Some(10)).unwrap();
+        write_system_page(&mut out[3], s.hostname.as_str(), st, true).unwrap();
         out
     }
 
@@ -1632,7 +1632,7 @@ mod tests {
         let mut ap = status(false);
         ap.mode = "ap";
         let mut out = String::new();
-        write_system_page(&mut out, "clock", &ap, false, None).unwrap();
+        write_system_page(&mut out, "clock", &ap, false).unwrap();
         assert!(out.contains("<p><a href=/>Setup</a> · <b>System</b></p>"), "{out}");
         assert!(!out.contains("id=a>") && out.contains("id=r>Reboot</button></p>"), "no way to the access point from it");
         let mut setup = String::new();
@@ -1676,7 +1676,7 @@ mod tests {
     #[test]
     fn system_page_has_the_four_actions() {
         let mut out = String::new();
-        write_system_page(&mut out, "clock", &status(true), true, None).unwrap();
+        write_system_page(&mut out, "clock", &status(true), true).unwrap();
         assert_eq!(out.matches("id=t>").count(), 1, "one PIN field");
         for route in ["go('/ota',", "go('/token',", "go('/reload',", "go('/ap',"] {
             assert!(out.contains(route), "{route}");
@@ -1685,9 +1685,11 @@ mod tests {
         assert!(out.contains("(one is set)") && out.contains("<b>Every action on this page needs the PIN the clock is showing.</b>"));
         // Reboot at the left edge, the access point at the right.
         assert!(out.contains("<p style=display:flex;justify-content:space-between><button id=r>Reboot</button><button id=a>Access point</button></p>"));
+        // The page asks for its PIN by a post of its own: a `GET` issues none.
+        assert!(out.contains("fetch('/pin',{method:'POST'})"));
         out.clear();
-        write_system_page(&mut out, "clock", &status(true), false, Some(7)).unwrap();
-        assert!(out.contains("(none is set)") && out.contains("Reload this page in 7 s"));
+        write_system_page(&mut out, "clock", &status(true), false).unwrap();
+        assert!(out.contains("(none is set)"));
     }
 
     #[test]

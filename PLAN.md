@@ -8384,3 +8384,83 @@ Not run: the Access point button (it takes the bench clock off the
 LAN), the pages on the access point (the system page without its
 button, the setup form's link), the no-script Save of the display.
 For the user: those, and the four pages on white-clock and a phone.
+
+### Cross-site requests refused: `Host`, `Origin`, no framing — built and run on test-clock 2026-11-14
+
+The user, 2026-11-14: "we don't have a protection against CSRF, so any
+site on internet can send a request to the clock. Also it looks like
+we are not checking Origin and Host headers." True of every route
+without a credential: a form post is a request a browser sends across
+origins with no preflight, so a page anywhere could make a browser on
+the LAN post to `/`, `/settings`, `/ha`, `/api`, `/play`, `/stop`,
+`/pin` and `/scan`. The four routes behind `Authorization` (`/ota`,
+`/token`, `/reload`, `/ap`) were closed to that already, since the
+header forces a preflight and the clock answers no `OPTIONS`; but not
+to DNS rebinding, where the attacker's name comes to resolve to the
+clock, the browser calls it the same origin, and the PIN can be
+guessed at one try in ten seconds with `/pin` issuing new ones.
+
+| what | rule |
+| --- | --- |
+| `Host`, every request | absent (not a browser), the clock's own IPv4 address, or on the station the hostname bare or with `.lan` or `.local` (the user's list, "for now"); a port and a trailing dot are dropped, case ignored. On the access point the address only, since the captive DNS answers every name |
+| another `Host` | `GET`: `302` to `http://<ip>/`, so a LAN with another domain still gets there by address and a rebound page is sent off its origin; on the access point this is the captive portal. `POST`: `403` |
+| `Origin`, every `POST` | absent is allowed (`curl`, the scripts); present it must be `http://` and a name the `Host` rule accepts; anything else, `null` included, is `403` |
+| framing | `X-Frame-Options: DENY` on every response `status_line` writes, or a click in a frame would be a same-origin post |
+| `GET /system` | issues no PIN any more: an `<img>` on any page could put digits on the panel and take a PIN in use away. The page's script posts `/pin` as it loads, a same-origin post the rule above passes, and says so if the clock is locked out |
+
+The rule is `http::admit` in `core`, pure, with the clock's address
+and hostname passed in; `parse_head` keeps `Host` and `Origin` and
+refuses a head with either twice. `Sec-Fetch-Site` is not used: a
+browser sends it only to HTTPS and localhost. A refused request does
+not count as served, so it does not confirm a new image. A refused
+upload drains its body first, as a wrong token does.
+
+The headers `status_line` writes were 103 bytes for a page, not the 88
+the comment said (it predates `Cache-Control`); with the new one they
+are 126, so `PAGE_MAX` leaves 160 of the buffer and not 128.
+
+Checks on the host: `admit` over each accepted form and the refusals
+(`clock.evil.example`, `clock.lan.evil.example`, a name on the access
+point, `null`, `https`, another address). On the clock, for the user:
+`scripts/verify-csrf.sh <ip>`; the four pages by address and by
+`white-clock.lan`, a save on each, Play, the colour select, an upload
+from `/system` with the PIN the page asked for; `scripts/ota.sh` and
+`scripts/reload.sh` by name.
+
+**On test-clock, 2026-11-14** (`v0.4-29-g88b0b7a-dirty`, by OTA with
+`scripts/ota.sh test-clock.lan`, so a script by name passes):
+`scripts/verify-csrf.sh 10.1.1.30`, all 26 checks. By hand with
+`curl`: `test-clock.lan` and `TEST-CLOCK.local:80` as `Host` are
+answered, `test-clock.lan.evil.example` and `10.1.1.31` are `302`, a
+request with no `Host` is answered, a page by name may post to the
+address. `GET /system` put no PIN in the serial log, with the clock's
+`Host` or another; `POST /pin` did. `scripts/reload.sh` by name.
+
+In headless Chromium, a page served from `http://localhost:8765` as
+the other site: a form posted to `/api`, `/` and `/settings`, and a
+`fetch` with `no-cors` to `/play` and `/pin`, each `403` with `refused
+by its Origin … origin Some("http://localhost:8765")` in the log and
+the settings as they were; the clock's page in an `<iframe>`, `200`
+and then `ERR_BLOCKED_BY_RESPONSE`, the frame empty; `<img
+src=…/system>`, no PIN. The clock's own pages in the same browser: the
+colour select to `/api`, Save on `/settings` (12 hour on and off
+again), Play and Stop, and `/system` loading with its `POST /pin`
+answered `200` and a PIN in the log. With that PIN, `POST /reload`
+under a foreign `Origin` was `403` and left the PIN unspent (the rule
+comes before the credentials); under the clock's own it rebooted. The
+settings were left as found.
+
+The first run of the browser test sent six requests to the clock at
+once and three were refused connections, not `403`: three listeners,
+as ever, and no part of this change.
+
+The upload from the system page, same day, in headless Chromium with
+the monitor attached: the page loaded, its `POST /pin` put a PIN in
+the serial log, the script typed it, chose `target/esp32clock-ota.bin`
+and clicked Upload; `updated: … written to ota_1` after 56 s, `Back
+up: firmware … in ota_1` at 63 s, and the log's `confirmed good`.
+
+Not run: anything on the
+access point (the host would leave its LAN): a phone's sign-in sheet
+now gets a `302` for `/` too when its probe names another host. For
+the user.

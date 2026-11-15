@@ -377,6 +377,12 @@ The clock serves four pages, linked to each other at the top of each:
   Opening it puts a four-digit PIN on the panel, which each of its
   actions asks for.
 
+The clock answers a browser only under its own address or its
+hostname, alone or with `.lan` or `.local` (`http://clock.lan/`), and
+takes a form only from its own pages, so a web page elsewhere cannot
+change the clock through a browser on your network. Under any other
+name it redirects to its address. Scripts (`curl`) are not affected.
+
 The same keys are available at `/api`: `GET` answers JSON, `POST` with
 form-encoded keys applies all of them or none. A posted network, broker
 or token needs `Authorization: Bearer <API_TOKEN>`. `scripts/configure-clock.sh`

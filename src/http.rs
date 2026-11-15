@@ -11,12 +11,18 @@
 //! broker) and `/system`. The first three are forms posted to their
 //! own path, each a partial update of the settings. `POST /api` takes
 //! every setting; the network (`ssid`, `password`) only with the token.
-//! `GET /system` issues a PIN and serves the page that asks for it,
+//! `GET /system` serves the page that asks for a PIN (its script
+//! posts `/pin`, which issues it),
 //! with the four things the PIN or the token allows: the upload (`POST
 //! /ota`), a new token (`POST /token`), a reset (`POST /reload`) and a
 //! reset into the access point (`POST /ap`); `GET /update` and `GET
 //! /token`, the pages it replaced, redirect to it. `POST /pin` issues
-//! a PIN for a script. On the access point `GET /` is the setup form, `POST /scan`
+//! a PIN, for that page and for a script. Every request is held to
+//! `http::admit` first: a `Host` that is not the clock's address or
+//! name is sent to the address (`GET`) or refused (`POST`), and a
+//! `POST` whose `Origin` is another site's is refused, so no page on
+//! the internet can post a form to the clock through a browser on the
+//! LAN, by a form or by a name made to resolve here. On the access point `GET /` is the setup form, `POST /scan`
 //! refreshes its network list, and any other path is a redirect to the
 //! clock's address, so a phone's connectivity probe (sent to the clock
 //! by the captive DNS) opens the form in the sign-in sheet.
@@ -36,7 +42,7 @@ use embassy_time::{Duration, with_timeout};
 use embedded_io_async::{Read, Write};
 use log::{info, warn};
 
-use esp32clock_core::http::{Method, RESPONSE_BUF, parse_head};
+use esp32clock_core::http::{HEADERS_MAX, Method, Own, PAGE_MAX, RESPONSE_BUF, Refused, admit, parse_head};
 
 use crate::buzzer;
 use crate::config::HTTP_PORT;
@@ -199,12 +205,15 @@ enum Body<'a> {
 }
 
 /// What was asked. `query` is what followed `?` in the target, without
-/// the `?`; `authorization` is that header's value, if sent.
+/// the `?`; `authorization`, `host` and `origin` are those headers'
+/// values, if sent.
 struct Request<'a> {
     method: Method,
     path: &'a str,
     query: &'a str,
     authorization: Option<&'a str>,
+    host: Option<&'a str>,
+    origin: Option<&'a str>,
     body: Body<'a>,
 }
 
@@ -288,12 +297,31 @@ async fn read_request<'a>(socket: &mut TcpSocket<'_>, buf: &'a mut [u8; REQUEST_
     } else {
         Body::Inline(&rest[..content_length])
     };
-    Ok(Request { method: head.method, path: head.path, query: head.query, authorization: head.authorization, body })
+    Ok(Request {
+        method: head.method,
+        path: head.path,
+        query: head.query,
+        authorization: head.authorization,
+        host: head.host,
+        origin: head.origin,
+        body,
+    })
 }
 
+/// The head of every response with a body of the clock's own making.
+/// No page may be shown in a frame: a click there would be a post from
+/// the clock's own origin, which `admit` lets through.
 fn status_line(out: &mut Response, status: &str, content_type: &str) -> core::fmt::Result {
-    write!(out, "HTTP/1.0 {status}\r\nContent-Type: {content_type}\r\nConnection: close\r\nCache-Control: no-store\r\n\r\n")
+    let before = out.len;
+    write!(
+        out,
+        "HTTP/1.0 {status}\r\nContent-Type: {content_type}\r\nConnection: close\r\nCache-Control: no-store\r\nX-Frame-Options: DENY\r\n\r\n"
+    )?;
+    debug_assert!(status != "200 OK" || out.len - before <= HEADERS_MAX);
+    Ok(())
 }
+
+const _: () = assert!(PAGE_MAX + HEADERS_MAX <= RESPONSE_BUF);
 
 /// Back to the clock page, or the setup form on the access point.
 fn redirect_home(out: &mut Response, error: Option<FormError>) -> core::fmt::Result {
@@ -512,11 +540,11 @@ fn respond(out: &mut Response, req: &Request<'_>, body: &[u8]) -> Result<Then, c
             out.write_bytes(TZ_JS)?;
         }
         (Method::Get, "/system") => {
-            // Opening the page puts a PIN on the panel; the page asks
-            // for it, once, for whichever of its four actions.
-            let lockout_secs = auth::issue_pin(random()).err();
+            // The page asks for a PIN, once, for whichever of its four
+            // actions; its script has the clock issue one, below. Not
+            // this `GET`, which any site's `<img>` can send.
             status_line(out, "200 OK", "text/html; charset=utf-8")?;
-            form::write_system_page(out, settings::get().hostname.as_str(), &status(), auth::token_enabled(), lockout_secs)?;
+            form::write_system_page(out, settings::get().hostname.as_str(), &status(), auth::token_enabled())?;
         }
         (Method::Get, "/update" | "/token") => {
             // The pages the system page replaced: an older README, the
@@ -524,8 +552,9 @@ fn respond(out: &mut Response, req: &Request<'_>, body: &[u8]) -> Result<Then, c
             write!(out, "HTTP/1.0 302 Found\r\nLocation: {}\r\nConnection: close\r\nCache-Control: no-store\r\n\r\n", Page::System.path())?;
         }
         (Method::Post, "/pin") => {
-            // A PIN without the page, for a script that reads the serial
-            // log. The digits are never in the response.
+            // A PIN on the panel: for the system page, whose script
+            // posts this as it loads, and for a script that reads the
+            // serial log. The digits are never in the response.
             match auth::issue_pin(random()) {
                 Ok(_) => {
                     status_line(out, "200 OK", "text/plain")?;
@@ -634,6 +663,39 @@ async fn rescan(out: &mut Response) -> Result<Then, core::fmt::Error> {
         warn!("http: scan not done within {} s", SCAN_WAIT.as_secs());
     }
     redirect_home(out, None)?;
+    Ok(Then::Close)
+}
+
+/// A request `admit` refused. Another `Host` on a `GET` is sent to the
+/// clock's address: a LAN that calls the clock something else gets
+/// there, a page that rebound its name to the clock is sent off its
+/// origin, and on the access point it is the captive portal's
+/// redirect. Anything else is `403`. An upload's body is taken off the
+/// socket first, as for a wrong token.
+async fn turn_away(
+    out: &mut Response,
+    req: &Request<'_>,
+    refused: Refused,
+    ip: Option<[u8; 4]>,
+    socket: &mut TcpSocket<'_>,
+) -> Result<Then, core::fmt::Error> {
+    warn!("http: {:?} {} refused by its {refused:?}: host {:?}, origin {:?}", req.method, req.path, req.host, req.origin);
+    if let Body::Stream { first, total } = req.body {
+        drain(socket, out, total.saturating_sub(first.len())).await;
+    }
+    match (refused, req.method, ip) {
+        (Refused::Host, Method::Get, Some([a, b, c, d])) => {
+            write!(out, "HTTP/1.0 302 Found\r\nLocation: http://{a}.{b}.{c}.{d}/\r\nConnection: close\r\nCache-Control: no-store\r\n\r\n")?;
+        }
+        (Refused::Host, ..) => {
+            status_line(out, "403 Forbidden", "text/plain")?;
+            out.write_str("not the clock's name: use its address, or its hostname alone or with .lan or .local\n")?;
+        }
+        (Refused::Origin, ..) => {
+            status_line(out, "403 Forbidden", "text/plain")?;
+            out.write_str("a request from another site's page\n")?;
+        }
+    }
     Ok(Then::Close)
 }
 
@@ -753,10 +815,18 @@ pub async fn http_task(stack: Stack<'static>, index: usize) -> ! {
         let served = match req {
             Ok(req) => {
                 info!("http: L{index} {:?} {}", req.method, req.path);
-                let built = match req.body {
-                    Body::Inline(_) if req.method == Method::Post && req.path == "/scan" => rescan(&mut out).await,
-                    Body::Inline(body) => respond(&mut out, &req, body),
-                    Body::Stream { .. } => upload(&mut out, &req, &mut socket).await,
+                let hostname = settings::get().hostname;
+                let own = Own {
+                    ip: stack.config_v4().map(|c| c.address.address().octets()),
+                    hostname: hostname.as_str(),
+                    ap: net::mode() == Mode::AccessPoint,
+                };
+                let admitted = admit(req.method, req.host, req.origin, &own);
+                let built = match (admitted, &req.body) {
+                    (Err(refused), _) => turn_away(&mut out, &req, refused, own.ip, &mut socket).await,
+                    (Ok(()), Body::Inline(_)) if req.method == Method::Post && req.path == "/scan" => rescan(&mut out).await,
+                    (Ok(()), Body::Inline(body)) => respond(&mut out, &req, body),
+                    (Ok(()), Body::Stream { .. }) => upload(&mut out, &req, &mut socket).await,
                 };
                 match built {
                     Ok(t) => then = t,
@@ -766,7 +836,9 @@ pub async fn http_task(stack: Stack<'static>, index: usize) -> ! {
                         let _ = status_line(&mut out, "500 Internal Server Error", "text/plain");
                     }
                 }
-                true
+                // A request turned away is not one served: it must not
+                // confirm a new image.
+                admitted.is_ok()
             }
             Err(NoRequest::Refuse(status)) => {
                 warn!("http: L{index} refused: {status}");
