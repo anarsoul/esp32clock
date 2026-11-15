@@ -126,6 +126,59 @@ pub enum FormError {
     BrokerPassword,
 }
 
+/// The keys of the pages' forms that take a typed or chosen value, with
+/// the label each has on its page: what a refused form names its bad
+/// field by. The page writes the label, never the query's own text.
+pub const FIELDS: [(&str, &str); 15] = [
+    ("alarm", "Alarm time"),
+    ("days", "Alarm days"),
+    ("melody", "Alarm sound"),
+    ("color", "Colour"),
+    ("brightness", "Brightness"),
+    ("tz", "Timezone"),
+    ("temp_show", "Temperature on the panel"),
+    ("temp_offset", "Thermometer offset"),
+    ("hostname", "Hostname"),
+    ("mqtt_host", "Host"),
+    ("mqtt_port", "Port"),
+    ("mqtt_user", "User"),
+    ("mqtt_password", "Password"),
+    ("ssid", "Network name"),
+    ("password", "Password"),
+];
+
+/// The key of `FIELDS` equal to `key`, as a `'static` string a redirect
+/// can carry.
+pub fn field(key: &str) -> Option<&'static str> {
+    FIELDS.iter().find(|(k, _)| *k == key).map(|(k, _)| *k)
+}
+
+/// What a page says above its form about the post that led to it:
+/// nothing, that it was saved, or why it was refused, with the key of
+/// the field at fault (one of `FIELDS`) when there was one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Note {
+    None,
+    Saved,
+    Refused(FormError, Option<&'static str>),
+}
+
+/// The notice of a station page, under the line of links.
+fn write_note(out: &mut impl core::fmt::Write, note: Note) -> core::fmt::Result {
+    match note {
+        Note::None => Ok(()),
+        Note::Saved => out.write_str("<p><b>Saved.</b></p>"),
+        Note::Refused(FormError::BadValue, Some(key)) => match FIELDS.iter().find(|(k, _)| *k == key) {
+            Some((_, label)) => write!(out, "<p class=err>Nothing was saved: bad value for <b>{label}</b>.</p>"),
+            None => out.write_str("<p class=err>Nothing was saved: a field had a bad value.</p>"),
+        },
+        Note::Refused(FormError::BadValue, None) => out.write_str("<p class=err>Nothing was saved: a field had a bad value.</p>"),
+        Note::Refused(FormError::UnknownKey, _) => out.write_str("<p class=err>Nothing was saved: an unknown field was sent.</p>"),
+        Note::Refused(FormError::Forbidden, _) => out.write_str("<p class=err>Nothing was saved: the network is set with the token.</p>"),
+        Note::Refused(FormError::BrokerPassword, _) => out.write_str("<p class=err>Nothing was saved: a new broker needs its password typed again.</p>"),
+    }
+}
+
 /// Which guarded keys a request may set. The network keys need the
 /// token on `/api`, or the access point's own page; the broker keys
 /// need the token on `/api` too, since pointing the clock at another
@@ -411,17 +464,25 @@ pub fn parse_tenths(value: &str) -> Option<i16> {
 /// page named; the same host keeps it on an empty field, and an empty
 /// host clears it.
 pub fn apply(s: &mut Settings, body: &[u8], allow: Allow) -> Result<(), FormError> {
+    apply_naming(s, body, allow).map_err(|(e, _)| e)
+}
+
+/// `apply`, answering with an error the key it was about, if that is
+/// one of `FIELDS`: what a page's form is refused with, so the page can
+/// say which field.
+pub fn apply_naming(s: &mut Settings, body: &[u8], allow: Allow) -> Result<(), (FormError, Option<&'static str>)> {
     let before = s.mqtt;
     let mut password_typed = false;
     let mut pick = None;
     for (key, value) in Pairs(body) {
         let mut kbuf = [0u8; 16];
         let mut vbuf = [0u8; VALUE_MAX];
-        let kn = percent_decode(key, &mut kbuf).ok_or(FormError::UnknownKey)?;
-        let vn = percent_decode(value, &mut vbuf).ok_or(FormError::BadValue)?;
-        let key = core::str::from_utf8(&kbuf[..kn]).map_err(|_| FormError::UnknownKey)?;
-        let value = core::str::from_utf8(&vbuf[..vn]).map_err(|_| FormError::BadValue)?;
-        apply_one(s, key, value, allow)?;
+        let kn = percent_decode(key, &mut kbuf).ok_or((FormError::UnknownKey, None))?;
+        let key = core::str::from_utf8(&kbuf[..kn]).map_err(|_| (FormError::UnknownKey, None))?;
+        let named = |e| (e, field(key));
+        let vn = percent_decode(value, &mut vbuf).ok_or(FormError::BadValue).map_err(named)?;
+        let value = core::str::from_utf8(&vbuf[..vn]).map_err(|_| FormError::BadValue).map_err(named)?;
+        apply_one(s, key, value, allow).map_err(named)?;
         if key == "ssid_pick" && !value.is_empty() {
             pick = Some(s.wifi.ssid);
         }
@@ -434,7 +495,7 @@ pub fn apply(s: &mut Settings, body: &[u8], allow: Allow) -> Result<(), FormErro
     }
     let moved = s.mqtt.host != before.host && !s.mqtt.host.is_empty();
     if allow == Allow::PAGE && moved && !password_typed && !before.password.0.is_empty() {
-        return Err(FormError::BrokerPassword);
+        return Err((FormError::BrokerPassword, None));
     }
     Ok(())
 }
@@ -747,10 +808,10 @@ impl Page {
 
 /// What every page starts with: the head, the hostname as title and
 /// heading, the line of links with this page's own name in bold, and
-/// why the last post of its form was refused, if it was. On the access
+/// what became of the last post of its form (`Note`). On the access
 /// point (`ap`) `/` is the setup form and the two settings pages are
 /// not served, so the links are that form, the clips and the system page.
-fn write_top(out: &mut impl core::fmt::Write, hostname: &str, here: Page, ap: bool, error: Option<FormError>) -> core::fmt::Result {
+fn write_top(out: &mut impl core::fmt::Write, hostname: &str, here: Page, ap: bool, note: Note) -> core::fmt::Result {
     out.write_str(HEAD)?;
     // The hostname is letters, digits and dashes, so no escaping here.
     write!(out, "<title>Clock: {hostname}</title></head><body><h1>Clock: {hostname}</h1><p>")?;
@@ -771,13 +832,7 @@ fn write_top(out: &mut impl core::fmt::Write, hostname: &str, here: Page, ap: bo
         }
     }
     out.write_str("</p>")?;
-    match error {
-        None => Ok(()),
-        Some(FormError::BadValue) => out.write_str("<p class=err>Nothing was saved: a field had a bad value.</p>"),
-        Some(FormError::UnknownKey) => out.write_str("<p class=err>Nothing was saved: an unknown field was sent.</p>"),
-        Some(FormError::Forbidden) => out.write_str("<p class=err>Nothing was saved: the network is set with the token.</p>"),
-        Some(FormError::BrokerPassword) => out.write_str("<p class=err>Nothing was saved: a new broker needs its password typed again.</p>"),
-    }
+    write_note(out, note)
 }
 
 /// A checkbox that is posted either way: a hidden `0` under the same
@@ -796,34 +851,47 @@ const SAVE: &str = "<p><button>Save</button> <b id=u hidden>Changes not saved ye
 
 /// The script of a page with a settings form, without its tags: the
 /// unsaved-changes mark, shown while any named control of the first
-/// form differs from what the page was served with.
-const UNSAVED_JS: &str = "var D=document,f=D.forms[0],u=D.getElementById('u');\
+/// form differs from what the page was served with. It also takes the
+/// notice's query (`?saved=1`, `?error=…`) off the address, so a reload
+/// does not say it again.
+const UNSAVED_JS: &str = "var D=document,f=D.forms[0],u=D.getElementById('u');history.replaceState(0,'',location.pathname);\
 f.oninput=function(){var d=false;for(var e of f.elements)if(e.name&&(e.type=='checkbox'?e.checked!=e.defaultChecked:\
 e.options?!e.options[e.selectedIndex].defaultSelected:e.value!=e.defaultValue))d=true;u.hidden=!d};";
 
-/// The clock page's own script, after `UNSAVED_JS`: Play and Stop post
-/// the chosen tune to the button's own address without leaving the
-/// page, and a change in the display fieldset (`d`) is posted to `/api`
-/// at once, one key, and becomes the select's default, so the mark does
-/// not call it unsaved.
-const CLOCK_JS: &str = "var m=D.getElementById('m');\
-function P(a,b){fetch(a,{method:'POST',redirect:'manual',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:b})}\
-for(let i of'pq')D.getElementById(i).onclick=function(e){e.preventDefault();P(this.formAction,'melody='+m.value)};\
-D.getElementById('d').onchange=function(e){var t=e.target;P('/api',t.name+'='+t.value);for(var o of t.options)o.defaultSelected=o.selected;f.oninput()}";
+/// The clock page's own script, after `UNSAVED_JS`. `P` posts a body
+/// and fails on anything but a 2xx or the redirect Play and Stop answer
+/// with; `E` shows or hides the line that says a post failed. Play and
+/// Stop become plain buttons, so that Enter in the alarm form is Save
+/// (a form's default button is its first submit button, which Play
+/// is), and post the chosen tune to the button's own address without
+/// leaving the page. The display fieldset's (`d`) selects lose their
+/// names, kept as `k`, so the form's Save does not post them and a tab
+/// opened a while ago cannot put an old colour back, nor does the
+/// unsaved mark count them; a change in one is posted to `/api` at
+/// once, one key, and becomes the select's default, and one that
+/// failed puts the select back.
+const CLOCK_JS: &str = "var m=D.getElementById('m'),g=D.getElementById('e');function E(h){g.hidden=h}\
+function P(a,b){return fetch(a,{method:'POST',redirect:'manual',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:b})\
+.then(function(r){if(!r.ok&&r.type!='opaqueredirect')throw 0;E(1)})}\
+for(let i of'pq'){let b=D.getElementById(i);b.type='button';b.onclick=function(){P(b.formAction,'melody='+m.value).catch(function(){E(0)})}}\
+for(var c of D.querySelectorAll('#d select')){c.k=c.name;c.name=''}\
+D.getElementById('d').onchange=function(e){var t=e.target;P('/api',t.k+'='+t.value)\
+.then(function(){for(var o of t.options)o.defaultSelected=o.selected},function(){for(var o of t.options)o.selected=o.defaultSelected;E(0)})}";
 
 /// The clock page, `GET /`: one form of the alarm and the display with
 /// Save under both, as on the other pages, and the status lines. The
-/// display's two selects are also applied as they are chosen (by
-/// script, to `/api`), so Save is for the alarm, and for the display
-/// without script. `error` is why the last post of the form was
-/// refused, if it was; the page then says so above the form.
+/// display's two selects are applied as they are chosen (by script, to
+/// `/api`) and the script keeps them out of the form's post, so Save
+/// is for the alarm, and for the display without script. Above Save is
+/// the line the script shows when a post of its own failed. `note` is what became of the last post of
+/// a form; the page says so above them.
 pub fn write_page(
     out: &mut impl core::fmt::Write,
     s: &Settings,
     st: &Status,
-    error: Option<FormError>,
+    note: Note,
 ) -> core::fmt::Result {
-    write_top(out, s.hostname.as_str(), Page::Clock, false, error)?;
+    write_top(out, s.hostname.as_str(), Page::Clock, false, note)?;
     write!(
         out,
         "<form method=post action=/><fieldset><legend>Alarm</legend>\
@@ -856,7 +924,7 @@ pub fn write_page(
     for (i, pct) in BRIGHTNESS_STEPS.iter().enumerate() {
         write!(out, "<option value={pct}{}>{pct} %</option>", if i == s.brightness { " selected" } else { "" })?;
     }
-    write!(out, "</select></label></fieldset>{SAVE}</form><script>")?;
+    write!(out, "</select></label></fieldset><p class=err id=e hidden>The clock did not answer; nothing was changed.</p>{SAVE}</form><script>")?;
     out.write_str(UNSAVED_JS)?;
     out.write_str(CLOCK_JS)?;
     out.write_str("</script>")?;
@@ -874,9 +942,9 @@ pub fn write_settings_page(
     out: &mut impl core::fmt::Write,
     s: &Settings,
     st: &Status,
-    error: Option<FormError>,
+    note: Note,
 ) -> core::fmt::Result {
-    write_top(out, s.hostname.as_str(), Page::Settings, false, error)?;
+    write_top(out, s.hostname.as_str(), Page::Settings, false, note)?;
     out.write_str("<form method=post action=/settings><fieldset><legend>Time</legend>")?;
     write_tz_field(out, s)?;
     write!(
@@ -907,9 +975,9 @@ pub fn write_ha_page(
     out: &mut impl core::fmt::Write,
     s: &Settings,
     st: &Status,
-    error: Option<FormError>,
+    note: Note,
 ) -> core::fmt::Result {
-    write_top(out, s.hostname.as_str(), Page::HomeAssistant, false, error)?;
+    write_top(out, s.hostname.as_str(), Page::HomeAssistant, false, note)?;
     write!(
         out,
         "<p>Enter your MQTT broker (MQTT 5) and the clock shows up in Home Assistant by itself.</p>\
@@ -931,63 +999,78 @@ pub fn write_ha_page(
 }
 
 /// The start of the script of a page whose actions need the PIN, the
-/// system page and the clips page. `say` writes the status line `s` (an error
-/// in red) and brings it into view, since it is under the PIN field and
-/// the buttons are further down; `go` checks the PIN field holds four digits, disables every
-/// button (the PIN is spent by any answer) and opens a request with the
-/// PIN in the header, which is what a script sends with its token, so
-/// the server needs no multipart for a file; `back` polls `/api`
-/// until the clock answers again; `up` makes the Upload button send
-/// the chosen file as the raw body of a route, with `XMLHttpRequest`
-/// for the progress bar.
+/// system page and the clips page. A PIN is asked for when an action's
+/// button is clicked, not when the page loads: `ask` disables the
+/// action buttons (`B`, those inside a fieldset), has the clock issue a
+/// PIN (`POST /pin`; the page's `GET` issues none, since any site can
+/// make a browser send a `GET`, and a post from this page is one the
+/// server can tell from theirs, `http::admit`; a clock locked out by a
+/// wrong PIN says so there), moves the PIN's form (`PIN_FORM`) under
+/// that button and shows it. Its OK hands the digits to the action,
+/// its Cancel enables the buttons again. `say` writes the status line
+/// `s` (an error in red) and brings it into view; `go` opens a request
+/// with the PIN in the header, which is what a script sends with its
+/// token, so the server needs no multipart for a file, and after an
+/// answer that is not the action's success enables the buttons, so the
+/// next click asks for a new PIN with the file and the token still
+/// there; `back` polls `/api` until the clock answers again; `up`
+/// makes the Upload button send the chosen file as the raw body of a
+/// route, with `XMLHttpRequest` for the progress bar.
 const PIN_JS: &str = "<script>\
-var $=function(i){return document.getElementById(i)},t=$('t'),s=$('s'),f=$('f'),p=$('p'),k=$('k'),a=$('a'),N=' Reload this page for a new PIN.';\
+var $=function(i){return document.getElementById(i)},t=$('t'),s=$('s'),q=$('q'),w=$('w'),f=$('f'),p=$('p'),k=$('k'),a=$('a'),\
+B=document.querySelectorAll('fieldset button'),G;\
+function dis(d){for(var b of B)b.disabled=d}\
 function say(m,e){s.textContent=m;s.className=e?'err':'';s.scrollIntoView({block:'center'})}\
-function go(u,ok){if(!/^[0-9]{4}$/.test(t.value)){say('Enter the four digits the clock is showing.',1);return}\
-var x=new XMLHttpRequest();x.open('POST',u);x.setRequestHeader('Authorization','PIN '+t.value);\
-x.onload=function(){var m=x.responseText.trim();if(x.status==200)ok(m);else say(x.status+': '+m+N,1)};\
-x.onerror=function(){say('Request failed: connection lost.'+N,1)};\
-for(var b of document.querySelectorAll('button'))b.disabled=true;return x}\
+function at(b){b.parentNode.after(w)}\
+function ask(b,run){at(b);dis(1);say('');fetch('/pin',{method:'POST'}).then(function(r){return r.text().then(function(m){\
+if(!r.ok){say(m.trim()+'.',1);dis(0);return}G=run;t.value='';q.hidden=false;t.focus()})})\
+.catch(function(){say('The clock did not answer.',1);dis(0)})}\
+q.onsubmit=function(e){e.preventDefault();q.hidden=true;G(t.value)};\
+$('x').onclick=function(){q.hidden=true;dis(0)};\
+function go(u,pin,ok){var x=new XMLHttpRequest();x.open('POST',u);x.setRequestHeader('Authorization','PIN '+pin);\
+x.onload=function(){var m=x.responseText.trim();if(x.status==200)ok(m);else{say(x.status+': '+m+'.',1);dis(0)}};\
+x.onerror=function(){say('Request failed: connection lost.',1);dis(0)};return x}\
 function poll(n){fetch('/api',{cache:'no-store'}).then(function(x){return x.json()})\
-.then(function(j){say('Back up: firmware '+j.version+' in '+j.slot+', clips: '+j.clips+'.')})\
-.catch(function(){if(n>0)setTimeout(function(){poll(n-1)},2000);else say('The clock has not come back; check it.',1)})}\
+.then(function(j){say('Back up: firmware '+j.version+' in '+j.slot+', clips: '+j.clips+'.');dis(0)})\
+.catch(function(){if(n>0)setTimeout(function(){poll(n-1)},2000);else{say('The clock has not come back; check it.',1);dis(0)}})}\
 function back(m){say(m+' Waiting for the clock to come back.');setTimeout(function(){poll(20)},5000)}\
-function up(u){$('b').onclick=function(){if(!f.files[0]){say('Choose a file.',1);return}\
-var x=go(u,back);if(!x)return;\
+function up(u){$('b').onclick=function(){if(!f.files[0]){at(this);say('Choose a file.',1);return}\
+ask(this,function(pin){var x=go(u,pin,back);\
 x.upload.onprogress=function(e){if(e.lengthComputable)p.value=e.loaded/e.total};\
-p.hidden=false;p.value=0;say('Uploading.');x.send(f.files[0])}}";
+p.hidden=false;p.value=0;say('Uploading.');x.send(f.files[0])})}}";
 
-/// How such a script ends: by asking for the PIN, `POST /pin`. The
-/// page's `GET` issues none, since any site can make a browser send a
-/// `GET`, and a post from this page is one the server can tell from
-/// theirs (`http::admit`). A clock locked out by a wrong PIN says so
-/// there.
-const PIN_ASK_JS: &str = "fetch('/pin',{method:'POST'}).then(function(r){if(!r.ok)r.text().then(function(m){say(m.trim()+'.'+N,1)})})\
-</script></body></html>";
+/// How such a script ends.
+const PIN_END: &str = "</script></body></html>";
 
-/// The system page's own part of the script: the four actions. The
-/// access-point button is absent on the access point.
+/// The system page's own part of the script: the four actions. A token
+/// is held to its rule before a PIN is asked for. The access-point
+/// button is absent on the access point.
 const SYSTEM_JS: &str = "up('/ota');\
-$('c').onclick=function(){if(!k.value&&!confirm('Clear the token? The scripts will be refused until one is set again.'))return;\
-var x=go('/token',function(m){say(m+'.'+N)});if(!x)return;\
-x.setRequestHeader('Content-Type','application/x-www-form-urlencoded');x.send('token='+encodeURIComponent(k.value))};\
-$('r').onclick=function(){var x=go('/reload',back);if(x)x.send()};\
+$('c').onclick=function(){var v=k.value;\
+if(v&&!/^[!-~]{8,32}$/.test(v)){at(this);say('A token is 8 to 32 printable characters without spaces.',1);return}\
+if(!v&&!confirm('Clear the token? The scripts will be refused until one is set again.'))return;\
+ask(this,function(pin){var x=go('/token',pin,function(m){say(m+'.');dis(0)});\
+x.setRequestHeader('Content-Type','application/x-www-form-urlencoded');x.send('token='+encodeURIComponent(v))})};\
+$('r').onclick=function(){ask(this,function(pin){go('/reload',pin,back).send()})};\
 if(a)a.onclick=function(){if(!confirm('Leave the network? The clock becomes an access point until a network is saved there, or both buttons are held for ten seconds.'))return;\
-var x=go('/ap',function(m){say(m+'. Join the clock\\'s own network and open http://192.168.4.1/.')});if(x)x.send()};";
+ask(this,function(pin){go('/ap',pin,function(m){say(m+'. Join the clock\\'s own network and open http://192.168.4.1/.')}).send()})};";
 
-/// The one PIN field of a page whose actions need the PIN, with the
-/// status line under it; the page says first what the PIN is for.
-const PIN_FIELD: &str = "<label>PIN on the clock<input type=text inputmode=numeric pattern=[0-9]* maxlength=4 autocomplete=off id=t></label><p id=s></p>";
+/// The PIN's form and the status line under it, at the end of a page
+/// whose actions need the PIN; the script moves the two (`w`) under
+/// the button that was clicked. The form is hidden until a PIN has
+/// been issued; the browser holds the field to four digits.
+const PIN_FORM: &str = "<div id=w><form id=q hidden><label>PIN the clock is showing\
+<input type=text inputmode=numeric pattern=[0-9]{4} maxlength=4 required autocomplete=off id=t></label>\
+<p><button>OK</button> <button type=button id=x>Cancel</button></p></form><p id=s></p></div>";
 
 /// The system page, `GET /system`: what needs someone who can see the
-/// clock. Its script puts a four-digit PIN on the panel, and the page
-/// has one field for it and four actions, each the request a script
-/// makes with `Bearer`, sent with `PIN` instead: the firmware image as
-/// the raw body of `/ota`, a new API token to `/token` (empty clears
-/// it, after the browser's `confirm()`, since that closes the script
-/// paths), `/reload` and `/ap`. A PIN is one action: the buttons stay
-/// disabled after an answer either way and the status line says to
-/// reload for another. The page says little: what the token is for and
+/// clock. It has four actions, each the request a script makes with
+/// `Bearer`, sent with `PIN` instead: the firmware image as the raw
+/// body of `/ota`, a new API token to `/token` (empty clears it, after
+/// the browser's `confirm()`, since that closes the script paths),
+/// `/reload` and `/ap`. A click on an action's button puts a
+/// four-digit PIN on the panel and the field for it under the button
+/// (`PIN_JS`); a PIN is one action, and the next click draws another. The page says little: what the token is for and
 /// its rules are the README's, and a bad one is refused with them. `token_set` says whether a token is set now.
 /// On the access point (`st.mode`) the button
 /// that leads there is left out.
@@ -998,14 +1081,12 @@ pub fn write_system_page(
     token_set: bool,
 ) -> core::fmt::Result {
     let ap = st.mode == "ap";
-    write_top(out, hostname, Page::System, ap, None)?;
-    out.write_str("<p><b>Every action on this page needs the PIN the clock is showing.</b> One PIN, one action.</p>")?;
-    out.write_str(PIN_FIELD)?;
-    out.write_str("<fieldset><legend>Firmware update</legend>")?;
+    write_top(out, hostname, Page::System, ap, Note::None)?;
+    out.write_str("<p>Each action here asks for a PIN, which the clock then shows on its panel.</p><fieldset><legend>Firmware update</legend>")?;
     write_firmware_line(out, st, false)?;
     write!(
         out,
-        "<label>Image file (<code>scripts/ota.sh</code> makes it, or a release's <code>esp32clock-ota-*.bin</code>)<input type=file id=f></label>\
+        "<label>Image file (<code>esp32clock-ota-*.bin</code> from the <a href=https://github.com/anarsoul/esp32clock/releases target=_blank rel=noopener>releases</a>)<input type=file id=f></label>\
 <p><button id=b>Upload</button></p><progress id=p value=0 max=1 hidden></progress>\
 <p><small>The panel goes dark while the image is written. Do not unplug.</small></p></fieldset>\
 <fieldset><legend>API token</legend>\
@@ -1015,23 +1096,20 @@ pub fn write_system_page(
         if token_set { "one is set" } else { "none is set" },
         if ap { "" } else { "<button id=a>Access point</button>" },
     )?;
+    out.write_str(PIN_FORM)?;
     out.write_str(PIN_JS)?;
     out.write_str(SYSTEM_JS)?;
-    out.write_str(PIN_ASK_JS)
+    out.write_str(PIN_END)
 }
 
 /// The clips page, `GET /clips`: where the clips come from now, the
 /// pack in the `clips` partition or the firmware, with their labels,
 /// and the upload of a pack, the raw body of `POST /clips` with the
-/// PIN as the system page's upload has it. A clock whose partition
+/// PIN, asked for at the click as the system page's upload has it. A clock whose partition
 /// table has no `clips` partition (`st.clips_room`) is told so, and
 /// has nothing to upload to: no field, no script, no PIN asked for.
 pub fn write_clips_page(out: &mut impl core::fmt::Write, hostname: &str, st: &Status) -> core::fmt::Result {
-    write_top(out, hostname, Page::Clips, st.mode == "ap", None)?;
-    if st.clips_room.is_some() {
-        out.write_str("<p><b>Updating the clip pack needs the PIN the clock is showing.</b></p>")?;
-        out.write_str(PIN_FIELD)?;
-    }
+    write_top(out, hostname, Page::Clips, st.mode == "ap", Note::None)?;
     out.write_str("<fieldset><legend>Clip pack</legend><p>")?;
     let kb = |bytes: u32| bytes.div_ceil(1024);
     match (melody::pack(), st.clips_room) {
@@ -1061,13 +1139,14 @@ A pack needs the clock flashed once over USB or from the web installer.",
         return out.write_str("</fieldset></body></html>");
     }
     out.write_str(
-        "<label>Pack file<input type=file id=f></label>\
+        "<label>Pack file (<code>esp32clock-clips-*.bin</code> from the <a href=https://github.com/anarsoul/esp32clock/releases target=_blank rel=noopener>releases</a>, or <code>scripts/mkpack.py</code> makes one)<input type=file id=f></label>\
 <p><button id=b>Upload</button></p><progress id=p value=0 max=1 hidden></progress>\
-<p><small>The panel goes dark while the pack is written, and the clock restarts. Do not unplug.</small></p></fieldset>",
+<p><small>Uploading asks for a PIN, which the clock then shows on its panel. The panel goes dark while the pack is written, and the clock restarts. Do not unplug.</small></p></fieldset>",
     )?;
+    out.write_str(PIN_FORM)?;
     out.write_str(PIN_JS)?;
     out.write_str("up('/clips');")?;
-    out.write_str(PIN_ASK_JS)
+    out.write_str(PIN_END)
 }
 
 /// Bytes the setup page's list of networks may take, strongest first.
@@ -1110,7 +1189,8 @@ fn write_network_option(out: &mut impl core::fmt::Write, n: &Network, stored: &s
 /// panel cannot show without a time. The password field is empty
 /// whatever is stored (write-only); empty on submit means an open
 /// network. The Rescan button posts the form to `/scan`, which scans
-/// and comes back here. The list stops at `NETWORK_LIST_BUDGET` bytes,
+/// and comes back here. A refused form says which field, as the
+/// station's pages do (`Note`). The list stops at `NETWORK_LIST_BUDGET` bytes,
 /// so a few hostile SSIDs of 32 `"` cannot push the page past the
 /// response buffer; what was left out is counted under the list and
 /// can be typed.
@@ -1119,15 +1199,15 @@ pub fn write_provision_page(
     s: &Settings,
     st: &Status,
     networks: &[Network],
-    error: Option<FormError>,
+    note: Note,
 ) -> core::fmt::Result {
     out.write_str(HEAD)?;
     out.write_str("<title>Clock setup</title></head><body><h1>Clock setup</h1>")?;
-    match error {
-        None => out.write_str("<p>The clock has no network to join, or was asked to wait for one. Give it yours and it restarts into it.</p>")?,
-        Some(FormError::BadValue) => out.write_str("<p class=err>Nothing was saved: a field had a bad value, no network was named, or a secured network was given no password.</p>")?,
-        Some(FormError::UnknownKey) => out.write_str("<p class=err>Nothing was saved: an unknown field was sent.</p>")?,
-        Some(FormError::Forbidden) | Some(FormError::BrokerPassword) => out.write_str("<p class=err>Nothing was saved.</p>")?,
+    match note {
+        Note::None | Note::Saved => out.write_str("<p>The clock has no network to join, or was asked to wait for one. Give it yours and it restarts into it.</p>")?,
+        Note::Refused(FormError::BadValue, None) => out.write_str("<p class=err>Nothing was saved: no network was named, or a secured network was given no password.</p>")?,
+        Note::Refused(FormError::Forbidden | FormError::BrokerPassword, _) => out.write_str("<p class=err>Nothing was saved.</p>")?,
+        refused => write_note(out, refused)?,
     }
     let stored = s.wifi.ssid.as_str();
     out.write_str("<form method=post action=/><label>Network <select name=ssid_pick id=n>")?;
@@ -1149,7 +1229,8 @@ pub fn write_provision_page(
         out,
         "<option value=\"\"{}>Other, typed below</option></select></label>\
 <label id=o>Other network name <input type=text name=ssid id=i maxlength={smax} value=\"{}\"></label>\
-<label>Password, {} <input type=password name=password minlength={pmin} maxlength={pmax} autocomplete=off></label>",
+<label>Password, {} <input type=password name=password id=k minlength={pmin} maxlength={pmax} autocomplete=off></label>\
+<label id=l hidden><input type=checkbox id=v> Show the password</label>",
         if listed { "" } else { " selected" },
         HtmlStr(if listed { "" } else { stored }),
         if stored.is_empty() { "empty for an open network" } else { "empty to keep the stored one" },
@@ -1173,9 +1254,12 @@ pub fn write_provision_page(
     }
     // The typed-name field only when the list's choice is "Other":
     // disabled as well as hidden, since a hidden input is still posted.
+    // The password's checkbox has no name, so it is not posted, and is
+    // shown by the script that makes it work.
     out.write_str(
-        "<script>var n=document.getElementById('n'),o=document.getElementById('o'),i=document.getElementById('i');\
-function f(){o.hidden=i.disabled=n.value!=''}n.onchange=f;f()</script>",
+        "<script>var $=function(i){return document.getElementById(i)},n=$('n'),o=$('o'),i=$('i'),k=$('k'),v=$('v');\
+function f(){o.hidden=i.disabled=n.value!=''}n.onchange=f;f();\
+$('l').hidden=false;v.onchange=function(){k.type=v.checked?'text':'password'}</script>",
     )?;
     write_firmware_line(out, st, true)?;
     out.write_str(
@@ -1609,14 +1693,29 @@ mod tests {
     }
 
     /// The five pages as served, in `Page::ALL`'s order.
-    fn pages(s: &Settings, st: &Status, error: Option<FormError>) -> [String; 5] {
+    fn pages(s: &Settings, st: &Status, note: Note) -> [String; 5] {
         let mut out = [String::new(), String::new(), String::new(), String::new(), String::new()];
-        write_page(&mut out[0], s, st, error).unwrap();
-        write_settings_page(&mut out[1], s, st, error).unwrap();
-        write_ha_page(&mut out[2], s, st, error).unwrap();
+        write_page(&mut out[0], s, st, note).unwrap();
+        write_settings_page(&mut out[1], s, st, note).unwrap();
+        write_ha_page(&mut out[2], s, st, note).unwrap();
         write_clips_page(&mut out[3], s.hostname.as_str(), st).unwrap();
         write_system_page(&mut out[4], s.hostname.as_str(), st, true).unwrap();
         out
+    }
+
+    /// The notice that takes the most of a page.
+    fn longest_note() -> Note {
+        let mut notes = vec![Note::Saved];
+        for e in [FormError::BadValue, FormError::UnknownKey, FormError::Forbidden, FormError::BrokerPassword] {
+            notes.push(Note::Refused(e, None));
+            notes.extend(FIELDS.iter().map(|(k, _)| Note::Refused(e, Some(*k))));
+        }
+        let len = |n: &Note| {
+            let mut out = String::new();
+            write_note(&mut out, *n).unwrap();
+            out.len()
+        };
+        *notes.iter().max_by_key(|n| len(n)).unwrap()
     }
 
     /// The names of a page's form controls, in order, repeats dropped.
@@ -1636,7 +1735,7 @@ mod tests {
     /// a custom day list, every checkbox, the longest status.
     #[test]
     fn pages_fit_the_response_buffer() {
-        let out = pages(&worst_settings(), &status(true), Some(FormError::BrokerPassword));
+        let out = pages(&worst_settings(), &status(true), longest_note());
         for (page, out) in Page::ALL.iter().zip(&out) {
             println!("{page:?} page: {} bytes of {PAGE_MAX}", out.len());
             assert!(out.len() <= PAGE_MAX, "{page:?}: {} bytes", out.len());
@@ -1645,7 +1744,7 @@ mod tests {
         // And with the fullest pack there can be in the table: sixteen
         // clips, every name and label at its limit.
         melody::install(Some(crate::pack::fullest()));
-        let full = pages(&worst_settings(), &status(true), Some(FormError::BrokerPassword));
+        let full = pages(&worst_settings(), &status(true), longest_note());
         for (page, full) in Page::ALL.iter().zip(&full) {
             println!("{page:?} page with a full pack: {} bytes of {PAGE_MAX}", full.len());
             assert!(full.len() <= PAGE_MAX, "{page:?}: {} bytes", full.len());
@@ -1655,8 +1754,55 @@ mod tests {
         // Play and Stop, each posted by the script to its own address
         // without leaving the page.
         assert!(out[0].contains("<button formaction=/play id=p>Play</button> <button formaction=/stop id=q>Stop</button>"));
-        assert!(out[0].contains("for(let i of'pq')") && out[0].contains("P(this.formAction,"));
+        assert!(out[0].contains("for(let i of'pq')") && out[0].contains("P(b.formAction,"));
+        // With script they are plain buttons, so Enter in the form is Save.
+        assert!(out[0].contains("b.type='button'"));
         assert!(out[0].contains(&format!("Wi-Fi <b>{}</b>, -100 dBm.", "&quot;".repeat(SSID_MAX))), "{}", out[0]);
+    }
+
+    /// A refused form names its field: `apply_naming` answers the key,
+    /// the page writes that key's label, and a key that is not a
+    /// page's own is not written at all.
+    #[test]
+    fn a_refused_form_names_its_field() {
+        let mut s = Settings::DEFAULT;
+        assert_eq!(apply_naming(&mut s, b"armed=on&tz=nonsense%2C", Allow::PAGE), Err((FormError::BadValue, Some("tz"))));
+        assert_eq!(apply_naming(&mut s, b"hostname=a_b", Allow::PAGE), Err((FormError::BadValue, Some("hostname"))));
+        assert_eq!(apply_naming(&mut s, b"tz=%zz", Allow::PAGE), Err((FormError::BadValue, Some("tz"))), "a value that does not decode");
+        assert_eq!(apply_naming(&mut s, b"nonsense=1", Allow::PAGE), Err((FormError::UnknownKey, None)));
+        assert_eq!(apply_naming(&mut s, b"ssid=x", Allow::PAGE), Err((FormError::Forbidden, Some("ssid"))));
+        assert_eq!(apply_naming(&mut s, b"tz=0", Allow::PAGE), Ok(()));
+        // Every key of the table is one `apply_one` knows.
+        for (key, _) in FIELDS {
+            assert_ne!(apply_one(&mut s, key, "", Allow::ALL), Err(FormError::UnknownKey), "{key}");
+            assert_eq!(field(key), Some(key));
+        }
+        assert_eq!(field("<script>"), None);
+        let page = |note| {
+            let mut out = String::new();
+            write_settings_page(&mut out, &Settings::DEFAULT, &status(true), note).unwrap();
+            out
+        };
+        assert!(page(Note::Refused(FormError::BadValue, Some("tz"))).contains("<p class=err>Nothing was saved: bad value for <b>Timezone</b>.</p>"));
+        assert!(page(Note::Refused(FormError::BadValue, None)).contains("<p class=err>Nothing was saved: a field had a bad value.</p>"));
+        assert!(page(Note::Refused(FormError::BadValue, Some("no such key"))).contains("a field had a bad value"));
+        assert!(page(Note::Saved).contains("</p><p><b>Saved.</b></p><form"));
+        assert!(!page(Note::None).contains("Saved") && !page(Note::None).contains("class=err>"));
+        // The setup form names a field too, and keeps its own words for
+        // what has none.
+        let setup = |note| {
+            let mut out = String::new();
+            write_provision_page(&mut out, &Settings::DEFAULT, &status(false), &[], note).unwrap();
+            out
+        };
+        assert!(setup(Note::Refused(FormError::BadValue, Some("password"))).contains("bad value for <b>Password</b>"));
+        assert!(setup(Note::Refused(FormError::BadValue, None)).contains("no network was named, or a secured network was given no password"));
+        // Its password can be shown: a checkbox with no name, so it is
+        // not posted, hidden until the script that makes it work.
+        let out = setup(Note::None);
+        assert!(out.contains("<label id=l hidden><input type=checkbox id=v> Show the password</label>"));
+        assert!(out.contains("$('l').hidden=false;v.onchange=function(){k.type=v.checked?'text':'password'}"));
+        assert_eq!(field_names(&out), ["ssid_pick", "ssid", "password", "tz", "hostname"]);
     }
 
     /// Each form carries its own keys and nothing of another page's,
@@ -1664,17 +1810,22 @@ mod tests {
     /// forms have every key the one page had.
     #[test]
     fn each_page_has_its_own_fields() {
-        let out = pages(&Settings::DEFAULT, &status(true), None);
+        let out = pages(&Settings::DEFAULT, &status(true), Note::None);
         assert_eq!(field_names(&out[0]), ["armed", "alarm", "days", "skip", "melody", "color", "brightness"]);
         assert_eq!(field_names(&out[1]), ["tz", "twelve_hour", "temp_show", "temp_offset", "hostname"]);
         assert_eq!(field_names(&out[2]), ["mqtt_host", "mqtt_port", "mqtt_user", "mqtt_password"]);
         assert!(field_names(&out[3]).is_empty() && field_names(&out[4]).is_empty(), "the clips and system pages post by script");
-        // One form with Save under both fieldsets; the display is also
-        // posted to `/api` as it is chosen and is then not unsaved.
+        // One form with Save under both fieldsets; the display is
+        // posted to `/api` as it is chosen, and the script takes its
+        // selects' names away, so Save posts the alarm only and a
+        // stale tab's colour goes nowhere.
         assert_eq!(out[0].matches("<form").count(), 1);
-        assert!(out[0].contains("</select></label></fieldset><p><button>Save</button>"), "{}", out[0]);
-        assert!(out[0].contains("D.getElementById('d').onchange=function(e){var t=e.target;P('/api',t.name+'='+t.value);"));
-        assert!(out[0].contains("o.defaultSelected=o.selected;f.oninput()"));
+        assert!(out[0].contains("</select></label></fieldset><p class=err id=e hidden>The clock did not answer; nothing was changed.</p><p><button>Save</button>"), "{}", out[0]);
+        assert!(out[0].contains("for(var c of D.querySelectorAll('#d select')){c.k=c.name;c.name=''}"));
+        assert!(out[0].contains("D.getElementById('d').onchange=function(e){var t=e.target;P('/api',t.k+'='+t.value)"));
+        // A post that failed says so, and the select goes back.
+        assert!(out[0].contains("o.defaultSelected=o.selected") && out[0].contains("o.selected=o.defaultSelected;E(0)"));
+        assert!(out[0].contains("if(!r.ok&&r.type!='opaqueredirect')throw 0"));
         // Each form posts to its own page, where a refusal is shown.
         assert!(out[1].contains("<form method=post action=/settings>") && out[2].contains("<form method=post action=/ha>"));
         // What each page shows of the status.
@@ -1688,7 +1839,7 @@ mod tests {
         let mut s = Settings::DEFAULT;
         s.alarm_armed = true;
         let mut out = String::new();
-        write_page(&mut out, &s, &status(true), None).unwrap();
+        write_page(&mut out, &s, &status(true), Note::None).unwrap();
         assert!(out.contains("<input type=hidden name=armed value=0><input type=checkbox name=armed checked> Alarm armed"), "{out}");
         assert!(out.contains("<input type=hidden name=skip value=0><input type=checkbox name=skip> Skip the next alarm"), "{out}");
         s.twelve_hour = true;
@@ -1704,7 +1855,7 @@ mod tests {
     /// on the access point the system page links to the setup form only.
     #[test]
     fn pages_link_to_each_other() {
-        let out = pages(&Settings::DEFAULT, &status(true), None);
+        let out = pages(&Settings::DEFAULT, &status(true), Note::None);
         for (here, out) in Page::ALL.iter().zip(&out) {
             for page in Page::ALL {
                 let link = format!("<a href={}>{}</a>", page.path(), page.label());
@@ -1721,7 +1872,7 @@ mod tests {
         assert!(out.contains("<p><a href=/>Setup</a> · <a href=/clips>Clips</a> · <b>System</b></p>"), "{out}");
         assert!(!out.contains("id=a>") && out.contains("id=r>Reboot</button></p>"), "no way to the access point from it");
         let mut setup = String::new();
-        write_provision_page(&mut setup, &Settings::DEFAULT, &ap, &[], None).unwrap();
+        write_provision_page(&mut setup, &Settings::DEFAULT, &ap, &[], Note::None).unwrap();
         assert!(setup.contains("<a href=/system>Update</a>"));
     }
 
@@ -1729,11 +1880,11 @@ mod tests {
     fn pages_load_the_zone_script_with_the_version() {
         let tag = "<script src=\"/tz.js?v=v0.1.0-123-gabcdef0-dirty-and-long\"></script>";
         let mut out = String::new();
-        write_settings_page(&mut out, &Settings::DEFAULT, &status(true), None).unwrap();
+        write_settings_page(&mut out, &Settings::DEFAULT, &status(true), Note::None).unwrap();
         assert!(out.contains(tag) && out.contains("<input type=text name=tz id=z maxlength=48 value=\""), "{out}");
         assert!(out.find("</form>").unwrap() < out.find(tag).unwrap(), "the script comes after the form");
         let mut setup = String::new();
-        write_provision_page(&mut setup, &Settings::DEFAULT, &status(false), &[], None).unwrap();
+        write_provision_page(&mut setup, &Settings::DEFAULT, &status(false), &[], Note::None).unwrap();
         assert!(setup.contains(tag) && setup.contains("id=b>Use this browser's zone</button>"), "{setup}");
         assert!(setup.find("</form>").unwrap() < setup.find(tag).unwrap());
     }
@@ -1743,9 +1894,10 @@ mod tests {
         // The mark is hidden as served and the script compares every
         // named control of the first form with the defaults the page
         // came with.
-        let out = pages(&Settings::DEFAULT, &status(true), None);
+        let out = pages(&Settings::DEFAULT, &status(true), Note::None);
         for out in &out[..3] {
             assert!(out.contains("<p><button>Save</button> <b id=u hidden>Changes not saved yet.</b></p>"), "{out}");
+            assert!(out.contains("history.replaceState(0,'',location.pathname)"), "the notice's query leaves the address");
             assert_eq!(out.matches("<script>").count(), 1);
             assert!(out.contains("f=D.forms[0]") && out.contains("f.oninput=function(){"), "{out}");
             for check in ["e.checked!=e.defaultChecked", "e.options[e.selectedIndex].defaultSelected", "e.value!=e.defaultValue", "u.hidden=!d"] {
@@ -1756,18 +1908,33 @@ mod tests {
         }
     }
 
-    /// The system page: one PIN field and the four actions, each to its
-    /// route with the PIN in the header.
+    /// The system page: the four actions, each to its route with the PIN
+    /// in the header, and one PIN form, asked for at the click.
     #[test]
     fn system_page_has_the_four_actions() {
         let mut out = String::new();
         write_system_page(&mut out, "clock", &status(true), true).unwrap();
         assert_eq!(out.matches("id=t>").count(), 1, "one PIN field");
-        for route in ["up('/ota');", "go(u,back)", "go('/token',", "go('/reload',", "go('/ap',"] {
+        for route in ["up('/ota');", "go(u,pin,back)", "go('/token',pin,", "go('/reload',pin,", "go('/ap',pin,"] {
             assert!(out.contains(route), "{route}");
         }
-        assert!(out.contains("x.setRequestHeader('Authorization','PIN '+t.value)"));
-        assert!(out.contains("(one is set)") && out.contains("<b>Every action on this page needs the PIN the clock is showing.</b>"));
+        assert!(out.contains("x.setRequestHeader('Authorization','PIN '+pin)"));
+        assert!(out.contains("from the <a href=https://github.com/anarsoul/esp32clock/releases target=_blank rel=noopener>releases</a>)<input type=file id=f>"));
+        assert!(out.contains("(one is set)") && out.contains("<p>Each action here asks for a PIN, which the clock then shows on its panel.</p>"));
+        // The PIN's form is hidden, after the last fieldset (so its
+        // buttons are not among the actions'), and nothing tells the
+        // visitor to reload: every action asks for its own PIN.
+        assert!(out.contains("</fieldset><div id=w><form id=q hidden>") && out.contains("pattern=[0-9]{4} maxlength=4 required"));
+        assert_eq!(out.matches("fetch('/pin',{method:'POST'})").count(), 1);
+        assert!(out.contains("function ask(b,run){at(b);dis(1);say('');fetch('/pin'"), "the PIN is asked for by a click");
+        assert!(!out.contains("Reload this page"));
+        // A token is held to its rule before a PIN is drawn for it.
+        assert!(out.contains("/^[!-~]{8,32}$/.test(v)"));
+        for token in ["abcdefgh", "a".repeat(TOKEN_MAX).as_str(), "!~!~!~!~"] {
+            assert!(valid_token(token), "{token}");
+        }
+        assert!(!valid_token("abcdefg") && !valid_token("abc defgh") && !valid_token(&"a".repeat(TOKEN_MAX + 1)));
+        assert_eq!(TOKEN_MAX, 32);
         // Reboot at the left edge, the access point at the right.
         assert!(out.contains("<p style=display:flex;justify-content:space-between><button id=r>Reboot</button><button id=a>Access point</button></p>"));
         // The page asks for its PIN by a post of its own: a `GET` issues none.
@@ -1851,7 +2018,7 @@ mod tests {
         let n = Network { ssid: Text::new(&format!("x{}", "\"".repeat(SSID_MAX - 1))).unwrap(), rssi: -100, open: true };
         let huge = [n; 100];
         let mut out = String::new();
-        write_provision_page(&mut out, &s, &status(false), &huge, Some(FormError::BadValue)).unwrap();
+        write_provision_page(&mut out, &s, &status(false), &huge, Note::Refused(FormError::BadValue, None)).unwrap();
         assert!(out.contains("<option value=\"\" selected>Other"), "the stored network is not listed, so Other is selected");
         let shown = out.matches("<option value=\"x").count();
         assert!(shown > 0 && shown < 100);
@@ -1880,7 +2047,7 @@ mod tests {
             .chain(core::iter::once(Network { ssid: s.wifi.ssid, rssi: -99, open: false }))
             .collect();
         let mut out = String::new();
-        write_provision_page(&mut out, &s, &status(false), &hostile, None).unwrap();
+        write_provision_page(&mut out, &s, &status(false), &hostile, Note::None).unwrap();
         println!("setup page, hostile: {} bytes of {PAGE_MAX}", out.len());
         assert!(out.len() <= PAGE_MAX, "{} bytes", out.len());
         let shown = out.matches("<option value=\"0").count();
@@ -1903,7 +2070,7 @@ mod tests {
             .map(|i| Network { ssid: Text::new(&format!("{i:02}{}", "n".repeat(SSID_MAX - 2))).unwrap(), rssi: -100, open: i % 2 == 0 })
             .collect();
         let mut out = String::new();
-        write_provision_page(&mut out, &s, &status(false), &networks, Some(FormError::BadValue)).unwrap();
+        write_provision_page(&mut out, &s, &status(false), &networks, Note::Refused(FormError::BadValue, None)).unwrap();
         println!("setup page: {} bytes of {PAGE_MAX}", out.len());
         assert!(out.len() <= PAGE_MAX, "{} bytes", out.len());
         assert_eq!(out.matches("<option value=\"").count(), 13, "twelve networks and Other");
@@ -1912,14 +2079,14 @@ mod tests {
         // The stored network, when listed, is selected and the field is empty.
         s.wifi.ssid = networks[3].ssid;
         let mut again = String::new();
-        write_provision_page(&mut again, &s, &status(false), &networks, None).unwrap();
+        write_provision_page(&mut again, &s, &status(false), &networks, Note::None).unwrap();
         assert!(again.contains(&format!("<option value=\"{}\" selected>", networks[3].ssid.as_str())));
         assert!(again.contains("<option value=\"\">Other"));
         assert!(again.contains(&format!("name=ssid id=i maxlength={SSID_MAX} value=\"\"")));
         assert!(again.contains("Password, empty to keep the stored one"), "a network is stored");
         assert!(again.contains("o.hidden=i.disabled=n.value!=''"), "the typed field is disabled, not only hidden");
         let mut empty = String::new();
-        write_provision_page(&mut empty, &Settings::DEFAULT, &status(false), &[], None).unwrap();
+        write_provision_page(&mut empty, &Settings::DEFAULT, &status(false), &[], Note::None).unwrap();
         assert!(empty.contains("No networks seen yet"));
         assert!(empty.contains("Password, empty for an open network"), "nothing stored");
         assert!(out.contains(&format!("value=\"{}\"", "o".repeat(SSID_MAX))), "the unlisted stored network is typed in");

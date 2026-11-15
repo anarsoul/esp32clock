@@ -46,7 +46,7 @@ use esp32clock_core::http::{HEADERS_MAX, Method, Own, PAGE_MAX, RESPONSE_BUF, Re
 
 use crate::buzzer;
 use crate::config::HTTP_PORT;
-use crate::form::{self, Allow, FormError, HealStamp, LocalNow, Page, Status};
+use crate::form::{self, Allow, FormError, HealStamp, LocalNow, Note, Page, Status};
 use crate::net::{self, Mode};
 use crate::{auth, clock, display, heal, mqtt, ota, pack, sensors, settings};
 
@@ -324,33 +324,47 @@ fn status_line(out: &mut Response, status: &str, content_type: &str) -> core::fm
 const _: () = assert!(PAGE_MAX + HEADERS_MAX <= RESPONSE_BUF);
 
 /// Back to the clock page, or the setup form on the access point.
-fn redirect_home(out: &mut Response, error: Option<FormError>) -> core::fmt::Result {
-    redirect_to(out, Page::Clock, error)
+fn redirect_home(out: &mut Response, note: Note) -> core::fmt::Result {
+    redirect_to(out, Page::Clock, note)
 }
 
-/// Back to the page a form was posted from, with the error of a
-/// rejected form in the query so the page can say that nothing was
-/// saved.
-fn redirect_to(out: &mut Response, page: Page, error: Option<FormError>) -> core::fmt::Result {
-    let suffix = match error {
-        None => "",
-        Some(FormError::BadValue) => "?error=value",
-        Some(FormError::UnknownKey) => "?error=key",
-        Some(FormError::Forbidden) => "?error=token",
-        Some(FormError::BrokerPassword) => "?error=broker",
-    };
-    write!(out, "HTTP/1.0 303 See Other\r\nLocation: {}{suffix}\r\nConnection: close\r\n\r\n", page.path())
-}
-
-/// The error the page was redirected back with, from `?error=...`.
-fn error_from_query(query: &str) -> Option<FormError> {
-    match query_value(query, "error") {
-        Some("value") => Some(FormError::BadValue),
-        Some("key") => Some(FormError::UnknownKey),
-        Some("token") => Some(FormError::Forbidden),
-        Some("broker") => Some(FormError::BrokerPassword),
-        _ => None,
+/// Back to the page a form was posted from, with what became of it in
+/// the query so the page can say so: `?saved=1`, or the error of a
+/// rejected form and the key of the field at fault, if it has one.
+fn redirect_to(out: &mut Response, page: Page, note: Note) -> core::fmt::Result {
+    write!(out, "HTTP/1.0 303 See Other\r\nLocation: {}", page.path())?;
+    match note {
+        Note::None => {}
+        Note::Saved => out.write_str("?saved=1")?,
+        Note::Refused(e, key) => {
+            out.write_str(match e {
+                FormError::BadValue => "?error=value",
+                FormError::UnknownKey => "?error=key",
+                FormError::Forbidden => "?error=token",
+                FormError::BrokerPassword => "?error=broker",
+            })?;
+            if let Some(key) = key {
+                write!(out, "&key={key}")?;
+            }
+        }
     }
+    out.write_str("\r\nConnection: close\r\n\r\n")
+}
+
+/// The notice the page was redirected back with, from `?saved=1` or
+/// `?error=...&key=...`. The key is taken only if it is one of the
+/// pages' own (`form::field`), so the page never writes the query's
+/// text.
+fn note_from_query(query: &str) -> Note {
+    let error = match query_value(query, "error") {
+        Some("value") => FormError::BadValue,
+        Some("key") => FormError::UnknownKey,
+        Some("token") => FormError::Forbidden,
+        Some("broker") => FormError::BrokerPassword,
+        _ if query_value(query, "saved").is_some() => return Note::Saved,
+        _ => return Note::None,
+    };
+    Note::Refused(error, query_value(query, "key").and_then(form::field))
 }
 
 /// The value of `key` in a query string, undecoded.
@@ -444,17 +458,17 @@ fn respond(out: &mut Response, req: &Request<'_>, body: &[u8]) -> Result<Then, c
     match (req.method, req.path) {
         (Method::Get, "/") if net::mode() == Mode::AccessPoint => {
             status_line(out, "200 OK", "text/html; charset=utf-8")?;
-            form::write_provision_page(out, &settings::get(), &status(), &net::networks(), error_from_query(req.query))?;
+            form::write_provision_page(out, &settings::get(), &status(), &net::networks(), note_from_query(req.query))?;
         }
         // The settings pages are the station's: on the access point
         // their paths go the captive portal's way, to the setup form.
         (Method::Get, path) if net::mode() != Mode::AccessPoint && form_page(path).is_some() => {
             status_line(out, "200 OK", "text/html; charset=utf-8")?;
-            let (s, st, error) = (settings::get(), status(), error_from_query(req.query));
+            let (s, st, note) = (settings::get(), status(), note_from_query(req.query));
             match form_page(path) {
-                Some(Page::Settings) => form::write_settings_page(out, &s, &st, error)?,
-                Some(Page::HomeAssistant) => form::write_ha_page(out, &s, &st, error)?,
-                _ => form::write_page(out, &s, &st, error)?,
+                Some(Page::Settings) => form::write_settings_page(out, &s, &st, note)?,
+                Some(Page::HomeAssistant) => form::write_ha_page(out, &s, &st, note)?,
+                _ => form::write_page(out, &s, &st, note)?,
             }
         }
         (Method::Post, "/") if net::mode() == Mode::AccessPoint => {
@@ -468,12 +482,12 @@ fn respond(out: &mut Response, req: &Request<'_>, body: &[u8]) -> Result<Then, c
             // (`form::settle_password`).
             let current = settings::get();
             let mut trial = current;
-            let result = form::apply(&mut trial, body, Allow::ALL)
-                .and_then(|()| form::settle_password(&mut trial, &current.wifi, &net::networks()));
+            let result = form::apply_naming(&mut trial, body, Allow::ALL)
+                .and_then(|()| form::settle_password(&mut trial, &current.wifi, &net::networks()).map_err(|e| (e, None)));
             match result {
                 Ok(()) if trial.wifi.is_none() => {
                     warn!("http: setup form named no network");
-                    redirect_home(out, Some(FormError::BadValue))?;
+                    redirect_home(out, Note::Refused(FormError::BadValue, None))?;
                 }
                 Ok(()) => {
                     status_line(out, "200 OK", "text/html; charset=utf-8")?;
@@ -485,9 +499,9 @@ fn respond(out: &mut Response, req: &Request<'_>, body: &[u8]) -> Result<Then, c
                     warn!("http: network {} saved, leaving the access point once it is written", trial.wifi.ssid.as_str());
                     settings::update(|s| *s = trial);
                 }
-                Err(e) => {
-                    warn!("http: setup form rejected: {e:?}");
-                    redirect_home(out, Some(e))?;
+                Err((e, key)) => {
+                    warn!("http: setup form rejected: {e:?} {key:?}");
+                    redirect_home(out, Note::Refused(e, key))?;
                 }
             }
         }
@@ -497,16 +511,20 @@ fn respond(out: &mut Response, req: &Request<'_>, body: &[u8]) -> Result<Then, c
             // nothing: the form is applied to a copy and committed only
             // if every pair parsed. The broker keys are a page's to
             // set; the network keys are not. The answer is the page it
-            // came from, which says why if nothing was saved.
+            // came from, which says that it was saved, or why not and
+            // which field.
             let mut trial = settings::get();
-            let result = form::apply(&mut trial, body, Allow::PAGE);
-            match result {
+            let note = match form::apply_naming(&mut trial, body, Allow::PAGE) {
                 Ok(()) => {
                     settings::update(|s| *s = trial);
+                    Note::Saved
                 }
-                Err(e) => warn!("http: form rejected: {e:?}"),
-            }
-            redirect_to(out, form_page(path).unwrap_or(Page::Clock), result.err())?;
+                Err((e, key)) => {
+                    warn!("http: form rejected: {e:?} {key:?}");
+                    Note::Refused(e, key)
+                }
+            };
+            redirect_to(out, form_page(path).unwrap_or(Page::Clock), note)?;
         }
         (Method::Post, "/play") => {
             // Preview the sound chosen in the form without saving anything:
@@ -517,7 +535,7 @@ fn respond(out: &mut Response, req: &Request<'_>, body: &[u8]) -> Result<Then, c
                 warn!("http: play form rejected: {e:?}");
             }
             buzzer::preview(trial.melody);
-            redirect_home(out, None)?;
+            redirect_home(out, Note::None)?;
         }
         (Method::Post, "/stop") => {
             // The page's Stop button: an end to a preview, and to a ring
@@ -527,7 +545,7 @@ fn respond(out: &mut Response, req: &Request<'_>, body: &[u8]) -> Result<Then, c
             if display::ringing() {
                 display::silence();
             }
-            redirect_home(out, None)?;
+            redirect_home(out, Note::None)?;
         }
         (Method::Get, "/favicon.ico") => {
             // The two responses a browser may cache, this and the script
@@ -669,7 +687,7 @@ async fn rescan(out: &mut Response) -> Result<Then, core::fmt::Error> {
     if with_timeout(SCAN_WAIT, net::scan_done(scan)).await.is_err() {
         warn!("http: scan not done within {} s", SCAN_WAIT.as_secs());
     }
-    redirect_home(out, None)?;
+    redirect_home(out, Note::None)?;
     Ok(Then::Close)
 }
 

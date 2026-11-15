@@ -280,9 +280,9 @@ update image, `esp32clock-ota-*.bin`, from one of three places:
 Then install it, either way:
 
 - **From the browser.** Open the clock's System page,
-  `http://<ip>/system`. The clock shows a
-  four-digit PIN on its panel for a minute; choose the `.bin` file,
-  type the PIN and press Upload. The panel is dark for the write,
+  `http://<ip>/system`. Choose the `.bin` file and press Upload; the
+  clock then shows a four-digit PIN on its panel for a minute, and
+  the page asks for it. The panel is dark for the write,
   and the page waits for the clock to come back.
 - **From the shell**, with the clock's API token (`esp32clock` on the
   prebuilt images, or what you built with):
@@ -420,8 +420,8 @@ The clock serves four pages, linked to each other at the top of each:
 - `/ha`: the MQTT broker for Home Assistant, see below.
 - `/system`: the firmware update, the API token, a reboot, and a
   switch to the access point for giving the clock another network.
-  Opening it puts a four-digit PIN on the panel, which each of its
-  actions asks for.
+  Each action puts a four-digit PIN on the panel when its button is
+  pressed, and asks for it.
 
 The clock answers a browser only under its own address or its
 hostname, alone or with `.lan` or `.local` (`http://clock.lan/`), and

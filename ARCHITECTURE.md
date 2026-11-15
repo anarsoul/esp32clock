@@ -172,7 +172,7 @@ executor.
 - **Auth** (`core::auth`): script access by a `Bearer` API token;
   browser access to the guarded actions by a four-digit PIN shown on
   the panel, one PIN per action, issued by a `POST` (the system page's
-  script asks as it loads), never by a `GET`. Ordinary settings need neither on the
+  script asks when an action's button is pressed), never by a `GET`. Ordinary settings need neither on the
   LAN; network credentials, the broker over `/api`, OTA, reboot and
   the token itself do.
 - **MQTT** (`src/mqtt.rs` over `core::mqtt`): Home Assistant discovery

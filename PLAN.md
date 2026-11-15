@@ -8761,3 +8761,97 @@ short preview's hold, a reset during a hold. Outside the hold the
 reading moved by 0.1 to 0.3 between samples, with single ones 0.4
 up, where the first run's moved by 0.1; the average's code is as it
 was, and the cause was not looked for.
+
+### The pages after a UX review: PIN at the click, a saved notice, the bad field named — built 2026-11-15, run on test-clock in headless Chromium; the setup form and a real upload not tried
+
+A read of the five pages and the setup form as served (white-clock,
+test-clock; markup and scripts, nothing clicked) gave twenty findings;
+the user took the first group, 2026-11-15. The rest are in the review
+backlog's terms below, not built.
+
+1. **Enter in the alarm form played the tune.** A form's default
+   button is its first submit button in tree order, which on `/` is
+   Play. The script now makes Play and Stop `type=button` (they stay
+   submit buttons with `formaction` without script), so Enter saves.
+2. **A stale tab put the old colour back.** The alarm form posted
+   colour and brightness too. It is still one form with Save under
+   both fieldsets (a first build made the display a form of its own,
+   which put Save between Alarm and Display; the user: "It should go
+   after Display"). The script takes the names off the display's
+   selects, kept as `k` for the post to `/api`, so Save posts the
+   alarm only and the unsaved mark does not count them; without
+   script Save posts both, as before. `skip` and `armed` in a stale
+   tab are as they were: any form has that.
+3. **A failed post looked done.** `P` now answers a promise that
+   fails on anything but a 2xx or the redirect Play and Stop answer
+   with; a display change that failed puts the select back, and all
+   three say `The clock did not answer; nothing was changed.` in a
+   line above Save.
+4. **The PIN at the click, not at the page's load** (`/system`,
+   `/clips`). Opening the page drew a PIN whether or not anything was
+   to be done, the digits left the panel after a minute, often before
+   a file was chosen, and any answer, a wrong digit included, disabled
+   every button until a reload, which dropped the file and the typed
+   token. Now: the action's button checks what it can (a file chosen,
+   the token's rule, the two `confirm()`s), posts `/pin`, and a small
+   form (the PIN field, OK, Cancel, the status line under it) is moved
+   under that button. OK sends the request with the PIN; after any
+   answer the buttons are enabled again and the next click draws a new
+   PIN, so nothing says "reload this page" any more. A wrong PIN's
+   ten-second lockout is what `/pin` then answers, shown as it is. The
+   routes and `auth` are untouched.
+5. **`Saved.`** A good save redirects to the page with `?saved=1` and
+   the page says so above the form (`form::Note`); the script takes
+   the query off the address, so a reload does not say it again.
+6. **The bad field named.** `form::apply_naming` answers the key that
+   failed with the error; the redirect carries it (`?error=value&key=tz`)
+   and the page says `bad value for <b>Timezone</b>` from a table of
+   the pages' keys and labels (`form::FIELDS`), never the query's own
+   text. What was typed is still lost with the redirect; the browser's
+   Back has it.
+7. **The setup form's password can be seen**: a `Show the password`
+   checkbox, unnamed so it is not posted, shown by the script that
+   makes it work.
+
+Not verified without a browser: 1 is from the HTML standard's implicit
+submission, not seen. To try on test-clock (headless Chromium) and by
+hand: Enter in the alarm time saves; colour changes with the clock
+unplugged revert and say so; `/system` shows no PIN until a button is
+clicked, a wrong PIN leaves the file chosen, and the second try works
+after the lockout; a bad timezone rule names the field; the setup
+form's checkbox.
+
+**Built and run, 2026-11-15** (`v0.4-37-g61c15f6-dirty` on test-clock
+over the air, headless Chromium with real key and mouse events, the
+PIN read from the serial log; the settings as found afterwards).
+Seen: Enter in the alarm time posts `/` with the alarm's five keys
+and no colour, comes back to `/?saved=1`, the page says `Saved.` and
+the address is `/` again; Play and Stop post `/play` and `/stop`; a
+colour change posts `/api` and leaves the unsaved mark hidden; with
+the browser offline the select goes back and the line shows, and
+hides at the next good post; with the colour set to green behind the
+tab's back, Save left it green; `tz=nonsense,` comes back as `bad
+value for Timezone` with the rule unchanged. On `/system`: no `/pin`
+at the load; a short token and Upload without a file are refused in
+the page with no PIN drawn; Reboot posts `/pin`, the form appears
+under the button with the focus in it and the actions disabled; a
+wrong PIN is `403: wrong PIN.` with the buttons enabled and the token
+field kept; a click at once is `locked out for 9 s after a wrong
+PIN.`; Cancel; then the right PIN reboots and the page says `Back
+up` with the buttons enabled. Not tried: a firmware or pack upload
+from the page (the request is `go`'s, as Reboot's), the access-point
+button, the setup form's notices and its `Show the password` (the
+host cannot join the access point), a phone.
+
+Also the user's, 2026-11-15: the upload's label names the release's
+file with a link to the releases page, not `scripts/ota.sh`, since
+"the end user is very unlikely going to build the firmware"; the
+clips page's label the same way, with `scripts/mkpack.py` after it.
+
+Left from the review, not built: the token field is a password field
+though the token is to be copied; the MQTT line is stale right after
+a save; no dark colour scheme; one title for five pages; `HA` and
+`General` as link names; the alarm's days are three presets; no
+"next alarm" line; `/ha` does not say whether a password is stored;
+the status line has no `role=status`; Rescan was not traced for what
+it keeps of the typed fields.
