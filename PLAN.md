@@ -8465,7 +8465,7 @@ access point (the host would leave its LAN): a phone's sign-in sheet
 now gets a `302` for `/` too when its probe names another host. For
 the user.
 
-### Clips in a partition of their own: the clip pack — built and run on test-clock 2026-11-14; the page in a browser and the sound for the user
+### Clips in a partition of their own: the clip pack — DONE, run on test-clock and verified by the user on white-clock 2026-11-14 (upload from the browser, the clips heard); the access point and the release workflow not yet run
 
 The user, 2026-11-14: "move clips into a separate partition on the
 flash. Carve out 0.5M out of each app partition and create a new 1M
@@ -8656,3 +8656,83 @@ pack and the settings as they were. A pack of 1 142 830 bytes (the
 local one with Futurama twice) was written in 53 s, checked, and its
 last clip, which lies past the old megabyte, previewed. The local
 pack was put back after.
+
+**On white-clock, the user, 2026-11-14** (`v0.4-34-gd24c81b`, the new
+table over USB): the local pack uploaded from the Clips page in a
+browser with the PIN from the panel, and the clips listened to on its
+buzzer. Read back from the session with `GET`s only: `"clips":"pack"`,
+"Pack in flash: 8 clips, 685 KB of 1152", the eight labels, and
+`melody` still `keygen`, at the place it had when the three clips were
+built in. That closes the page in a browser and the sound; the access
+point, the web installer's fifth part and the release workflow remain.
+
+### The thermometer held while Q1 is hot — measured on white-clock 2026-11-14, the hold only planned
+
+The user, 2026-11-14: with the buzzer mod (flyback diode, R5 at
+5.1 k) Q1 gets hot while a clip plays through the PDM converter, and
+it sits next to the NTC, "so it affects the temperature it measures".
+Cold when idle, on the beeps and on Trantor (a beeper clip, 512
+kbit/s). The buzzer's coil is 32 Ω. A 2.2 kΩ resistor from base to
+emitter did not change it.
+
+Why, by reasoning and not by scope: the converter's bits are 125 ns
+(8 Mbit/s) to 250 ns, and the stage's edges are no shorter (under a
+milliamp of base current against the collector-base capacitance, and
+nothing but recombination or the 2.2 k to turn it off), so the
+transistor sits half on with the coil's mean current through it:
+about 78 mA at 2.5 V, the worst point, V²/4R = 0.2 W for 32 Ω.
+Inside an S8550's rating; the pin's drive strength has no part in it,
+R5 sets the current. The README's buzzer mod says so.
+
+**Measured, white-clock over HTTP** (`v0.4-34-gd24c81b`, offset −2.5,
+`temp_c` of `/api` every 5 s; the alarm set a minute ahead with
+`days=all`, Halftime looped for the ring's five minutes, the settings
+put back after):
+
+| | reading |
+| --- | --- |
+| before, two minutes | 24.3 falling to 24.1 °C |
+| 30 s into the ring | 24.3 |
+| 1 min | 26.0 |
+| 2 min | 28.8 |
+| 3 min | 30.7 |
+| 5 min, the ring's end | about 33 |
+| the peak, 30 s after the end | 33.3, so +9.2 °C |
+| 2.5 min after the end | 28.8 (half the rise gone) |
+| 6 min | 26.3 (a quarter left) |
+| 10 min | 25.2 |
+| 14 min | 24.5 |
+| 16 min | 24.3 |
+| 20 min | 24.0 |
+
+The rise had not levelled off at five minutes; the ring's timeout is
+what bounds it. The fall is not one exponential: the halvings take
+about 155, 190 and 215 s. Before the test the clock was already
+cooling from modules the user had played (their length not known):
+25.9 to 24.3 in nine minutes.
+
+**Plan, not built.** Hold the temperature while a converter clip
+plays and for a time after it; beeps and beeper clips do not start a
+hold.
+
+- `src/clip.rs` knows what it plays (`Stream::converter`): it keeps
+  the seconds of converter clip played, in an atomic, bumped as the
+  chunks are written.
+- The rule is pure, in `core/src/sensors.rs` with its tests: from the
+  seconds played and the seconds since the last of them, whether the
+  reading is held. First figures: a hold of four times what was
+  played, at least two minutes and at most twenty (five minutes
+  played is twenty held, where the reading was back within 0.2 °C).
+  The short end is a guess: only the five-minute case is measured.
+  Plays within a hold add up.
+- `sensor_task` leaves the NTC's average and `NTC_MV` alone while
+  held (the LDR goes on), so the panel, `/api` and the MQTT state
+  keep the reading from before the clip, and the average starts again
+  from that when the hold ends. The heartbeat's millivolts stay raw,
+  for calibration.
+- A software reset loses the hold; the reading is then hot until it
+  cools. Not carried: a reset in the twenty minutes after an alarm is
+  rare.
+- To check on white-clock: the same five-minute ring with `temp_c`
+  logged, flat throughout; a 30 s preview the same way, for the short
+  end; a stock board, whether it heats at all.
