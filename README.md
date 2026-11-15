@@ -13,11 +13,11 @@ What the clock does:
 - Nine colours and three brightness steps, from the buttons or the web page.
 - Room temperature and light level from the kit's NTC and LDR (optional),
   with the temperature shown on the panel once a minute.
-- Settings page at `http://<ip>/` and a form-encoded JSON API at `/api`.
+- Web pages for the settings at `http://<ip>/` and a form-encoded JSON API at `/api`.
 - Home Assistant integration over MQTT with discovery: the settings as
   entities, the readings as sensors, no YAML (see
   [Home Assistant](#home-assistant) below).
-- Firmware updates over the LAN (`/update` with a PIN shown on the panel,
+- Firmware updates over the LAN (`/system` with a PIN shown on the panel,
   or a script with a token), two application slots with rollback.
 - A [web installer](https://anarsoul.github.io/esp32clock/) that flashes
   a release from Chrome or Edge over USB, no toolchain needed.
@@ -28,7 +28,8 @@ What the clock does:
 
 The display is driven by SPI2 in quad mode used as a four-wire pattern
 generator with DMA, so the scan is cycle-exact and immune to Wi-Fi.
-`PLAN.md` is the design record; `AGENTS.md` is the maintainer's guide.
+`ARCHITECTURE.md` is the overview of the firmware; `PLAN.md` is the
+design record; `AGENTS.md` is the maintainer's guide.
 
 ## Hardware
 
@@ -263,10 +264,11 @@ update image, `esp32clock-ota-*.bin`, from one of three places:
 
 Then install it, either way:
 
-- **From the browser.** Open `http://<ip>/update`. The clock shows a
+- **From the browser.** Open the clock's System page,
+  `http://<ip>/system`. The clock shows a
   four-digit PIN on its panel for a minute; choose the `.bin` file,
   type the PIN and press Upload. The panel is dark for the write,
-  about ten seconds, and the page waits for the clock to come back.
+  and the page waits for the clock to come back.
 - **From the shell**, with the clock's API token (`esp32clock` on the
   prebuilt images, or what you built with):
 
@@ -294,7 +296,7 @@ offers first. The [releases page](https://github.com/anarsoul/esp32clock/release
 has `esp32clock-<tag>.bin`, the whole flash from offset 0 for
 `espflash write-bin 0x0 esp32clock-<tag>.bin` (then `espflash reset`;
 this one covers the settings partition too and clears it), next to
-`esp32clock-ota-<tag>.bin`, the update image for `/update` and
+`esp32clock-ota-<tag>.bin`, the update image for `/system` and
 `scripts/ota.sh`. A release is made by pushing an annotated tag `v*`
 (`.github/workflows/release.yml`).
 
@@ -306,7 +308,7 @@ fetch and install it. The images are built with:
 | setting | value in the prebuilt images |
 | --- | --- |
 | network | none: the clock boots as an access point, see above |
-| timezone | `<-07>7`, Vancouver (UTC-7, permanent since BC stopped changing clocks), no daylight saving. For another zone open the settings page and press "Use this browser's zone", or type a POSIX TZ rule |
+| timezone | `<-07>7`, Vancouver (UTC-7, permanent since BC stopped changing clocks), no daylight saving. For another zone open `/settings` and press "Use this browser's zone", or type a POSIX TZ rule |
 | API token | `esp32clock` |
 | everything else | the defaults: brightness cap 50 %, access point password `esp32clock` |
 
@@ -316,7 +318,7 @@ once over USB (the web installer or `cargo run` above); install it as
 shell path.
 
 The token is printed here, so change it once the clock is on your
-network: open `http://<ip>/token`, type a new one (8 to 32 printable
+network: open `http://<ip>/system`, type a new one (8 to 32 printable
 characters without spaces) with the PIN the clock shows, or post it
 with the old token:
 
@@ -327,6 +329,12 @@ curl -X POST -H 'Authorization: Bearer esp32clock' -d 'token=<new token>' http:/
 A token stored this way survives later updates with the prebuilt
 images: the build's token only seeds a clock that has none. From then
 on `scripts/ota.sh` wants the new token in `API_TOKEN`.
+
+The token is what the scripts send as `Authorization: Bearer`; the
+clock never shows it, only whether one is set. Setting an empty one
+clears it, which closes the script paths (`scripts/ota.sh`, the
+network and broker keys on `/api`) until a new one is set from the
+System page with the PIN.
 
 ## Using the clock
 
@@ -352,13 +360,22 @@ A clock with no address yet shows `no1P` instead.
 
 Any press ends a ringing alarm or the IP display.
 
-The page at `http://<ip>/` has every setting: timezone (a POSIX TZ
-rule; the button beside it fills in the browser's own zone, and the
-status line shows the local time the rule gives), 12/24 hour,
-colour, brightness, alarm time, days and melody with a Play button,
-skip next alarm, temperature unit and offset, hostname, Wi-Fi network.
-The status line under the form shows the firmware version, the slot,
-the uptime, the signal and the room reading.
+The clock serves four pages, linked to each other at the top of each:
+
+- `http://<ip>/`: the alarm (armed, time, days, skip the next one,
+  the melody with Play and Stop) and the display (colour and
+  brightness, applied as they are chosen), then the status: the
+  firmware version and slot, the network and its signal, the broker,
+  the room reading, the local time and the uptime.
+- `/settings`: the timezone (a POSIX TZ rule; the button beside it
+  fills in the browser's own zone, and the line under the form shows
+  the local time the rule gives), 12/24 hour, the temperature on the
+  panel and the thermometer's offset, the hostname.
+- `/ha`: the MQTT broker for Home Assistant, see below.
+- `/system`: the firmware update, the API token, a reboot, and a
+  switch to the access point for giving the clock another network.
+  Opening it puts a four-digit PIN on the panel, which each of its
+  actions asks for.
 
 The same keys are available at `/api`: `GET` answers JSON, `POST` with
 form-encoded keys applies all of them or none. A posted network, broker
@@ -367,7 +384,7 @@ is an example that sets a whole configuration in one request.
 
 ### Home Assistant
 
-Fill in the "Home Assistant" fieldset on the page (or build with
+Fill in the Home Assistant page, `http://<ip>/ha` (or build with
 `MQTT_HOST`, `MQTT_USER` and `MQTT_PASSWORD`) with the address of an
 MQTT broker Home Assistant is on, and the clock appears under the MQTT
 integration as a device named after its hostname, with no YAML: the
@@ -415,7 +432,8 @@ errors, and builds the prebuilt image described above; the release
 workflow does the same for a tag and publishes the images and the web
 installer (`docs/index.html`, served from the `gh-pages` branch).
 
-`AGENTS.md` is the detailed guide to the code: the module layout, the
+`ARCHITECTURE.md` describes how the firmware is put together: the two
+crates, the tasks and what passes between them. `AGENTS.md` is the detailed guide to the code: the module layout, the
 hardware facts that bite, the timing rules of the scan path and the
 sizes that must be kept. `PLAN.md` holds the design of each milestone
 and what was measured on the panel.

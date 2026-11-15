@@ -6,13 +6,17 @@
 //! mode and never touches the scan path, except that a firmware upload
 //! (`POST /ota`, streamed into `ota::install`) stops it for the write.
 //!
-//! `POST /api` takes every setting; the network (`ssid`, `password`)
-//! only with the token. `GET /update` and `GET /token` each issue a PIN
-//! and serve the page that asks for it, the upload and the token; the
-//! token page is linked from nowhere. `POST /token` sets the token with
-//! the PIN or the old token, `POST /pin` issues a PIN for a script. `POST /reload`
-//! resets with the token, `POST /ap` resets into the access point with
-//! it. On the access point `GET /` is the setup form, `POST /scan`
+//! Four pages, each with a line of links to the others: `/` (the
+//! alarm, the display, the status), `/settings`, `/ha` (the MQTT
+//! broker) and `/system`. The first three are forms posted to their
+//! own path, each a partial update of the settings. `POST /api` takes
+//! every setting; the network (`ssid`, `password`) only with the token.
+//! `GET /system` issues a PIN and serves the page that asks for it,
+//! with the four things the PIN or the token allows: the upload (`POST
+//! /ota`), a new token (`POST /token`), a reset (`POST /reload`) and a
+//! reset into the access point (`POST /ap`); `GET /update` and `GET
+//! /token`, the pages it replaced, redirect to it. `POST /pin` issues
+//! a PIN for a script. On the access point `GET /` is the setup form, `POST /scan`
 //! refreshes its network list, and any other path is a redirect to the
 //! clock's address, so a phone's connectivity probe (sent to the clock
 //! by the captive DNS) opens the form in the sign-in sheet.
@@ -36,7 +40,7 @@ use esp32clock_core::http::{Method, RESPONSE_BUF, parse_head};
 
 use crate::buzzer;
 use crate::config::HTTP_PORT;
-use crate::form::{self, Allow, FormError, HealStamp, LocalNow, Status};
+use crate::form::{self, Allow, FormError, HealStamp, LocalNow, Page, Status};
 use crate::net::{self, Mode};
 use crate::{auth, clock, display, heal, mqtt, ota, sensors, settings};
 
@@ -222,7 +226,7 @@ enum NoRequest {
 /// length there means none (found on the bench, 2026-11-08, when the
 /// first `411` rule refused `scripts/reload.sh`).
 fn reads_body(path: &str) -> bool {
-    matches!(path, "/" | "/api" | "/play" | "/token" | "/ota")
+    matches!(path, "/" | "/settings" | "/ha" | "/api" | "/play" | "/token" | "/ota")
 }
 
 /// Read the head and the body. `Err` for anything that is not a request
@@ -291,9 +295,15 @@ fn status_line(out: &mut Response, status: &str, content_type: &str) -> core::fm
     write!(out, "HTTP/1.0 {status}\r\nContent-Type: {content_type}\r\nConnection: close\r\nCache-Control: no-store\r\n\r\n")
 }
 
-/// Back to the page, with the error of a rejected form in the query so
-/// the page can say that nothing was saved.
+/// Back to the clock page, or the setup form on the access point.
 fn redirect_home(out: &mut Response, error: Option<FormError>) -> core::fmt::Result {
+    redirect_to(out, Page::Clock, error)
+}
+
+/// Back to the page a form was posted from, with the error of a
+/// rejected form in the query so the page can say that nothing was
+/// saved.
+fn redirect_to(out: &mut Response, page: Page, error: Option<FormError>) -> core::fmt::Result {
     let suffix = match error {
         None => "",
         Some(FormError::BadValue) => "?error=value",
@@ -301,7 +311,7 @@ fn redirect_home(out: &mut Response, error: Option<FormError>) -> core::fmt::Res
         Some(FormError::Forbidden) => "?error=token",
         Some(FormError::BrokerPassword) => "?error=broker",
     };
-    write!(out, "HTTP/1.0 303 See Other\r\nLocation: /{suffix}\r\nConnection: close\r\n\r\n")
+    write!(out, "HTTP/1.0 303 See Other\r\nLocation: {}{suffix}\r\nConnection: close\r\n\r\n", page.path())
 }
 
 /// The error the page was redirected back with, from `?error=...`.
@@ -376,16 +386,46 @@ enum Then {
     AccessPoint,
 }
 
+/// The page a settings form is served at and posted to, on the station.
+fn form_page(path: &str) -> Option<Page> {
+    [Page::Clock, Page::Settings, Page::HomeAssistant].into_iter().find(|page| page.path() == path)
+}
+
+/// `POST /reload` and `POST /ap`: a reset of the kind `then`, for the
+/// token or the PIN the system page's visitor read off the panel.
+fn restart(out: &mut Response, req: &Request<'_>, what: &str, then: Then) -> Result<Then, core::fmt::Error> {
+    match auth::token_or_pin(req.authorization) {
+        Ok(()) => {
+            warn!("http: {what} requested");
+            status_line(out, "200 OK", "text/plain")?;
+            writeln!(out, "{what}")?;
+            Ok(then)
+        }
+        Err(e) => {
+            warn!("http: {what} refused: {}", e.text);
+            status_line(out, e.status, "text/plain")?;
+            writeln!(out, "{}", e.text)?;
+            Ok(Then::Close)
+        }
+    }
+}
+
 /// Build the response for one request with its body in hand.
 fn respond(out: &mut Response, req: &Request<'_>, body: &[u8]) -> Result<Then, core::fmt::Error> {
     match (req.method, req.path) {
-        (Method::Get, "/") => {
+        (Method::Get, "/") if net::mode() == Mode::AccessPoint => {
             status_line(out, "200 OK", "text/html; charset=utf-8")?;
-            if net::mode() == Mode::AccessPoint {
-                let networks = net::networks();
-                form::write_provision_page(out, &settings::get(), &status(), &networks, error_from_query(req.query))?;
-            } else {
-                form::write_page(out, &settings::get(), &status(), error_from_query(req.query))?;
+            form::write_provision_page(out, &settings::get(), &status(), &net::networks(), error_from_query(req.query))?;
+        }
+        // The settings pages are the station's: on the access point
+        // their paths go the captive portal's way, to the setup form.
+        (Method::Get, path) if net::mode() != Mode::AccessPoint && form_page(path).is_some() => {
+            status_line(out, "200 OK", "text/html; charset=utf-8")?;
+            let (s, st, error) = (settings::get(), status(), error_from_query(req.query));
+            match form_page(path) {
+                Some(Page::Settings) => form::write_settings_page(out, &s, &st, error)?,
+                Some(Page::HomeAssistant) => form::write_ha_page(out, &s, &st, error)?,
+                _ => form::write_page(out, &s, &st, error)?,
             }
         }
         (Method::Post, "/") if net::mode() == Mode::AccessPoint => {
@@ -399,7 +439,7 @@ fn respond(out: &mut Response, req: &Request<'_>, body: &[u8]) -> Result<Then, c
             // (`form::settle_password`).
             let current = settings::get();
             let mut trial = current;
-            let result = form::apply(&mut trial, body, false, Allow::ALL)
+            let result = form::apply(&mut trial, body, Allow::ALL)
                 .and_then(|()| form::settle_password(&mut trial, &current.wifi, &net::networks()));
             match result {
                 Ok(()) if trial.wifi.is_none() => {
@@ -422,28 +462,29 @@ fn respond(out: &mut Response, req: &Request<'_>, body: &[u8]) -> Result<Then, c
                 }
             }
         }
-        (Method::Post, "/") => {
-            // All or nothing: the form is applied to a copy and committed
-            // only if every pair parsed, so a bad field (an alarm time the
-            // browser sent empty, say) cannot leave the checkboxes, which
-            // `apply` resets first, half applied. The broker keys are
-            // the page's to set; the network keys are not.
+        (Method::Post, path) if net::mode() != Mode::AccessPoint && form_page(path).is_some() => {
+            // A page's form, a partial update: only the keys it sends
+            // change, and a checkbox is sent either way. All or
+            // nothing: the form is applied to a copy and committed only
+            // if every pair parsed. The broker keys are a page's to
+            // set; the network keys are not. The answer is the page it
+            // came from, which says why if nothing was saved.
             let mut trial = settings::get();
-            let result = form::apply(&mut trial, body, true, Allow::PAGE);
+            let result = form::apply(&mut trial, body, Allow::PAGE);
             match result {
                 Ok(()) => {
                     settings::update(|s| *s = trial);
                 }
                 Err(e) => warn!("http: form rejected: {e:?}"),
             }
-            redirect_home(out, result.err())?;
+            redirect_to(out, form_page(path).unwrap_or(Page::Clock), result.err())?;
         }
         (Method::Post, "/play") => {
             // Preview the sound chosen in the form without saving anything:
             // the form is applied to a scratch copy and only its melody used,
             // so the page's broker rule need not hold (`Allow::ALL`).
             let mut trial = settings::get();
-            if let Err(e) = form::apply(&mut trial, body, true, Allow::ALL) {
+            if let Err(e) = form::apply(&mut trial, body, Allow::ALL) {
                 warn!("http: play form rejected: {e:?}");
             }
             buzzer::preview(trial.melody);
@@ -470,18 +511,17 @@ fn respond(out: &mut Response, req: &Request<'_>, body: &[u8]) -> Result<Then, c
             out.write_str("HTTP/1.0 200 OK\r\nContent-Type: text/javascript\r\nConnection: close\r\nCache-Control: max-age=86400\r\n\r\n")?;
             out.write_bytes(TZ_JS)?;
         }
-        (Method::Get, "/update") => {
-            // Opening the page puts a PIN on the panel; the page asks for it.
+        (Method::Get, "/system") => {
+            // Opening the page puts a PIN on the panel; the page asks
+            // for it, once, for whichever of its four actions.
             let lockout_secs = auth::issue_pin(random()).err();
             status_line(out, "200 OK", "text/html; charset=utf-8")?;
-            form::write_update_page(out, settings::get().hostname.as_str(), &status(), lockout_secs)?;
+            form::write_system_page(out, settings::get().hostname.as_str(), &status(), auth::token_enabled(), lockout_secs)?;
         }
-        (Method::Get, "/token") => {
-            // The token page, reached by its address only: no page links
-            // to it. A PIN of its own, the same way.
-            let lockout_secs = auth::issue_pin(random()).err();
-            status_line(out, "200 OK", "text/html; charset=utf-8")?;
-            form::write_token_page(out, settings::get().hostname.as_str(), auth::token_enabled(), lockout_secs)?;
+        (Method::Get, "/update" | "/token") => {
+            // The pages the system page replaced: an older README, the
+            // web installer's text and bookmarks name them.
+            write!(out, "HTTP/1.0 302 Found\r\nLocation: {}\r\nConnection: close\r\nCache-Control: no-store\r\n\r\n", Page::System.path())?;
         }
         (Method::Post, "/pin") => {
             // A PIN without the page, for a script that reads the serial
@@ -498,7 +538,7 @@ fn respond(out: &mut Response, req: &Request<'_>, body: &[u8]) -> Result<Then, c
             }
         }
         (Method::Post, "/token") => {
-            // A new API token, with the PIN from the token page or the
+            // A new API token, with the PIN from the system page or the
             // current token. The value is never logged or echoed. The
             // body is parsed before the PIN is spent, so a bad one costs
             // a 400 and not the PIN.
@@ -538,7 +578,7 @@ fn respond(out: &mut Response, req: &Request<'_>, body: &[u8]) -> Result<Then, c
             // point, whose own password is the gate; the rest do not.
             let trusted = net::mode() == Mode::AccessPoint || auth::token(req.authorization).is_ok();
             let mut trial = settings::get();
-            match form::apply(&mut trial, body, false, if trusted { Allow::ALL } else { Allow::NONE }) {
+            match form::apply(&mut trial, body, if trusted { Allow::ALL } else { Allow::NONE }) {
                 Ok(()) => {
                     settings::update(|s| *s = trial);
                     status_line(out, "200 OK", "application/json")?;
@@ -558,42 +598,13 @@ fn respond(out: &mut Response, req: &Request<'_>, body: &[u8]) -> Result<Then, c
                 }
             }
         }
-        (Method::Post, "/ap") => {
-            // Into the access point from a script, with the token: the
-            // way onto a bench without hands on the buttons.
-            return match auth::token(req.authorization) {
-                Ok(()) => {
-                    warn!("http: access point mode requested");
-                    status_line(out, "200 OK", "text/plain")?;
-                    out.write_str("resetting into access point mode\n")?;
-                    Ok(Then::AccessPoint)
-                }
-                Err(e) => {
-                    warn!("http: access point mode refused: {}", e.text);
-                    status_line(out, e.status, "text/plain")?;
-                    writeln!(out, "{}", e.text)?;
-                    Ok(Then::Close)
-                }
-            };
-        }
-        (Method::Post, "/reload") => {
-            // A deliberate reset for testing the carry: the token, not the
-            // PIN, and no hold for a ringing alarm.
-            return match auth::token(req.authorization) {
-                Ok(()) => {
-                    warn!("http: reload requested, rebooting with the time carried over");
-                    status_line(out, "200 OK", "text/plain")?;
-                    out.write_str("rebooting with the time carried over\n")?;
-                    Ok(Then::Reload)
-                }
-                Err(e) => {
-                    warn!("http: reload refused: {}", e.text);
-                    status_line(out, e.status, "text/plain")?;
-                    writeln!(out, "{}", e.text)?;
-                    Ok(Then::Close)
-                }
-            };
-        }
+        // Into the access point: from a script with the token, the way
+        // onto a bench without hands on the buttons, or from the system
+        // page with the PIN.
+        (Method::Post, "/ap") => return restart(out, req, "resetting into access point mode", Then::AccessPoint),
+        // A deliberate reset, which is also the way to test the carry:
+        // no hold for a ringing alarm.
+        (Method::Post, "/reload") => return restart(out, req, "rebooting with the time carried over", Then::Reload),
         _ if net::mode() == Mode::AccessPoint => {
             // The captive portal: a phone's probe lands here through the
             // DNS and is sent to the page, which the phone then shows.

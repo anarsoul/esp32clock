@@ -391,10 +391,12 @@ pub fn parse_tenths(value: &str) -> Option<i16> {
     Some(if negative { -dc } else { dc })
 }
 
-/// Apply every `key=value` pair of a form body or query string to `s`.
-/// With `checkboxes_absent_off`, as for the page's form, the boolean
-/// fields are turned off unless the body turns them on. `allow` is
-/// passed to `apply_one`. The first bad pair stops and is reported;
+/// Apply every `key=value` pair of a form body or query string to `s`:
+/// a partial update, since a key that is not sent is left alone. A page
+/// sends a hidden `0` before each checkbox (`Check`), so an unticked
+/// box, for which a browser sends nothing, is the `0` and a ticked one
+/// the `on` after it. `allow` is passed to `apply_one`. The first bad
+/// pair stops and is reported;
 /// earlier pairs stay applied, so the caller works on a copy. A
 /// non-empty `ssid_pick` (the setup form's list) wins over `ssid` (its
 /// typed field) whatever their order, since a browser may send a stale
@@ -404,12 +406,7 @@ pub fn parse_tenths(value: &str) -> Option<i16> {
 /// `BrokerPassword`, so the stored password never goes to a host the
 /// page named; the same host keeps it on an empty field, and an empty
 /// host clears it.
-pub fn apply(s: &mut Settings, body: &[u8], checkboxes_absent_off: bool, allow: Allow) -> Result<(), FormError> {
-    if checkboxes_absent_off {
-        s.alarm_armed = false;
-        s.twelve_hour = false;
-        s.skip_next = false;
-    }
+pub fn apply(s: &mut Settings, body: &[u8], allow: Allow) -> Result<(), FormError> {
     let before = s.mqtt;
     let mut password_typed = false;
     let mut pick = None;
@@ -523,7 +520,7 @@ impl<T: core::fmt::Display> core::fmt::Display for OrNull<T> {
     }
 }
 
-/// The timezone field of both forms: the rule, and a button that fills
+/// The timezone field of the settings page and the setup form: the rule, and a button that fills
 /// it from the browser's own zone through `/tz.js` (`src/tz.js`), which
 /// then says which zone that was in the `<small>` after it. `TZ_SCRIPT`
 /// loads the script after the form, so the three elements exist.
@@ -605,12 +602,12 @@ pub fn write_json(out: &mut impl core::fmt::Write, s: &Settings, st: &Status) ->
     }
 }
 
-/// The status lines under the form: the firmware with a link to the
-/// update page, the network and its signal, the room, then uptime and
-/// self-heals. `ssid` is the stored network, the only one the station
+/// The status lines under the clock page's forms: the firmware, the
+/// network and its signal, the broker, the room, the local time, then
+/// uptime and self-heals. `ssid` is the stored network, the only one the station
 /// joins.
 fn write_status(out: &mut impl core::fmt::Write, s: &Settings, st: &Status) -> core::fmt::Result {
-    write_firmware_line(out, st, true)?;
+    write_firmware_line(out, st, false)?;
     write_wifi_line(out, s.wifi.ssid.as_str(), st)?;
     write_mqtt_line(out, s, st)?;
     write_room_line(out, st)?;
@@ -683,179 +680,161 @@ fn write_local_line(out: &mut impl core::fmt::Write, s: &Settings, st: &Status) 
     )
 }
 
-/// The firmware and its slot; `link` adds the way to the update page,
-/// which that page itself leaves out.
+/// The firmware and its slot; `link` adds the way to the system page,
+/// for the setup form, which has no line of links.
 fn write_firmware_line(out: &mut impl core::fmt::Write, st: &Status, link: bool) -> core::fmt::Result {
     write!(out, "<p><small>Firmware {} in {}.", st.version, st.slot)?;
     if link {
-        out.write_str(" <a href=/update>Update</a>.")?;
+        out.write_str(" <a href=/system>Update</a>.")?;
     }
     out.write_str("</small></p>")
 }
 
-/// Shared `<head>`: the viewport and the styles of both pages.
+/// Shared `<head>`: the viewport and the styles of every page.
 const HEAD: &str = "<!doctype html><html><head><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\">\
 <style>body{font-family:sans-serif;max-width:22em;margin:2em auto;padding:0 1em}\
 label{display:block;margin:.8em 0}select,input{font-size:1em;width:100%;box-sizing:border-box}input[type=checkbox]{width:auto}input[type=file]{margin:.5em 0}\
-button{font-size:1em;padding:.5em 1.5em}p.err{color:#b00}progress{width:100%}[hidden]{display:none}</style>";
+button{font-size:1em;padding:.5em 1.5em}p.err{color:#b00}progress{width:100%}[hidden]{display:none}\
+fieldset{border:1px solid #ccc;border-radius:.3em;margin:1em 0;padding:0 1em}</style>";
 
-/// The sentence both PIN pages open with, or the lockout notice when
-/// no PIN was issued because of a wrong attempt just before.
-fn write_pin_notice(out: &mut impl core::fmt::Write, lockout_secs: Option<u64>) -> core::fmt::Result {
-    match lockout_secs {
-        Some(secs) => write!(
-            out,
-            "<p class=err>A wrong PIN was entered. Reload this page in {secs} s to get a new one.</p>"
-        ),
-        None => out.write_str("<p>The clock is showing a four-digit PIN. It is good for one try; reload this page for another.</p>"),
+/// The pages a visitor clicks between; each starts with a line of links
+/// to the others.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Page {
+    /// `/`: the alarm, the display and the status.
+    Clock,
+    /// `/settings`: the timezone, the panel's options and the hostname.
+    Settings,
+    /// `/ha`: the MQTT broker.
+    HomeAssistant,
+    /// `/system`: the firmware, the token, reboot and the access point.
+    System,
+}
+
+impl Page {
+    pub const ALL: [Page; 4] = [Page::Clock, Page::Settings, Page::HomeAssistant, Page::System];
+
+    /// Where the page is served, and where its form is posted.
+    pub const fn path(self) -> &'static str {
+        match self {
+            Page::Clock => "/",
+            Page::Settings => "/settings",
+            Page::HomeAssistant => "/ha",
+            Page::System => "/system",
+        }
+    }
+
+    const fn label(self) -> &'static str {
+        match self {
+            Page::Clock => "Clock",
+            Page::Settings => "Settings",
+            Page::HomeAssistant => "Home Assistant",
+            Page::System => "System",
+        }
     }
 }
 
-/// The PIN field of both pages: four digits, no autocomplete.
-const PIN_FIELD: &str = "<label>PIN on the clock<input type=text inputmode=numeric pattern=[0-9]* maxlength=4 autocomplete=off id=t></label>";
-
-/// The script both PIN pages start with: `$` by id, `say` into the
-/// status line `s` (an error in red) and `pin`, which checks the PIN
-/// field `t` holds four digits and says so if not.
-const PIN_JS: &str = "<p><a href=/>Back to the settings</a></p><script>\
-var $=function(i){return document.getElementById(i)},t=$('t'),s=$('s');\
-function say(m,e){s.textContent=m;s.className=e?'err':''}\
-function pin(){if(/^[0-9]{4}$/.test(t.value))return true;say('Enter the four digits the clock is showing.',1);return false}\
-";
-
-/// The firmware update page: a file input and the PIN the clock is
-/// showing, posted as the raw body of `/ota` by script with the PIN in
-/// the header, which is what the curl path sends with its token, so the
-/// server needs no multipart. `XMLHttpRequest` for the progress bar;
-/// after a `200` the page polls `/api` until the clock is back. The
-/// button stays disabled after an answer either way: the PIN is spent,
-/// and the status line says to reload for another.
-/// `lockout_secs` is set when no PIN was issued because of a wrong
-/// attempt just before. The token has its own page, `write_token_page`,
-/// which this one does not mention.
-pub fn write_update_page(
-    out: &mut impl core::fmt::Write,
-    hostname: &str,
-    st: &Status,
-    lockout_secs: Option<u64>,
-) -> core::fmt::Result {
+/// What every page starts with: the head, the hostname as title and
+/// heading, the line of links with this page's own name in bold, and
+/// why the last post of its form was refused, if it was. On the access
+/// point (`ap`) `/` is the setup form and the two settings pages are
+/// not served, so the links are that form and the system page.
+fn write_top(out: &mut impl core::fmt::Write, hostname: &str, here: Page, ap: bool, error: Option<FormError>) -> core::fmt::Result {
     out.write_str(HEAD)?;
-    write!(out, "<title>Clock: {hostname}</title></head><body><h1>Clock: {hostname}</h1><h2>Firmware update</h2>")?;
-    write_firmware_line(out, st, false)?;
-    out.write_str("<p>Choose the image file, type the PIN the clock is showing and press Upload.</p>")?;
-    write_pin_notice(out, lockout_secs)?;
-    out.write_str("<label>Image file (<code>scripts/ota.sh</code> makes it)<input type=file id=f></label>")?;
-    out.write_str(PIN_FIELD)?;
-    out.write_str(
-        "<button id=b>Upload</button><progress id=p value=0 max=1 hidden></progress>\
-<p id=s>The panel goes dark for about ten seconds while the image is written. Do not unplug.</p>",
-    )?;
-    out.write_str(PIN_JS)?;
-    out.write_str(
-        "var f=$('f'),b=$('b'),p=$('p');\
-function poll(n){fetch('/api',{cache:'no-store'}).then(function(x){return x.json()})\
-.then(function(j){say('Back up: firmware '+j.version+' in '+j.slot+'.')})\
-.catch(function(){if(n>0)setTimeout(function(){poll(n-1)},2000);else say('The clock has not come back; check it.',1)})}\
-b.onclick=function(){if(!f.files[0]){say('Choose an image file.',1);return}\
-if(!pin())return;\
-var x=new XMLHttpRequest();x.open('POST','/ota');x.setRequestHeader('Authorization','PIN '+t.value);\
-x.upload.onprogress=function(e){if(e.lengthComputable)p.value=e.loaded/e.total};\
-x.onload=function(){if(x.status==200){say(x.responseText.trim()+' Waiting for the clock to come back.');setTimeout(function(){poll(20)},5000)}\
-else say(x.status+': '+x.responseText.trim()+' Reload this page for a new PIN.',1)};\
-x.onerror=function(){say('Upload failed: connection lost. Reload this page for a new PIN.',1)};\
-b.disabled=true;p.hidden=false;p.value=0;say('Uploading.');x.send(f.files[0])}\
-</script></body></html>",
-    )
+    // The hostname is letters, digits and dashes, so no escaping here.
+    write!(out, "<title>Clock: {hostname}</title></head><body><h1>Clock: {hostname}</h1><p>")?;
+    let mut first = true;
+    for page in Page::ALL {
+        if ap && matches!(page, Page::Settings | Page::HomeAssistant) {
+            continue;
+        }
+        if !first {
+            out.write_str(" · ")?;
+        }
+        first = false;
+        let label = if ap && page == Page::Clock { "Setup" } else { page.label() };
+        if page == here {
+            write!(out, "<b>{label}</b>")?;
+        } else {
+            write!(out, "<a href={}>{label}</a>", page.path())?;
+        }
+    }
+    out.write_str("</p>")?;
+    match error {
+        None => Ok(()),
+        Some(FormError::BadValue) => out.write_str("<p class=err>Nothing was saved: a field had a bad value.</p>"),
+        Some(FormError::UnknownKey) => out.write_str("<p class=err>Nothing was saved: an unknown field was sent.</p>"),
+        Some(FormError::Forbidden) => out.write_str("<p class=err>Nothing was saved: the network is set with the token.</p>"),
+        Some(FormError::BrokerPassword) => out.write_str("<p class=err>Nothing was saved: a new broker needs its password typed again.</p>"),
+    }
 }
 
-/// The API token page, `GET /token`: a new token and the PIN the clock
-/// is showing, posted as `POST /token` with the PIN in the header, the
-/// same request a script makes with `Bearer`. `token_set` says whether
-/// one is set now; an empty token clears it, after the browser's
-/// `confirm()`, since clearing closes the script paths. The button
-/// stays disabled after an answer, since the PIN is spent, and the
-/// status line says to reload for another. Nothing links
-/// here on purpose: the settings page links to the update page and no
-/// further, so the token is changed by someone who typed the address.
-/// `lockout_secs` as for the update page.
-pub fn write_token_page(
-    out: &mut impl core::fmt::Write,
-    hostname: &str,
-    token_set: bool,
-    lockout_secs: Option<u64>,
-) -> core::fmt::Result {
-    out.write_str(HEAD)?;
-    write!(
-        out,
-        "<title>Clock: {hostname}</title></head><body><h1>Clock: {hostname}</h1><h2>API token</h2>\
-<p>What the scripts send as <code>Bearer</code>; never shown. {}.</p>\
-<p>Type the new token and the PIN the clock is showing, then press Set token. An empty token clears it and closes the script paths.</p>",
-        if token_set { "One is set" } else { "None is set" }
-    )?;
-    write_pin_notice(out, lockout_secs)?;
-    write!(
-        out,
-        "<label>New token, 8 to 32 characters without spaces<input type=password maxlength={TOKEN_MAX} autocomplete=new-password id=k></label>"
-    )?;
-    out.write_str(PIN_FIELD)?;
-    out.write_str("<button id=c>Set token</button><p id=s></p>")?;
-    out.write_str(PIN_JS)?;
-    out.write_str(
-        "var k=$('k'),c=$('c');\
-c.onclick=function(){if(!pin())return;\
-if(!k.value&&!confirm('Clear the token? The scripts will be refused until one is set again.'))return;\
-var y=new XMLHttpRequest();y.open('POST','/token');\
-y.setRequestHeader('Authorization','PIN '+t.value);y.setRequestHeader('Content-Type','application/x-www-form-urlencoded');\
-y.onload=function(){say(y.status+': '+y.responseText.trim()+' Reload this page for a new PIN.',y.status!=200)};y.onerror=function(){say('Request failed. Reload this page for a new PIN.',1)};\
-c.disabled=true;y.send('token='+encodeURIComponent(k.value))}\
-</script></body></html>",
-    )
+/// A checkbox that is posted either way: a hidden `0` under the same
+/// name before it, so the form says off for an unticked box and the
+/// later `on` wins for a ticked one (`apply`).
+struct Check(&'static str, bool);
+
+impl core::fmt::Display for Check {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "<input type=hidden name={0} value=0><input type=checkbox name={0}{1}>", self.0, if self.1 { " checked" } else { "" })
+    }
 }
 
-/// The settings page. `error` is why the last form post was refused, if
-/// it was; the page then says so above the form.
+/// How a settings form ends: Save, and the mark `UNSAVED_JS` shows.
+const SAVE: &str = "<p><button>Save</button> <b id=u hidden>Changes not saved yet.</b></p>";
+
+/// The script of a page with a settings form, without its tags: the
+/// unsaved-changes mark, shown while any named control of the first
+/// form differs from what the page was served with.
+const UNSAVED_JS: &str = "var D=document,f=D.forms[0],u=D.getElementById('u');\
+f.oninput=function(){var d=false;for(var e of f.elements)if(e.name&&(e.type=='checkbox'?e.checked!=e.defaultChecked:\
+e.options?!e.options[e.selectedIndex].defaultSelected:e.value!=e.defaultValue))d=true;u.hidden=!d};";
+
+/// The clock page's own script, after `UNSAVED_JS`: Play and Stop post
+/// the chosen tune to the button's own address without leaving the
+/// page, and a change in the display fieldset (`d`) is posted to `/api`
+/// at once, one key, and becomes the select's default, so the mark does
+/// not call it unsaved.
+const CLOCK_JS: &str = "var m=D.getElementById('m');\
+function P(a,b){fetch(a,{method:'POST',redirect:'manual',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:b})}\
+for(let i of'pq')D.getElementById(i).onclick=function(e){e.preventDefault();P(this.formAction,'melody='+m.value)};\
+D.getElementById('d').onchange=function(e){var t=e.target;P('/api',t.name+'='+t.value);for(var o of t.options)o.defaultSelected=o.selected;f.oninput()}";
+
+/// The clock page, `GET /`: one form of the alarm and the display with
+/// Save under both, as on the other pages, and the status lines. The
+/// display's two selects are also applied as they are chosen (by
+/// script, to `/api`), so Save is for the alarm, and for the display
+/// without script. `error` is why the last post of the form was
+/// refused, if it was; the page then says so above the form.
 pub fn write_page(
     out: &mut impl core::fmt::Write,
     s: &Settings,
     st: &Status,
     error: Option<FormError>,
 ) -> core::fmt::Result {
-    out.write_str(HEAD)?;
-    // The hostname is letters, digits and dashes, so no escaping here.
-    write!(
-        out,
-        "<style>fieldset{{border:1px solid #ccc;border-radius:.3em;margin:1em 0;padding:0 1em}}#p{{margin-bottom:1em}}</style>\
-<title>Clock: {0}</title></head><body><h1>Clock: {0}</h1>",
-        s.hostname.as_str()
-    )?;
-    match error {
-        None => {}
-        Some(FormError::BadValue) => out.write_str("<p class=err>Nothing was saved: a field had a bad value.</p>")?,
-        Some(FormError::UnknownKey) => out.write_str("<p class=err>Nothing was saved: an unknown field was sent.</p>")?,
-        Some(FormError::Forbidden) => out.write_str("<p class=err>Nothing was saved: the network is set with the token.</p>")?,
-        Some(FormError::BrokerPassword) => out.write_str("<p class=err>Nothing was saved: a new broker needs its password typed again.</p>")?,
-    }
+    write_top(out, s.hostname.as_str(), Page::Clock, false, error)?;
     write!(
         out,
         "<form method=post action=/><fieldset><legend>Alarm</legend>\
-<label><input type=checkbox name=armed{}> Alarm armed</label>\
+<label>{} Alarm armed</label>\
 <label>Alarm time <input type=time name=alarm value={:02}:{:02}></label>\
 <label>Alarm days <select name=days>{}</select></label>\
-<label><input type=checkbox name=skip{}> Skip the next alarm</label>\
+<label>{} Skip the next alarm</label>\
 <label>Alarm sound <select name=melody id=m>",
-        if s.alarm_armed { " checked" } else { "" },
+        Check("armed", s.alarm_armed),
         s.alarm_hour,
         s.alarm_minute,
         DayOptions(s.alarm_days),
-        if s.skip_next { " checked" } else { "" },
+        Check("skip", s.skip_next),
     )?;
     for (i, m) in melody::MELODIES.iter().enumerate() {
         write!(out, "<option value={}{}>{}</option>", m.name, if i == s.melody { " selected" } else { "" }, m.label)?;
     }
     write!(
         out,
-        "<option value={}{}>Random tune</option></select></label><button formaction=/play id=p>Play</button> <button formaction=/stop id=q>Stop</button></fieldset>\
-<fieldset><legend>Display</legend><label>Colour <select name=color>",
+        "<option value={}{}>Random tune</option></select></label>\
+<p><button formaction=/play id=p>Play</button> <button formaction=/stop id=q>Stop</button></p></fieldset>\
+<fieldset id=d><legend>Display</legend><label>Colour <select name=color>",
         melody::RANDOM_NAME,
         if s.melody == melody::RANDOM { " selected" } else { "" }
     )?;
@@ -866,46 +845,156 @@ pub fn write_page(
     for (i, pct) in BRIGHTNESS_STEPS.iter().enumerate() {
         write!(out, "<option value={pct}{}>{pct} %</option>", if i == s.brightness { " selected" } else { "" })?;
     }
+    write!(out, "</select></label></fieldset>{SAVE}</form><script>")?;
+    out.write_str(UNSAVED_JS)?;
+    out.write_str(CLOCK_JS)?;
+    out.write_str("</script>")?;
+    write_status(out, s, st)?;
+    out.write_str(
+        "<p><small>Scriptable: <code>GET /api</code>, <code>POST /api</code> with the fields of these pages.</small></p></body></html>",
+    )
+}
+
+/// The settings page, `GET /settings`: what is set once. The timezone
+/// with the browser-zone button, the 12 hour clock, the temperature on
+/// the panel and the thermometer's offset, the hostname; under the form
+/// the local time the rule gives, for checking it.
+pub fn write_settings_page(
+    out: &mut impl core::fmt::Write,
+    s: &Settings,
+    st: &Status,
+    error: Option<FormError>,
+) -> core::fmt::Result {
+    write_top(out, s.hostname.as_str(), Page::Settings, false, error)?;
+    out.write_str("<form method=post action=/settings><fieldset><legend>Time</legend>")?;
+    write_tz_field(out, s)?;
     write!(
         out,
-        "</select></label><label>Temperature on the panel <select name=temp_show>{}</select></label>\
-<label><input type=checkbox name=twelve_hour{}> 12 hour clock</label></fieldset>\
-<fieldset><legend>Other</legend>",
-        TempShowOptions(s.temp_show),
-        if s.twelve_hour { " checked" } else { "" },
-    )?;
-    write_tz_field(out, s)?;
-    writeln!(
-        out,
-        "<label>Thermometer offset, °C <input type=number name=temp_offset min=-{tlim} max={tlim} step=0.1 value={}></label>\
+        "<label>{} 12 hour clock</label></fieldset>\
+<fieldset><legend>Temperature</legend>\
+<label>Temperature on the panel <select name=temp_show>{}</select></label>\
+<label>Thermometer offset, °C <input type=number name=temp_offset min=-{tlim} max={tlim} step=0.1 value={}></label></fieldset>\
+<fieldset><legend>Network</legend>\
 <label>Hostname, for the DHCP server <input type=text name=hostname maxlength={hmax} pattern=\"[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?\" value=\"{}\"></label></fieldset>\
-<fieldset><legend>Home Assistant</legend>\
-<label>MQTT broker, empty for none <input type=text name=mqtt_host maxlength={bmax} pattern=\"[A-Za-z0-9.-]*\" value=\"{}\"></label>\
-<label>Port <input type=number name=mqtt_port min=1 max=65535 value={}></label>\
-<label>User <input type=text name=mqtt_user maxlength={umax} autocomplete=off value=\"{}\"></label>\
-<label>Password, empty keeps the stored one for the same broker <input type=password name=mqtt_password maxlength={pmax} autocomplete=new-password></label></fieldset>\
-<button>Save</button> <b id=u hidden>Changes not saved yet.</b></form>\
-<script>var m=document.getElementById('m'),f=document.forms[0],u=document.getElementById('u');\
-for(let i of'pq')document.getElementById(i).onclick=function(e){{e.preventDefault();\
-fetch(this.formAction,{{method:'POST',redirect:'manual',headers:{{'Content-Type':'application/x-www-form-urlencoded'}},body:'melody='+m.value}})}};\
-f.oninput=function(){{var d=false;for(var e of f.elements)if(e.name&&(e.type=='checkbox'?e.checked!=e.defaultChecked:\
-e.options?!e.options[e.selectedIndex].defaultSelected:e.value!=e.defaultValue))d=true;u.hidden=!d}}</script>",
+{SAVE}</form><script>{UNSAVED_JS}</script>",
+        Check("twelve_hour", s.twelve_hour),
+        TempShowOptions(s.temp_show),
         Tenths(s.temp_offset_dc),
         s.hostname.as_str(),
+        tlim = Tenths(TEMP_OFFSET_LIMIT_DC),
+        hmax = HOSTNAME_MAX,
+    )?;
+    write_tz_script(out, st)?;
+    write_local_line(out, s, st)?;
+    out.write_str("</body></html>")
+}
+
+/// The Home Assistant page, `GET /ha`: the MQTT broker, and under the
+/// form what the clock's connection to it is doing. The password field
+/// is write-only; `apply` refuses a new host without it.
+pub fn write_ha_page(
+    out: &mut impl core::fmt::Write,
+    s: &Settings,
+    st: &Status,
+    error: Option<FormError>,
+) -> core::fmt::Result {
+    write_top(out, s.hostname.as_str(), Page::HomeAssistant, false, error)?;
+    write!(
+        out,
+        "<p>The clock announces itself to Home Assistant through an MQTT broker, which must speak MQTT 5; nothing is typed there.</p>\
+<form method=post action=/ha><fieldset><legend>MQTT broker</legend>\
+<label>Host, empty for none <input type=text name=mqtt_host maxlength={bmax} pattern=\"[A-Za-z0-9.-]*\" value=\"{}\"></label>\
+<label>Port <input type=number name=mqtt_port min=1 max=65535 value={}></label>\
+<label>User <input type=text name=mqtt_user maxlength={umax} autocomplete=off value=\"{}\"></label>\
+<label>Password, empty keeps the stored one for the same host <input type=password name=mqtt_password maxlength={pmax} autocomplete=new-password></label></fieldset>\
+{SAVE}</form><script>{UNSAVED_JS}</script>",
         s.mqtt.host.as_str(),
         s.mqtt.port,
         HtmlStr(s.mqtt.user.as_str()),
-        tlim = Tenths(TEMP_OFFSET_LIMIT_DC),
-        hmax = HOSTNAME_MAX,
         bmax = BROKER_HOST_MAX,
         umax = BROKER_USER_MAX,
         pmax = BROKER_PASSWORD_MAX,
     )?;
-    write_tz_script(out, st)?;
-    write_status(out, s, st)?;
+    write_mqtt_line(out, s, st)?;
+    out.write_str("</body></html>")
+}
+
+/// The system page's script. `say` writes the status line `s` (an error
+/// in red) and brings it into view, since it is under the PIN field and
+/// the buttons are further down; `go` checks the PIN field holds four digits, disables every
+/// button (the PIN is spent by any answer) and opens a request with the
+/// PIN in the header, which is what a script sends with its token, so
+/// the server needs no multipart for the image; `back` polls `/api`
+/// until the clock answers again. `XMLHttpRequest` for the upload's
+/// progress bar. The access-point button is absent on the access point.
+const SYSTEM_JS: &str = "<script>\
+var $=function(i){return document.getElementById(i)},t=$('t'),s=$('s'),f=$('f'),p=$('p'),k=$('k'),a=$('a'),N=' Reload this page for a new PIN.';\
+function say(m,e){s.textContent=m;s.className=e?'err':'';s.scrollIntoView({block:'center'})}\
+function go(u,ok){if(!/^[0-9]{4}$/.test(t.value)){say('Enter the four digits the clock is showing.',1);return}\
+var x=new XMLHttpRequest();x.open('POST',u);x.setRequestHeader('Authorization','PIN '+t.value);\
+x.onload=function(){var m=x.responseText.trim();if(x.status==200)ok(m);else say(x.status+': '+m+N,1)};\
+x.onerror=function(){say('Request failed: connection lost.'+N,1)};\
+for(var b of document.querySelectorAll('button'))b.disabled=true;return x}\
+function poll(n){fetch('/api',{cache:'no-store'}).then(function(x){return x.json()})\
+.then(function(j){say('Back up: firmware '+j.version+' in '+j.slot+'.')})\
+.catch(function(){if(n>0)setTimeout(function(){poll(n-1)},2000);else say('The clock has not come back; check it.',1)})}\
+function back(m){say(m+' Waiting for the clock to come back.');setTimeout(function(){poll(20)},5000)}\
+$('b').onclick=function(){if(!f.files[0]){say('Choose an image file.',1);return}\
+var x=go('/ota',back);if(!x)return;\
+x.upload.onprogress=function(e){if(e.lengthComputable)p.value=e.loaded/e.total};\
+p.hidden=false;p.value=0;say('Uploading.');x.send(f.files[0])};\
+$('c').onclick=function(){if(!k.value&&!confirm('Clear the token? The scripts will be refused until one is set again.'))return;\
+var x=go('/token',function(m){say(m+'.'+N)});if(!x)return;\
+x.setRequestHeader('Content-Type','application/x-www-form-urlencoded');x.send('token='+encodeURIComponent(k.value))};\
+$('r').onclick=function(){var x=go('/reload',back);if(x)x.send()};\
+if(a)a.onclick=function(){if(!confirm('Leave the network? The clock becomes an access point until a network is saved there, or both buttons are held for ten seconds.'))return;\
+var x=go('/ap',function(m){say(m+'. Join the clock\\'s own network and open http://192.168.4.1/.')});if(x)x.send()}\
+</script></body></html>";
+
+/// The system page, `GET /system`: what needs someone who can see the
+/// clock. Opening it puts a four-digit PIN on the panel, and the page
+/// has one field for it and four actions, each the request a script
+/// makes with `Bearer`, sent with `PIN` instead: the firmware image as
+/// the raw body of `/ota`, a new API token to `/token` (empty clears
+/// it, after the browser's `confirm()`, since that closes the script
+/// paths), `/reload` and `/ap`. A PIN is one action: the buttons stay
+/// disabled after an answer either way and the status line says to
+/// reload for another. The page says little: what the token is for and
+/// its rules are the README's, and a bad one is refused with them. `token_set` says whether a token is set now;
+/// `lockout_secs` is set when no PIN was issued because of a wrong
+/// attempt just before. On the access point (`st.mode`) the button
+/// that leads there is left out.
+pub fn write_system_page(
+    out: &mut impl core::fmt::Write,
+    hostname: &str,
+    st: &Status,
+    token_set: bool,
+    lockout_secs: Option<u64>,
+) -> core::fmt::Result {
+    let ap = st.mode == "ap";
+    write_top(out, hostname, Page::System, ap, None)?;
+    match lockout_secs {
+        Some(secs) => write!(out, "<p class=err>A wrong PIN was entered. Reload this page in {secs} s to get a new one.</p>")?,
+        None => out.write_str("<p><b>Every action on this page needs the PIN the clock is showing.</b> One PIN, one action.</p>")?,
+    }
     out.write_str(
-        "<p><small>Scriptable: <code>GET /api</code>, <code>POST /api</code> with the same fields.</small></p></body></html>",
-    )
+        "<label>PIN on the clock<input type=text inputmode=numeric pattern=[0-9]* maxlength=4 autocomplete=off id=t></label><p id=s></p>\
+<fieldset><legend>Firmware update</legend>",
+    )?;
+    write_firmware_line(out, st, false)?;
+    write!(
+        out,
+        "<label>Image file (<code>scripts/ota.sh</code> makes it, or a release's <code>esp32clock-ota-*.bin</code>)<input type=file id=f></label>\
+<p><button id=b>Upload</button></p><progress id=p value=0 max=1 hidden></progress>\
+<p><small>The panel goes dark while the image is written. Do not unplug.</small></p></fieldset>\
+<fieldset><legend>API token</legend>\
+<label>New token, empty to clear ({})<input type=password maxlength={TOKEN_MAX} autocomplete=new-password id=k></label>\
+<p><button id=c>Set token</button></p></fieldset>\
+<fieldset><legend>Restart</legend><p style=display:flex;justify-content:space-between><button id=r>Reboot</button>{}</p></fieldset>",
+        if token_set { "one is set" } else { "none is set" },
+        if ap { "" } else { "<button id=a>Access point</button>" },
+    )?;
+    out.write_str(SYSTEM_JS)
 }
 
 /// Bytes the setup page's list of networks may take, strongest first.
@@ -1143,7 +1232,7 @@ mod tests {
     fn apply_sets_every_key() {
         let mut s = Settings::DEFAULT;
         let body = b"color=cyan&brightness=25&alarm=06%3A30&armed=on&days=weekend&skip=1&twelve_hour=true&tz=-420&temp_offset=-0.7&temp_show=f&hostname=Bedroom-Clock&melody=random";
-        apply(&mut s, body, true, Allow::NONE).unwrap();
+        apply(&mut s, body, Allow::NONE).unwrap();
         assert_eq!(s.color, PALETTE_NAMES.iter().position(|n| *n == "cyan").unwrap());
         assert_eq!(s.brightness_pct(), 25);
         assert_eq!((s.alarm_hour, s.alarm_minute), (6, 30));
@@ -1156,39 +1245,36 @@ mod tests {
         assert_eq!(s.melody, melody::RANDOM);
         assert!(s.is_valid());
         // The broker keys, with the page's allowance.
-        apply(&mut s, b"mqtt_host=10.1.1.5&mqtt_port=1884&mqtt_user=clock&mqtt_password=p%26ss+word", true, Allow::PAGE).unwrap();
+        apply(&mut s, b"mqtt_host=10.1.1.5&mqtt_port=1884&mqtt_user=clock&mqtt_password=p%26ss+word", Allow::PAGE).unwrap();
         assert_eq!((s.mqtt.host.as_str(), s.mqtt.port, s.mqtt.user.as_str(), s.mqtt.password.0.as_str()), ("10.1.1.5", 1884, "clock", "p&ss word"));
         assert!(s.is_valid());
         // An empty password keeps the stored one; an empty host clears everything and sets the flag.
-        apply(&mut s, b"mqtt_password=", false, Allow::PAGE).unwrap();
+        apply(&mut s, b"mqtt_password=", Allow::PAGE).unwrap();
         assert_eq!(s.mqtt.password.0.as_str(), "p&ss word");
         assert!(!s.mqtt_cleared);
-        apply(&mut s, b"mqtt_host=", false, Allow::PAGE).unwrap();
+        apply(&mut s, b"mqtt_host=", Allow::PAGE).unwrap();
         assert!(s.mqtt.is_none() && s.mqtt.user.is_empty() && s.mqtt.password.0.is_empty() && s.mqtt_cleared);
         assert_eq!(s.mqtt.port, 1884, "the port stays");
-        apply(&mut s, b"mqtt_host=broker.lan", false, Allow::PAGE).unwrap();
+        apply(&mut s, b"mqtt_host=broker.lan", Allow::PAGE).unwrap();
         assert!(!s.mqtt_cleared);
         assert!(s.mqtt.password.0.is_empty(), "a host set after a clear has no password to hand on");
         // The alarm as Home Assistant's time entity sends it.
-        apply(&mut s, b"alarm=07%3A45%3A00", false, Allow::NONE).unwrap();
+        apply(&mut s, b"alarm=07%3A45%3A00", Allow::NONE).unwrap();
         assert_eq!((s.alarm_hour, s.alarm_minute), (7, 45));
-        // The page's form: absent checkboxes turn off; the API's does not.
-        apply(&mut s, b"tz=0", true, Allow::NONE).unwrap();
-        assert!(!s.alarm_armed && !s.skip_next && !s.twelve_hour);
-        s.alarm_armed = true;
-        apply(&mut s, b"tz=60", false, Allow::NONE).unwrap();
-        assert!(s.alarm_armed);
+        // A key that is not sent is left alone.
+        apply(&mut s, b"tz=0", Allow::NONE).unwrap();
+        assert!(s.alarm_armed && s.skip_next && s.twelve_hour);
         // An empty body, stray separators and a key without a value.
-        apply(&mut s, b"", false, Allow::NONE).unwrap();
-        apply(&mut s, b"&&tz=15&", false, Allow::NONE).unwrap();
+        apply(&mut s, b"", Allow::NONE).unwrap();
+        apply(&mut s, b"&&tz=15&", Allow::NONE).unwrap();
         assert_eq!(s.tz, tz::fixed(15));
         // A rule, as the page posts it and with a quoted name.
-        apply(&mut s, b"tz=PST8PDT%2CM3.2.0%2CM11.1.0", false, Allow::NONE).unwrap();
+        apply(&mut s, b"tz=PST8PDT%2CM3.2.0%2CM11.1.0", Allow::NONE).unwrap();
         assert_eq!(s.tz.as_str(), "PST8PDT,M3.2.0,M11.1.0");
-        apply(&mut s, b"tz=%3C%2B0545%3E-5%3A45", false, Allow::NONE).unwrap();
+        apply(&mut s, b"tz=%3C%2B0545%3E-5%3A45", Allow::NONE).unwrap();
         assert_eq!(s.tz.as_str(), "<+0545>-5:45");
         assert!(s.is_valid());
-        assert_eq!(apply(&mut s, b"armed", false, Allow::NONE), Ok(()));
+        assert_eq!(apply(&mut s, b"armed", Allow::NONE), Ok(()));
         assert!(!s.alarm_armed);
     }
 
@@ -1197,7 +1283,7 @@ mod tests {
         let s0 = Settings::DEFAULT;
         let try_body = |body: &[u8]| {
             let mut s = s0;
-            apply(&mut s, body, false, Allow::NONE)
+            apply(&mut s, body, Allow::NONE)
         };
         assert_eq!(try_body(b"colour=red"), Err(FormError::UnknownKey));
         assert_eq!(try_body(b"color=pink"), Err(FormError::BadValue));
@@ -1242,21 +1328,21 @@ mod tests {
     fn broker_keys_need_the_allowance_and_their_rules() {
         let page = |body: &[u8]| {
             let mut s = Settings::DEFAULT;
-            apply(&mut s, body, false, Allow::PAGE).map(|()| s)
+            apply(&mut s, body, Allow::PAGE).map(|()| s)
         };
         for body in [b"mqtt_host=x".as_slice(), b"mqtt_port=1883", b"mqtt_user=", b"mqtt_password=", b"tz=0&mqtt_host="] {
             let mut s = Settings::DEFAULT;
-            assert_eq!(apply(&mut s, body, false, Allow::NONE), Err(FormError::Forbidden), "{:?}", core::str::from_utf8(body));
-            assert!(apply(&mut s, body, false, Allow::ALL).is_ok());
+            assert_eq!(apply(&mut s, body, Allow::NONE), Err(FormError::Forbidden), "{:?}", core::str::from_utf8(body));
+            assert!(apply(&mut s, body, Allow::ALL).is_ok());
         }
         assert_eq!(page(b"ssid=x").err(), Some(FormError::Forbidden), "the page still may not set the network");
         // A new host from the page must come with its password typed:
         // the stored one is for the broker it was typed for.
         let mut with = Settings::DEFAULT;
-        apply(&mut with, b"mqtt_host=10.1.1.5&mqtt_user=clock&mqtt_password=secret", false, Allow::PAGE).unwrap();
+        apply(&mut with, b"mqtt_host=10.1.1.5&mqtt_user=clock&mqtt_password=secret", Allow::PAGE).unwrap();
         let moved = |body: &[u8], allow| {
             let mut s = with;
-            apply(&mut s, body, false, allow).map(|()| s)
+            apply(&mut s, body, allow).map(|()| s)
         };
         assert_eq!(moved(b"mqtt_host=attacker.lan&mqtt_password=", Allow::PAGE).err(), Some(FormError::BrokerPassword));
         assert_eq!(moved(b"mqtt_password=&mqtt_host=attacker.lan", Allow::PAGE).err(), Some(FormError::BrokerPassword), "whatever the order");
@@ -1271,7 +1357,7 @@ mod tests {
         assert_eq!((token.mqtt.host.as_str(), token.mqtt.password.0.as_str()), ("other.lan", "secret"), "the token may move it");
         let mut s = with;
         s.mqtt.password = Secret(Text::EMPTY);
-        apply(&mut s, b"mqtt_host=other.lan&mqtt_password=", false, Allow::PAGE).unwrap();
+        apply(&mut s, b"mqtt_host=other.lan&mqtt_password=", Allow::PAGE).unwrap();
         assert_eq!(s.mqtt.host.as_str(), "other.lan", "nothing stored, nothing to protect");
         assert_eq!(page(b"mqtt_host=a+b").err(), Some(FormError::BadValue));
         assert_eq!(page(b"mqtt_host=a%3A1883").err(), Some(FormError::BadValue));
@@ -1296,21 +1382,21 @@ mod tests {
         // Refused on the key alone, even when the value is what is stored.
         for body in [b"ssid=home".as_slice(), b"ssid_pick=home", b"password=", b"tz=0&password=12345678"] {
             let mut t = s;
-            assert_eq!(apply(&mut t, body, false, Allow::NONE), Err(FormError::Forbidden), "{:?}", core::str::from_utf8(body));
+            assert_eq!(apply(&mut t, body, Allow::NONE), Err(FormError::Forbidden), "{:?}", core::str::from_utf8(body));
         }
         let mut t = s;
-        apply(&mut t, b"ssid_pick=&ssid=Caf%C3%A9+Net&password=p%26ss+word", false, Allow::ALL).unwrap();
+        apply(&mut t, b"ssid_pick=&ssid=Caf%C3%A9+Net&password=p%26ss+word", Allow::ALL).unwrap();
         assert_eq!(t.wifi.ssid.as_str(), "Café Net");
         assert_eq!(t.wifi.password.0.as_str(), "p&ss word");
         // Empty SSID leaves the network alone; the password rule applies.
         let mut u = t;
-        apply(&mut u, b"ssid=&ssid_pick=", false, Allow::ALL).unwrap();
+        apply(&mut u, b"ssid=&ssid_pick=", Allow::ALL).unwrap();
         assert_eq!(u.wifi.ssid, t.wifi.ssid);
-        assert_eq!(apply(&mut u, b"password=1234567", false, Allow::ALL), Err(FormError::BadValue));
-        apply(&mut u, b"password=", false, Allow::ALL).unwrap();
+        assert_eq!(apply(&mut u, b"password=1234567", Allow::ALL), Err(FormError::BadValue));
+        apply(&mut u, b"password=", Allow::ALL).unwrap();
         assert!(u.wifi.password.0.is_empty(), "empty is an open network");
         let long = format!("ssid={}", "s".repeat(SSID_MAX + 1));
-        assert_eq!(apply(&mut u, long.as_bytes(), false, Allow::ALL), Err(FormError::BadValue));
+        assert_eq!(apply(&mut u, long.as_bytes(), Allow::ALL), Err(FormError::BadValue));
     }
 
     /// The list's pick wins over the typed name in either order; the
@@ -1319,18 +1405,18 @@ mod tests {
     fn the_pick_wins_over_the_typed_name() {
         for body in [b"ssid_pick=new&ssid=old&password=12345678".as_slice(), b"ssid=old&ssid_pick=new&password=12345678"] {
             let mut s = Settings::DEFAULT;
-            apply(&mut s, body, false, Allow::ALL).unwrap();
+            apply(&mut s, body, Allow::ALL).unwrap();
             assert_eq!(s.wifi.ssid.as_str(), "new", "{:?}", core::str::from_utf8(body));
             assert_eq!(s.wifi.password.0.as_str(), "12345678");
         }
         let mut s = Settings::DEFAULT;
-        apply(&mut s, b"ssid_pick=&ssid=typed", false, Allow::ALL).unwrap();
+        apply(&mut s, b"ssid_pick=&ssid=typed", Allow::ALL).unwrap();
         assert_eq!(s.wifi.ssid.as_str(), "typed");
-        apply(&mut s, b"ssid_pick=picked&ssid=", false, Allow::ALL).unwrap();
+        apply(&mut s, b"ssid_pick=picked&ssid=", Allow::ALL).unwrap();
         assert_eq!(s.wifi.ssid.as_str(), "picked");
         // A bad pick is still refused, and the key still needs the flag.
-        assert_eq!(apply(&mut s, b"ssid_pick=x&ssid=%zz", false, Allow::ALL), Err(FormError::BadValue));
-        assert_eq!(apply(&mut s, b"ssid_pick=x", false, Allow::NONE), Err(FormError::Forbidden));
+        assert_eq!(apply(&mut s, b"ssid_pick=x&ssid=%zz", Allow::ALL), Err(FormError::BadValue));
+        assert_eq!(apply(&mut s, b"ssid_pick=x", Allow::NONE), Err(FormError::Forbidden));
     }
 
     #[test]
@@ -1430,10 +1516,9 @@ mod tests {
         assert_eq!(format!("{}", JsonStr("a\"b\\c\n")), "a\\\"b\\\\c\\u000a");
     }
 
-    /// The settings page at its longest: every string at its limit, the
-    /// notice, a custom day list, every checkbox, the longest status.
-    #[test]
-    fn settings_page_fits_the_response_buffer() {
+    /// Settings with every string at its limit and every box ticked:
+    /// what each page is measured with.
+    fn worst_settings() -> Settings {
         let mut s = Settings::DEFAULT;
         s.hostname = Hostname::new(&"h".repeat(HOSTNAME_MAX)).unwrap();
         s.alarm_days = 0b1010101;
@@ -1443,26 +1528,123 @@ mod tests {
         s.tz = Text::new(&"<".repeat(TZ_MAX)).unwrap(); // escaped into the field, four bytes each
         s.melody = melody::RANDOM;
         s.wifi.ssid = Text::new(&"\"".repeat(SSID_MAX)).unwrap(); // escaped into the Wi-Fi line
-        s.mqtt.host = Text::new(&"h".repeat(BROKER_HOST_MAX)).unwrap(); // twice: the field and the status line
+        s.mqtt.host = Text::new(&"h".repeat(BROKER_HOST_MAX)).unwrap(); // the field and the status line
         s.mqtt.port = 65535;
         s.mqtt.user = Text::new(&"\"".repeat(BROKER_USER_MAX)).unwrap(); // escaped into the field
-        let mut out = String::new();
-        write_page(&mut out, &s, &status(true), Some(FormError::Forbidden)).unwrap();
-        println!("settings page: {} bytes of {PAGE_MAX}", out.len());
-        assert!(out.len() <= PAGE_MAX, "{} bytes", out.len());
-        assert!(out.ends_with("</html>"));
+        s
+    }
+
+    /// The four pages as served, in `Page::ALL`'s order.
+    fn pages(s: &Settings, st: &Status, error: Option<FormError>) -> [String; 4] {
+        let mut out = [String::new(), String::new(), String::new(), String::new()];
+        write_page(&mut out[0], s, st, error).unwrap();
+        write_settings_page(&mut out[1], s, st, error).unwrap();
+        write_ha_page(&mut out[2], s, st, error).unwrap();
+        write_system_page(&mut out[3], s.hostname.as_str(), st, true, Some(10)).unwrap();
+        out
+    }
+
+    /// The names of a page's form controls, in order, repeats dropped.
+    fn field_names(page: &str) -> Vec<&str> {
+        let body = &page[page.find("</head>").unwrap()..];
+        let mut names: Vec<&str> = Vec::new();
+        for part in body.split(" name=").skip(1) {
+            let name = &part[..part.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).unwrap()];
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+        names
+    }
+
+    /// Every page at its longest: every string at its limit, the notice,
+    /// a custom day list, every checkbox, the longest status.
+    #[test]
+    fn pages_fit_the_response_buffer() {
+        let out = pages(&worst_settings(), &status(true), Some(FormError::BrokerPassword));
+        for (page, out) in Page::ALL.iter().zip(&out) {
+            println!("{page:?} page: {} bytes of {PAGE_MAX}", out.len());
+            assert!(out.len() <= PAGE_MAX, "{page:?}: {} bytes", out.len());
+            assert!(out.ends_with("</html>"), "{page:?}");
+        }
         // Play and Stop, each posted by the script to its own address
         // without leaving the page.
-        assert!(out.contains("<button formaction=/play id=p>Play</button> <button formaction=/stop id=q>Stop</button>"));
-        assert!(out.contains("for(let i of'pq')") && out.contains("fetch(this.formAction,"));
-        assert!(out.contains(&format!("Wi-Fi <b>{}</b>, -100 dBm.", "&quot;".repeat(SSID_MAX))), "{out}");
+        assert!(out[0].contains("<button formaction=/play id=p>Play</button> <button formaction=/stop id=q>Stop</button>"));
+        assert!(out[0].contains("for(let i of'pq')") && out[0].contains("P(this.formAction,"));
+        assert!(out[0].contains(&format!("Wi-Fi <b>{}</b>, -100 dBm.", "&quot;".repeat(SSID_MAX))), "{}", out[0]);
+    }
+
+    /// Each form carries its own keys and nothing of another page's,
+    /// which is what makes its post a partial update; between them the
+    /// forms have every key the one page had.
+    #[test]
+    fn each_page_has_its_own_fields() {
+        let out = pages(&Settings::DEFAULT, &status(true), None);
+        assert_eq!(field_names(&out[0]), ["armed", "alarm", "days", "skip", "melody", "color", "brightness"]);
+        assert_eq!(field_names(&out[1]), ["tz", "twelve_hour", "temp_show", "temp_offset", "hostname"]);
+        assert_eq!(field_names(&out[2]), ["mqtt_host", "mqtt_port", "mqtt_user", "mqtt_password"]);
+        assert!(field_names(&out[3]).is_empty(), "the system page posts by script");
+        // One form with Save under both fieldsets; the display is also
+        // posted to `/api` as it is chosen and is then not unsaved.
+        assert_eq!(out[0].matches("<form").count(), 1);
+        assert!(out[0].contains("</select></label></fieldset><p><button>Save</button>"), "{}", out[0]);
+        assert!(out[0].contains("D.getElementById('d').onchange=function(e){var t=e.target;P('/api',t.name+'='+t.value);"));
+        assert!(out[0].contains("o.defaultSelected=o.selected;f.oninput()"));
+        // Each form posts to its own page, where a refusal is shown.
+        assert!(out[1].contains("<form method=post action=/settings>") && out[2].contains("<form method=post action=/ha>"));
+        // What each page shows of the status.
+        assert!(out[1].contains("Local time Fri 14:32") && out[2].contains("MQTT off.") && out[0].contains("Self-heal resets"));
+    }
+
+    /// A box unticked is the hidden `0`, a ticked one the `on` after it,
+    /// and a form without the box leaves the setting alone.
+    #[test]
+    fn checkboxes_are_posted_either_way() {
+        let mut s = Settings::DEFAULT;
+        s.alarm_armed = true;
+        let mut out = String::new();
+        write_page(&mut out, &s, &status(true), None).unwrap();
+        assert!(out.contains("<input type=hidden name=armed value=0><input type=checkbox name=armed checked> Alarm armed"), "{out}");
+        assert!(out.contains("<input type=hidden name=skip value=0><input type=checkbox name=skip> Skip the next alarm"), "{out}");
+        s.twelve_hour = true;
+        apply(&mut s, b"armed=0&armed=on&alarm=07%3A00&skip=0", Allow::PAGE).unwrap();
+        assert!(s.alarm_armed && !s.skip_next && s.twelve_hour, "the alarm form leaves 12 hour alone");
+        apply(&mut s, b"armed=0&skip=0&skip=on", Allow::PAGE).unwrap();
+        assert!(!s.alarm_armed && s.skip_next && s.twelve_hour);
+        apply(&mut s, b"tz=0&twelve_hour=0", Allow::PAGE).unwrap();
+        assert!(!s.twelve_hour && s.skip_next, "and the settings form leaves the alarm's alone");
+    }
+
+    /// Every page links to the other three and names itself in bold;
+    /// on the access point the system page links to the setup form only.
+    #[test]
+    fn pages_link_to_each_other() {
+        let out = pages(&Settings::DEFAULT, &status(true), None);
+        for (here, out) in Page::ALL.iter().zip(&out) {
+            for page in Page::ALL {
+                let link = format!("<a href={}>{}</a>", page.path(), page.label());
+                assert_eq!(out.contains(&link), page != *here, "{here:?} to {page:?}");
+            }
+            assert!(out.contains(&format!("<b>{}</b>", here.label())), "{here:?}");
+            let host = Settings::DEFAULT.hostname.as_str();
+            assert!(out.contains(&format!("<title>Clock: {host}</title>")) && out.contains(&format!("<h1>Clock: {host}</h1>")), "{out}");
+        }
+        let mut ap = status(false);
+        ap.mode = "ap";
+        let mut out = String::new();
+        write_system_page(&mut out, "clock", &ap, false, None).unwrap();
+        assert!(out.contains("<p><a href=/>Setup</a> · <b>System</b></p>"), "{out}");
+        assert!(!out.contains("id=a>") && out.contains("id=r>Reboot</button></p>"), "no way to the access point from it");
+        let mut setup = String::new();
+        write_provision_page(&mut setup, &Settings::DEFAULT, &ap, &[], None).unwrap();
+        assert!(setup.contains("<a href=/system>Update</a>"));
     }
 
     #[test]
     fn pages_load_the_zone_script_with_the_version() {
         let tag = "<script src=\"/tz.js?v=v0.1.0-123-gabcdef0-dirty-and-long\"></script>";
         let mut out = String::new();
-        write_page(&mut out, &Settings::DEFAULT, &status(true), None).unwrap();
+        write_settings_page(&mut out, &Settings::DEFAULT, &status(true), None).unwrap();
         assert!(out.contains(tag) && out.contains("<input type=text name=tz id=z maxlength=48 value=\""), "{out}");
         assert!(out.find("</form>").unwrap() < out.find(tag).unwrap(), "the script comes after the form");
         let mut setup = String::new();
@@ -1472,21 +1654,40 @@ mod tests {
     }
 
     #[test]
-    fn page_marks_unsaved_changes() {
-        // The mark is hidden as served and the one script compares every
-        // named control with the defaults the page came with.
-        let mut out = String::new();
-        write_page(&mut out, &Settings::DEFAULT, &status(true), None).unwrap();
-        let host = Settings::DEFAULT.hostname.as_str();
-        assert!(out.contains(&format!("<title>Clock: {host}</title>")) && out.contains(&format!("<h1>Clock: {host}</h1>")), "{out}");
-        assert!(out.contains("<button>Save</button> <b id=u hidden>Changes not saved yet.</b></form>"), "{out}");
-        assert_eq!(out.matches("<script>").count(), 1);
-        assert!(out.contains("f.oninput=function(){"), "{out}");
-        for check in ["e.checked!=e.defaultChecked", "e.options[e.selectedIndex].defaultSelected", "e.value!=e.defaultValue", "u.hidden=!d"] {
-            assert!(out.contains(check), "{check}");
+    fn pages_mark_unsaved_changes() {
+        // The mark is hidden as served and the script compares every
+        // named control of the first form with the defaults the page
+        // came with.
+        let out = pages(&Settings::DEFAULT, &status(true), None);
+        for out in &out[..3] {
+            assert!(out.contains("<p><button>Save</button> <b id=u hidden>Changes not saved yet.</b></p>"), "{out}");
+            assert_eq!(out.matches("<script>").count(), 1);
+            assert!(out.contains("f=D.forms[0]") && out.contains("f.oninput=function(){"), "{out}");
+            for check in ["e.checked!=e.defaultChecked", "e.options[e.selectedIndex].defaultSelected", "e.value!=e.defaultValue", "u.hidden=!d"] {
+                assert!(out.contains(check), "{check}");
+            }
+            // Every select marks its stored option, which the comparison needs.
+            assert_eq!(out.matches("<select").count(), out.matches(" selected").count());
         }
-        // Every select marks its stored option, which the comparison needs.
-        assert_eq!(out.matches("<select").count(), out.matches(" selected").count());
+    }
+
+    /// The system page: one PIN field and the four actions, each to its
+    /// route with the PIN in the header.
+    #[test]
+    fn system_page_has_the_four_actions() {
+        let mut out = String::new();
+        write_system_page(&mut out, "clock", &status(true), true, None).unwrap();
+        assert_eq!(out.matches("id=t>").count(), 1, "one PIN field");
+        for route in ["go('/ota',", "go('/token',", "go('/reload',", "go('/ap',"] {
+            assert!(out.contains(route), "{route}");
+        }
+        assert!(out.contains("x.setRequestHeader('Authorization','PIN '+t.value)"));
+        assert!(out.contains("(one is set)") && out.contains("<b>Every action on this page needs the PIN the clock is showing.</b>"));
+        // Reboot at the left edge, the access point at the right.
+        assert!(out.contains("<p style=display:flex;justify-content:space-between><button id=r>Reboot</button><button id=a>Access point</button></p>"));
+        out.clear();
+        write_system_page(&mut out, "clock", &status(true), false, Some(7)).unwrap();
+        assert!(out.contains("(none is set)") && out.contains("Reload this page in 7 s"));
     }
 
     #[test]
@@ -1511,47 +1712,6 @@ mod tests {
         out.clear();
         write_status(&mut out, &s, &st).unwrap();
         assert!(out.contains("MQTT connected <b>10.1.1.5:1883</b>."), "{out}");
-    }
-
-    #[test]
-    fn update_page_fits_the_response_buffer() {
-        let mut out = String::new();
-        write_update_page(&mut out, &"h".repeat(HOSTNAME_MAX), &status(true), Some(10)).unwrap();
-        println!("update page: {} bytes of {PAGE_MAX}", out.len());
-        assert!(out.len() <= PAGE_MAX, "{} bytes", out.len());
-        assert!(out.ends_with("</html>"));
-    }
-
-    #[test]
-    fn token_page_fits_the_response_buffer() {
-        let mut out = String::new();
-        write_token_page(&mut out, &"h".repeat(HOSTNAME_MAX), true, Some(10)).unwrap();
-        println!("token page: {} bytes of {PAGE_MAX}", out.len());
-        assert!(out.len() <= PAGE_MAX, "{} bytes", out.len());
-        assert!(out.ends_with("</html>"));
-        assert!(out.contains("One is set"));
-        assert!(out.contains("'/token'"), "posts to the route");
-        out.clear();
-        write_token_page(&mut out, "clock", false, None).unwrap();
-        assert!(out.contains("None is set"));
-    }
-
-    /// The token page is reached by its address alone: the pages a
-    /// visitor can click through never name it.
-    #[test]
-    fn nothing_links_to_the_token_page() {
-        let mut out = String::new();
-        write_page(&mut out, &Settings::DEFAULT, &status(true), None).unwrap();
-        assert!(!out.contains("/token"), "settings page");
-        assert!(out.contains("<a href=/update>"), "the update link stays");
-        out.clear();
-        write_update_page(&mut out, "clock", &status(true), None).unwrap();
-        assert!(!out.contains("/token"), "update page");
-        assert!(!out.contains("/update"), "update page does not link to itself");
-        assert!(!out.contains("token"), "update page does not mention the token");
-        out.clear();
-        write_provision_page(&mut out, &Settings::DEFAULT, &status(false), &[], None).unwrap();
-        assert!(!out.contains("/token"), "setup page");
     }
 
     /// The setup page without a list and everything else at its worst:

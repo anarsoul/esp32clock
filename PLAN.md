@@ -8277,3 +8277,110 @@ To look for in the serial log: the `candidate` lines, then the
 `connecting to … at` line naming the loudest of them, then `connected
 to` with the same BSSID; pull the near access point's power and the
 next turn must name the other.
+
+### The page split in four: clock, settings, Home Assistant, system — built 2026-11-14, to be tried on white-clock
+
+The user: "The main page has way too much." One page held every
+setting, the broker and the status. Agreed with the user 2026-11-14:
+
+| page | what it holds | posts to |
+| --- | --- | --- |
+| `/` | the alarm (armed, time, days, skip, tune with Play and Stop), the display (colour, brightness), the status lines | `POST /`; the display by script to `/api` |
+| `/settings` | timezone with the browser-zone button, 12 hour clock, temperature on the panel, thermometer offset, hostname; the local-time line, for checking a rule | `POST /settings` |
+| `/ha` | the MQTT broker, port, user, password; the MQTT line with the last error | `POST /ha` |
+| `/system` | firmware upload, API token, reboot, access point: one PIN field, four actions | `/ota`, `/token`, `/reload`, `/ap` |
+
+Every page starts with the same line of links. On the access point
+`/` stays the setup form, with a link to `/system`; `/settings` and
+`/ha` are not served there (the captive redirect takes them), and
+`/system` leaves out its access-point button.
+
+**A form post is a partial update.** `form::apply` already changed
+only the keys it was sent, which is what `/api` relies on; the one
+exception was `checkboxes_absent_off`, which turned `armed`, `skip`
+and `twelve_hour` off for a page form that did not send them, since a
+browser sends nothing for an unticked box. With 12 hour on another
+page, saving the alarm would have cleared it. So the flag is gone:
+each checkbox is preceded by a hidden input of the same name with
+`value=0`, the later pair wins as it always did, and a form carries
+only its own fields. The path a form is posted to decides nothing but
+where the redirect returns (`/ha?error=broker`); all three take
+`Allow::PAGE` and the broker-password rule is as it was.
+
+**The display is applied as chosen.** Colour and brightness are their
+own form, and a script posts the changed select to `/api` at once, as
+the buttons on the clock do; the alarm's Save does not carry them, so
+a colour stepped on the clock while the page was open is not put back
+by it. Without script the form has a Save of its own (`<noscript>`).
+
+**`/system`, one PIN.** `/update` and `/token` each issued a PIN when
+opened, and a PIN is one action; a hub linking to both would have put
+a PIN on the panel twice. `/system` issues one when opened and has the
+file and Upload, the new token and Set token, Reboot, and Access
+point; any answer spends the PIN and disables the buttons. `GET
+/update` and `GET /token` are redirects to it, so the README of an
+older release, the web installer's text and bookmarks still land.
+
+**Reboot and access point take the PIN.** `POST /reload` and `POST
+/ap` took the token alone, which a page does not have; they take
+`auth::token_or_pin` now, as `/ota` and `/token` do. The PIN is
+someone who can see the panel, which is what holding both buttons for
+ten seconds is. They are not left open: the access point takes the
+clock off the LAN, and `/api` there takes the network keys.
+
+**The token page is linked.** It was reachable by its address only,
+on purpose, and the tests asserted it. The user, 2026-11-14: "for the
+open source project it doesn't make much sense to have it unlinked".
+It is a section of `/system`, behind the PIN as before.
+
+Checks on the host: each page at its worst against `PAGE_MAX`; each
+form holds its own keys and no other page's; a checkbox off and on
+through the hidden pair, and an absent one left alone. On the clock,
+for the user: the four pages in a browser, a save on each with 12
+hour on staying on, the colour following the select, the PIN flow of
+each of the four actions.
+
+**Save under both, 2026-11-14.** The user, of the first build: "Save
+button is in the wrong place in the main page" (it was inside the
+alarm's box, the display a second form under it). The clock page is
+one form again, Save under both fieldsets as on the other pages; the
+display is still posted to `/api` as chosen, and the script makes the
+choice the select's default so the mark does not call it unsaved.
+Save carries the colour and brightness too, as it did before the
+split, so one stepped on the clock while the page was open is put
+back by it. The system page's PIN line is bold, at the user's word,
+and its texts were cut: the token's rules are the README's.
+
+**Sizes, 2026-11-14,** with the three clips of `clips/`, each page at
+its worst: clock 4353, settings 2433, Home Assistant 2253, system
+3756 (4038 before its texts were cut the same day), of 6016. The one page was 5564, and 5865 with nine clips. The
+main stack is 50.4 KB (`.stack` 0xc4c8), as it was within 0.2 KB. 139
+host tests.
+
+**On the bench, 2026-11-14.** Test-clock, by OTA with the token, the
+build with four clips. With curl: the alarm form with `armed=0&armed=on`
+arms and with `armed=0` alone disarms, `twelve_hour` set before it
+staying on through both; the settings form's `twelve_hour=0` turns it
+off and leaves the alarm's boxes; a bad timezone comes back as
+`/settings?error=value` with the notice; a broker moved without its
+password as `/ha?error=broker` with the host unchanged; `/reload` and
+`/ap` without credentials and with a wrong PIN are `403`; `/update`
+is a `302` to `/system`. In headless Chromium over the DevTools
+protocol, real clicks: the colour select posts `color=green` to `/api`
+and the panel's setting follows, without the unsaved mark; an edited
+alarm time shows the mark; Play posts `/play` and Stop `/stop` without
+leaving the page; Save with Skip ticked posts
+`armed=0&…&skip=0&skip=on&…` and unticked `…&skip=0&…`, and `/api`
+agrees each time; the browser-zone button on `/settings` fills the
+rule. On `/system`, with the PIN read from the serial log: Reboot
+without a PIN asks for the digits; with it the clock reboots and the
+page says `Back up`; Set token answers `token set`; Upload writes the
+image to the other slot, the progress bar at 1, and the page waits
+for the clock; every button is disabled after an answer. In a window
+500 px high the status line, out of view from the Reboot button, is
+brought into view by a message (`scrollIntoView` in `say`).
+
+Not run: the Access point button (it takes the bench clock off the
+LAN), the pages on the access point (the system page without its
+button, the setup form's link), the no-script Save of the display.
+For the user: those, and the four pages on white-clock and a phone.

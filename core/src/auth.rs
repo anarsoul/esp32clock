@@ -8,11 +8,11 @@
 //! shown. A script sends it as `Authorization: Bearer <token>` for a
 //! firmware upload, `/reload`, the Wi-Fi credentials on `/api` and a
 //! new token on `/token`. The PIN is four digits the clock shows on its
-//! panel when the update or the token page is opened (or `POST /pin` is
-//! sent), good
+//! panel when the system page is opened (or `POST /pin` is sent), good
 //! for one attempt, so whoever uses it can see the clock; it stands in
-//! for the token on `/ota` and `/token`, the two things a clock with no
-//! token built in needs it for. The rules are pure, with the clock and
+//! for the token on `/ota`, `/token`, `/reload` and `/ap`, the system
+//! page's four actions, two of which a clock with no token built in
+//! needs it for. The rules are pure, with the clock and
 //! the random number passed in, so they run on the host.
 
 use core::cell::RefCell;
@@ -151,7 +151,8 @@ pub const fn refuse(status: &'static str, text: &'static str) -> Refusal {
 }
 
 /// Check the `Authorization` header, if any: `Bearer <token>` for a
-/// script, `PIN <digits>` for the update and token pages.
+/// script, `PIN <digits>` for the system page: the upload, a new token,
+/// `/reload` and `/ap`.
 pub fn token_or_pin(header: Option<&str>) -> Result<(), Refusal> {
     let now_ms = Instant::now().as_millis();
     with_pin(header, |digits| {
@@ -165,14 +166,14 @@ pub fn token_or_pin(header: Option<&str>) -> Result<(), Refusal> {
     })
 }
 
-/// Check the header for the token alone; the PIN does not do. For
-/// `/reload` and the Wi-Fi credentials, a script's tools.
+/// Check the header for the token alone; the PIN does not do. For the
+/// Wi-Fi credentials and the broker on `/api`, a script's tools.
 pub fn token(header: Option<&str>) -> Result<(), Refusal> {
     let Some(token) = header.and_then(|h| h.strip_prefix("Bearer ")) else {
         return Err(refuse("403 Forbidden", "no token: send Authorization: Bearer <API_TOKEN>"));
     };
     if !token_enabled() {
-        return Err(refuse("403 Forbidden", "no token set: build one in or set one on /token"));
+        return Err(refuse("403 Forbidden", "no token set: build one in or set one on /system"));
     }
     if token_ok(token.trim().as_bytes()) { Ok(()) } else { Err(refuse("403 Forbidden", "bad token")) }
 }
@@ -263,7 +264,7 @@ mod tests {
         settings::update(|s| s.token = Secret(Text::EMPTY));
         assert!(!token_enabled());
         assert!(!token_ok(b""), "an empty token never matches");
-        assert_eq!(token(Some("Bearer ")).map_err(|r| r.text), Err("no token set: build one in or set one on /token"));
+        assert_eq!(token(Some("Bearer ")).map_err(|r| r.text), Err("no token set: build one in or set one on /system"));
         assert_eq!(token(None).map_err(|r| r.text), Err("no token: send Authorization: Bearer <API_TOKEN>"));
         assert_eq!(token(Some("PIN 1234")).map_err(|r| r.text), Err("no token: send Authorization: Bearer <API_TOKEN>"));
         settings::update(|s| s.token = Secret(Text::literal("secret-token-1")));

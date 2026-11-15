@@ -5,6 +5,8 @@ written in Rust with esp-hal and Embassy on esp-rtos. The display's two
 AiP33628 drivers are fed by SPI2 in quad mode used as a four-wire pattern
 generator, on one DMA segmented transfer the hardware loops for ever;
 see `PLAN.md` for the full design and its history.
+`ARCHITECTURE.md` is the brief overview (crates, tasks, data paths,
+resets).
 The repo is a two-member workspace: the firmware is the root package,
 and `core/` (`esp32clock-core`) is the hardware-independent half, a
 `no_std` library the firmware re-exports and the host runs the tests
@@ -17,6 +19,13 @@ of. `CLAUDE.md` is a symlink to this file; edit this one.
   starting work and mark milestones verified when the user confirms on the
   panel. It ends with a review backlog of known, undone findings; read it
   before proposing work and strike items you finish.
+- Update `ARCHITECTURE.md` in the same change as any major change to
+  the architecture: a task or executor added, removed or moved, a new
+  peripheral or DMA path, a new way tasks talk to each other, a new
+  network service or page, a new persistent store or reset path, a
+  module moved between `core/` and `src/`. It stays brief and names
+  constants rather than their values; tuning, measurements and
+  history go in `PLAN.md`, not there.
 - Nothing here can be verified without the hardware. Build, run clippy
   and `cargo host-test`, and put new pure logic under test in `core/`;
   then hand the user a flash command and say exactly what to look for.
@@ -50,7 +59,7 @@ node scripts/tz-check.mjs                 # the page's browser-zone script (src/
 MAX_CURRENT_STEP=8 cargo build --release   # optional: raise the drive-current ceiling (default 5)
 MQTT_HOST=10.1.1.5 MQTT_USER=clock MQTT_PASSWORD='…' cargo build --release   # optional: the Home Assistant broker (MQTT_PORT defaults to 1883)
 API_TOKEN='…' scripts/ota.sh <ip>      # later updates, over the LAN
-scripts/ota.sh                          # just the image file, for http://<ip>/update
+scripts/ota.sh                          # just the image file, for http://<ip>/system
 API_TOKEN='…' scripts/reload.sh <ip>   # software reset with the carry record, waits for the clock to come back
 scripts/pin.sh <ip> <serial-log>        # POST /pin, then the four digits read back from the monitor's log
 AP_PASSWORD='…' cargo build --release   # optional: the clock's own access point's password (default esp32clock)
@@ -93,7 +102,7 @@ image. `scripts/ota.sh` builds, makes the application image with
 writes the other slot, selects it and reboots. The token is
 `API_TOKEN` at build time and a setting after that (`src/auth.rs`): a
 build without one has no script path (a `Bearer` request is `403`)
-until one is set from `/token` with the PIN or by `POST /token`, and
+until one is set from `/system` with the PIN or by `POST /token`, and
 the boot line says `api token: stored`, `built in`, `cleared` or
 `none`. The Wi-Fi credentials are seeds the same way, and `WIFI_SSID`
 may be empty: whatever the record lacks is filled from the build at
@@ -130,7 +139,18 @@ hostname, Wi-Fi network, API token and MQTT broker (`mqtt_host`,
 `mqtt_port`, `mqtt_user`, `mqtt_password`; see "Home Assistant" below)
 are settings:
 saved in the `nvs` partition, editable from the buttons and from
-`http://<ip>/` (form) or `/api` (form-encoded keys, JSON back). The
+the clock's pages or `/api` (form-encoded keys, JSON back). The pages
+are four, each starting with a line of links to the others
+(`form::Page`): `/` (the alarm with Play and Stop, the display, the
+status lines), `/settings` (timezone, 12 hour, the temperature on the
+panel and its offset, hostname, and the local-time line), `/ha` (the
+MQTT broker and its status line) and `/system` (below). Each form is
+posted to its own page and is a partial update, as `/api` is: only
+the keys sent change, and a checkbox is sent either way, a hidden
+`0` under the same name before it (`form::Check`), so saving the
+alarm leaves 12 hour alone. On `/` the alarm and the display are one
+form with Save under both; colour and brightness are also posted to
+`/api` by script as they are chosen. The
 network keys `ssid` and `password` are taken on `/api` only with the
 `Bearer` token, refused as `403` on the key alone (never on whether the
 value would change, which would make a password oracle), and never on
@@ -182,9 +202,11 @@ MSRV-aware resolver picks an esp-rom-sys that esp-storage cannot build with.
 | both long | show the IP, one octet at a time, twice |
 | both held 10 s | reset into the access point; from the access point, back to the station if a network is stored |
 
-Opening `http://<ip>/update` shows a four-digit PIN for a minute, or
-until it is used, right or wrong; so does `http://<ip>/token`, the
-API-token page, which no page links to.
+Opening `http://<ip>/system` shows a four-digit PIN for a minute, or
+until it is used, right or wrong. The page has one field for it and
+four actions: the firmware upload, a new API token, Reboot and Access
+point. `/update` and `/token`, the pages it replaced on 2026-11-14,
+redirect to it.
 
 Provisioning: a clock with no network in its record (and none built
 in), or one whose buttons were held 10 s, boots as an access point
@@ -202,13 +224,17 @@ state crosses a mode change, and a panic in AP mode keeps the flag so
 the clock comes back as an access point. A station that cannot join
 never turns into an access point by itself: a wrong password is a
 blank panel, `wrong password?` in the log every attempt, and the hold.
-`/update`, `/ota`, `/api` and `/token` work on the access point too;
+`/system`, `/ota`, `/api` and `/token` work on the access point too
+(`/settings` and `/ha` do not: the captive redirect takes them, and
+the system page there links to the setup form and leaves out its
+access-point button);
 `/api` takes the network keys there without the token. A captive DNS
 (`src/dnsd.rs`) answers every name with the clock's address and any
 path that is not a route is a `302` to `http://192.168.4.1/`, so a
 phone's connectivity probe opens the setup form in its sign-in sheet
 by itself. `POST /ap` with
-the `Bearer` token resets a running clock into the access point, for a
+the `Bearer` token, or the PIN from the system page, resets a running
+clock into the access point, for a
 bench without hands on the buttons. The access point runs as AP+STA
 with a station half that never connects, because the driver refuses a
 scan in AP-only mode: it scans once when it comes up and again on
@@ -256,7 +282,9 @@ that grace is not rung again, while one cut off mid-ring comes back. A
 self-heal due while the alarm rings waits for the ring to end, by a press
 or its timeout, before blanking and resetting.
 
-`POST /reload` with the `Bearer` token (never the PIN) answers once and
+`POST /reload` with the `Bearer` token, or the PIN from the system
+page's Reboot button (since 2026-11-14; `auth::token_or_pin`),
+answers once and
 then resets the chip the deliberate way: panel blanked, time and alarm
 state carried, not counted as a self-heal and not held for a ringing
 alarm. It is the way to exercise the carry record from a script:
@@ -264,17 +292,15 @@ alarm. It is the way to exercise the carry record from a script:
 
 `POST /token` with `token=<new>` (8 to 32 printable characters without
 spaces, empty to clear) and either `Bearer <current token>` or `PIN
-<digits>` sets the API token. `GET /token` is the page for it: the
-new token, the PIN it issues when opened just as `/update` does, and
-whether one is set; an empty token asks the browser to confirm before
-it clears. Nothing links to that page on purpose (the settings page
-links to `/update` and no further, and the `form` tests assert it),
-so the token is changed by someone who typed the address; it is
-documented here and nowhere on the clock. The body is parsed before the PIN is spent, so a bad
+<digits>` sets the API token. The system page has the field for it and
+says whether one is set; an empty token asks the browser to confirm
+before it clears. (Until 2026-11-14 the token had a page of its own
+that nothing linked to; the user dropped that: "for the open source
+project it doesn't make much sense to have it unlinked".) The body is parsed before the PIN is spent, so a bad
 token costs a `400` and not the PIN. `POST /pin` issues a PIN without
 the page, on the panel and in the serial log and never in the
 response, for a bench script (`scripts/pin.sh`). One PIN is one
-action, upload or token.
+action: upload, token, reboot or access point.
 
 ## Home Assistant
 
@@ -341,7 +367,7 @@ publishes, commands). Verify with `mosquitto_sub -v -t 'esp32clock/#'
 
 Firmware updates: `POST /ota` with the application image as the body
 and an `Authorization` header: `Bearer <API_TOKEN>` from `scripts/ota.sh`,
-or `PIN <digits>` from the `/update` page. Opening the page makes the
+or `PIN <digits>` from the system page. Opening the page makes the
 clock draw four random digits, show them on the panel for a minute
 (any press ends it; ringing and alarm-set take precedence) and log them,
 so the uploader must be able to see the clock or the serial port. A PIN
@@ -393,11 +419,11 @@ module ends with its `#[cfg(test)] mod tests`.
 | `src/storage.rs` | the one flash handle (`with_flash`), nvs partition lookup, `sequential-storage` map over it, debounced persist task that compares records, not structs, and resets into station mode after a save that changed the credentials, or after any save on the access point with a network stored |
 | `src/heal.rs` | deliberate resets: `reboot` says the MQTT goodbye, blanks the panel through `scan::halt`, carries the time and resets, for `/reload` and the OTA reboot; `reset`, the self-heal, waits out a ringing alarm and counts itself first; `switch_mode`, the reset between station and access point, which starts the carry record over and freezes it |
 | `core/src/auth.rs` | the API token (a setting; constant-time compare) and the panel PIN with its TTL and lockout; `token`, `token_or_pin`, `issue_pin`, `pin_to_show`; `Refusal` with its HTTP status; pure rules with the clock and the random number passed in |
-| `core/src/form.rs` | key=value parsing, all-or-nothing `apply` on a copy with the `Allow` flags for the guarded keys, JSON, the HTML page with its error notice, its unsaved-changes mark (a script compares the form with the defaults it was served with) and the read-only `Status` lines, the update and token pages, each its own script over the shared `PIN_JS` helpers and `PIN_FIELD`, `JsonStr`/`HtmlStr` escaping for the SSID, `parse_token`; pure logic |
+| `core/src/form.rs` | key=value parsing, all-or-nothing `apply` on a copy with the `Allow` flags for the guarded keys, JSON, the four pages (`Page`; `write_page`, `write_settings_page`, `write_ha_page`, `write_system_page`) over the shared `write_top` (head, heading, the line of links, the error notice), `Check` (a checkbox with its hidden `0`), `SAVE` and `UNSAVED_JS` (a script compares the form with the defaults it was served with), the read-only `Status` lines, the system page's `SYSTEM_JS` (one PIN, four requests), the setup form, `JsonStr`/`HtmlStr` escaping for the SSID, `parse_token`; pure logic |
 | `core/src/http.rs` | `Method`, `Head` (`content_length` is `None` when the header is absent, and `transfer_encoding` says one was sent), `parse_head`; `RESPONSE_BUF` and `PAGE_MAX`, which the page tests assert against |
 | `core/src/mqtt.rs` | Home Assistant over MQTT, pure: `DeviceId` and its topics, `Link` (the state for the page), `Route` and `Command`, `SET_KEYS` and `apply_set` over `form::apply_one`, `write_discovery` (the device payload with every entity) and `DISCOVERY_MAX` |
 | `src/mqtt.rs` | the MQTT task: resolve, connect with the will, subscribe, discovery and state publishes, keepalive pings, the select loop over `poll_header`, the back-off, `goodbye` for the reset paths, `link()` and `Report` for the page and the heartbeat |
-| `src/http.rs` | HTTP/1.0 server, `LISTENERS` sockets each in its own task: a `POST` without `Content-Length` to a route that reads a body (`/`, `/api`, `/play`, `/token`, `/ota`; `reads_body`) is answered `411` and any `Transfer-Encoding` `400` before a route is looked at (`NoRequest`), since a bodiless post is not an empty form, while the command posts (`/reload`, `/ap`, `/pin`, `/scan`, `/stop`) take a bare `curl -X POST`; `GET`/`POST` on `/` (the settings page, or the setup form on the access point) and `/api`, `POST /play`, `POST /stop`, `GET /update` and `GET /token` (each issues a PIN), `POST /ota` with the body streamed to `ota::install`, `POST /reload` and `POST /ap` with the token, `POST /token` with the token or the PIN, `POST /pin`, `POST /scan` on the access point, `GET /favicon.ico` and `GET /tz.js` (`src/favicon.ico` and `src/tz.js` embedded, the two cacheable responses; the page loads the script as `/tz.js?v=<version>` so an update is not served the cached one); the settings, update and token pages are titled and headed `Clock: <hostname>`; a refused form redirects to `/?error=…`; per-listener state and counters for the heartbeat |
+| `src/http.rs` | HTTP/1.0 server, `LISTENERS` sockets each in its own task: a `POST` without `Content-Length` to a route that reads a body (`/`, `/settings`, `/ha`, `/api`, `/play`, `/token`, `/ota`; `reads_body`) is answered `411` and any `Transfer-Encoding` `400` before a route is looked at (`NoRequest`), since a bodiless post is not an empty form, while the command posts (`/reload`, `/ap`, `/pin`, `/scan`, `/stop`) take a bare `curl -X POST`; `GET`/`POST` on `/`, `/settings` and `/ha` (the three forms, on the station; `/` is the setup form on the access point) and `/api`, `POST /play`, `POST /stop`, `GET /system` (issues a PIN), `GET /update` and `GET /token` (redirects to it), `POST /ota` with the body streamed to `ota::install`, `POST /reload`, `POST /ap` and `POST /token` with the token or the PIN, `POST /pin`, `POST /scan` on the access point, `GET /favicon.ico` and `GET /tz.js` (`src/favicon.ico` and `src/tz.js` embedded, the two cacheable responses; the page loads the script as `/tz.js?v=<version>` so an update is not served the cached one); the four pages are titled and headed `Clock: <hostname>`; a refused form redirects to its own page with `?error=…`; per-listener state and counters for the heartbeat |
 | `core/src/buttons.rs` | `Button`, `Kind`, `Event` |
 | `src/buttons.rs` | debounced short/long press events, the two-button long press, and the 10 s two-button `Hold` |
 | `core/src/melody.rs` | alarm tunes as pitch and length data with tempo; `RANDOM` and the pure `pick` that turns it into a tune; `CLIP_COUNT`, `CLIP_NAMES` and `CLIP_DATA` (included from `clips.rs`, which `core/build.rs` writes from `ALARM_CLIP`), `HAS_CLIP`, and one melody a clip (`Melody::clip`) after the nine tunes of `MELODIES`; pure |
@@ -599,7 +625,7 @@ module ends with its `#[cfg(test)] mod tests`.
   overflow is a 500, not a truncation. The headers are 88 bytes;
   `core::http::PAGE_MAX` (6016) is what a page may take, and the
   `form` tests build each page at its worst case and assert it
-  (2026-11-07: settings 5564 in its four fieldsets with the Play and unsaved-changes script, the Wi-Fi, MQTT and local-time lines, a stored SSID of 32 `"`, a 48-byte timezone rule of `<` (four bytes each through `HtmlStr`), a 64-byte broker host twice, a user of 32 `"`, the hostname in the title and heading and the version in the script tag; update 2492 and token 2059 since the split of 2026-11-02; setup with twelve 32-character networks 3193). `cargo host-test` after adding a field
+  (2026-11-14, since the split in four, with the three clips of `clips/`: the clock page 4353 with the status lines, a stored SSID of 32 `"` and a 64-byte broker host in them; settings 2433 with a 48-byte timezone rule of `<`, four bytes each through `HtmlStr`; Home Assistant 2253 with a user of 32 `"`; system 3756; setup with twelve 32-character networks about 3200. The one page before it was 5564, and 5865 with nine clips). `cargo host-test` after adding a field
   or label; the test prints the sizes with `-- --nocapture`. The setup
   page's network list stops at `form::NETWORK_LIST_BUDGET` (1900)
   bytes, strongest first, with a "N more not shown" line, because a
@@ -664,7 +690,7 @@ module ends with its `#[cfg(test)] mod tests`.
 
 ## Verifying without a board
 
-`cargo host-test` runs the tests of `core/` on the host (138 on 2026-11-13): the AiP33628 encoder against a behavioural model of the
+`cargo host-test` runs the tests of `core/` on the host (139 on 2026-11-14): the AiP33628 encoder against a behavioural model of the
 chip (shift on CLK rise, latch on DIN rise while CLK high), the panel
 map, the palette and brightness tables, the hostname, password and
 token rules, the record round trip and every older version, the form
@@ -703,9 +729,9 @@ use embassy-net's address types), `storage.rs`'s map over the flash,
   `is_valid`, `RECORD_VERSION` with the new field appended (never
   reordered: an older image reads a newer record by its prefix, so a
   rollback keeps the settings) and `from_record` still reading every
-  older version, `form::apply_one`, `write_json` and `write_page`,
+  older version, `form::apply_one`, `write_json` and the page it belongs on (`write_page`, `write_settings_page` or `write_ha_page`; a checkbox through `form::Check`),
   the `PLAN.md` entry, and the `settings` and `form` tests (the record
-  round trip, `apply_sets_every_key`, the page sizes). A setting Home
+  round trip, `apply_sets_every_key`, `each_page_has_its_own_fields`, the page sizes). A setting Home
   Assistant should see gets a component in `mqtt::write_discovery`
   and, if it may be set from there, its key in `mqtt::SET_KEYS`; the
   `mqtt` test ties the three together. A key only the token may set
