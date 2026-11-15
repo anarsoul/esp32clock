@@ -8640,3 +8640,19 @@ Not run: the clips page in a browser (the PIN field, the progress
 bar, the wait for the clock to come back); the sound, on a clock with
 a buzzer; the web installer's fifth part and the release workflow,
 which run only on a tag; the access point.
+
+**The partition grown to the flash's end, 2026-11-14.** The user,
+reviewing the table: the 128 KB after `clips` (0x3E0000 to 0x400000)
+belonged to no partition. `clips` is 0x120000 now, 1152 KB, eighteen
+pages mapped from 0x3C6D0000; the firmware takes the size from the
+table, so only `partitions.csv` and `scripts/mkpack.py`'s limit
+changed. The 56 KB between `otadata` and `ota_0` stays unused: an app
+slot starts on a 64 KB boundary. Done before any release, so no clock
+but test-clock ever had the 1 MB table.
+
+On test-clock, the same day: the table over USB, `clips: pack of 8
+clips, 700557 of 1179648 bytes at 0x2e0000, mapped at 0x3c6d0000`, the
+pack and the settings as they were. A pack of 1 142 830 bytes (the
+local one with Futurama twice) was written in 53 s, checked, and its
+last clip, which lies past the old megabyte, previewed. The local
+pack was put back after.

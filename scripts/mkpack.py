@@ -39,7 +39,7 @@ HEADER_LEN = 12
 ENTRY_LEN = 64
 HASH_LEN = 32
 # The partition's size in partitions.csv.
-ROOM = 0x100000
+ROOM = 0x120000
 # The note melodies' names (core/src/melody.rs) and the random draw's.
 RESERVED = {"beeps", "twinkle", "ode", "frere", "morning", "westminster", "reveille", "elise", "jingle", "random"}
 LOOPING = (b"BPR", b"XMC", b"SID", b"PT3")

@@ -687,7 +687,7 @@ module ends with its `#[cfg(test)] mod tests`.
   1920 KB on a clock with the old table); the release image is 877 KB,
   and 1045 KB with the three clips of `clips/` built in. A build with
   Futurama in `ALARM_CLIP` as well no longer fits. A clip pack must
-  fit its megabyte (`scripts/mkpack.py` refuses a larger one), and its
+  fit its partition, 0x120000 = 1152 KB to the end of the 4 MB flash (`scripts/mkpack.py` refuses a larger one), and its
   SHA-256 is checked in software at every boot before the settings
   load: 119 ms for the default pack's 172 KB, 482 ms for 700 KB
   (test-clock, 2026-11-14). Static RAM: `ota.rs` holds 11 KB

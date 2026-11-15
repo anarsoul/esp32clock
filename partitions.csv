@@ -3,7 +3,8 @@
 # espflash's default offset so saved settings survive the repartition.
 # See PLAN.md, M9, and "Clips in a partition of their own" for clips:
 # each app slot gave it half a megabyte (they were 0x1E0000, with ota_1
-# at 0x200000). Its subtype must be one esp-bootloader-esp-idf knows,
+# at 0x200000), and it runs to the end of the 4 MB flash, over the
+# 128 KB no partition had. Its subtype must be one esp-bootloader-esp-idf knows,
 # or every image that walks the table panics; it is found by its name.
 # A clock keeps the table it was flashed with over USB: the firmware
 # runs on the old one too, with no pack.
@@ -13,4 +14,4 @@ phy_init,   data, phy,       0xF000,   0x1000,
 otadata,    data, ota,       0x10000,  0x2000,
 ota_0,      app,  ota_0,     0x20000,  0x160000,
 ota_1,      app,  ota_1,     0x180000, 0x160000,
-clips,      data, undefined, 0x2E0000, 0x100000,
+clips,      data, undefined, 0x2E0000, 0x120000,

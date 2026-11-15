@@ -289,7 +289,7 @@ network within three boots is rolled back. Settings are kept.
 The alarm melodies that are not notes (sampled sound, a ZX Spectrum
 beeper tune, tracker modules, Commodore 64 and AY tunes) are clips,
 and a clock's clips are a *clip pack* in a flash partition of their
-own, `clips`, one megabyte, so they can be changed without a new
+own, `clips`, 1152 KB, so they can be changed without a new
 firmware. The default pack is the three clips in `clips/`; a release
 has it as `esp32clock-clips-<tag>.bin` and the web installer writes
 it.

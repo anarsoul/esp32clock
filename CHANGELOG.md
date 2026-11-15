@@ -14,9 +14,9 @@ from `http://<ip>/update`; its settings survive the update.
 ### Changed
 
 - The clips (the alarm melodies that are not notes) are no longer
-  part of the firmware: they are a *clip pack* in a new 1 MB flash
-  partition, `clips`, for which each of the two firmware slots gave
-  up half a megabyte. A pack is made with `scripts/mkpack.py` (up to
+  part of the firmware: they are a *clip pack* in a new 1152 KB flash
+  partition, `clips`: half a megabyte from each of the two firmware
+  slots and the 128 KB at the end of the flash that nothing used. A pack is made with `scripts/mkpack.py` (up to
   16 clips), checked by a SHA-256 at upload and at every boot, and
   played in place from the flash. The default pack, the three clips
   below, is `esp32clock-clips-<tag>.bin` on a release, and the web
