@@ -99,6 +99,16 @@ make the alarm louder and cleaner, the sampled clips most of all.
 
 The clock works without either; the firmware is the same.
 
+With the mod, Q1 gets hot to the touch while a clip plays that goes
+through the chip's PDM converter: sampled sound, a tracker module, a
+SID or a PT3 tune. The converter's pulses, 125 to 250 ns each, are
+shorter than Q1 takes to switch, so for the length of the clip it sits
+half on with the buzzer's current through it. With the buzzer's 32 Ω
+coil on 5 V that is 0.2 W at the most, inside the S8550's rating. It
+stays cold when idle, on the beeps and on a beeper clip such as
+Trantor. A 2.2 kΩ resistor from Q1's base to its emitter does not
+change it. A clock without the mod has not been checked for this.
+
 **Leave out everything else:** the STC8G1K17 MCU (U4), the kit's R1
 and R2, and the timekeeping parts of your variant. On the HU-058 and
 HU-058SE that is the DS1302 (U3), the 32.768 kHz crystal Y1 with C5
