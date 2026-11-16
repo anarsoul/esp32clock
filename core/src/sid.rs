@@ -35,7 +35,7 @@ use crate::shape::Shaper;
 
 /// The first bytes of a converted tune.
 pub const MAGIC: &[u8; 4] = b"SID1";
-/// The header: magic; flags (bit 0: an 8580, else a 6581); the
+/// The header: magic; flags (bit 0: an 8580, else a 6581; `FLAT`); the
 /// limiter's drive and release (0 for the shaper's own) and how many
 /// times the high-pass is applied; the C64's clock in Hz as `u32`; the
 /// length in ms, played once; the clock cycles a frame; the frames;
@@ -44,6 +44,15 @@ pub const MAGIC: &[u8; 4] = b"SID1";
 /// of the chip a sample (2 or 4; 0 for `OVERSAMPLE`); 1 for a tune at
 /// `FAST_HZ` and not at `RATE`.
 const HEADER: usize = 40;
+/// Flags bit 1: no limiter, for a speaker, where the buzzer's 20 dB of
+/// drive is heard as overdrive. The header's drive is then a plain
+/// gain, 127 for `FLAT_KNEE` as full scale. A firmware older than the
+/// flag plays such a clip limited.
+const FLAT: u8 = 2;
+/// The limiter's knee for a `FLAT` clip, in `Shaper::new`'s 1024s: the
+/// three voices at their top level, as `pt3`'s. The filter's resonance
+/// and a tune's own drive may pass it, and what does is clipped.
+const FLAT_KNEE: u8 = 96;
 
 /// Samples a second a tune gives, unless its header says `FAST_HZ`:
 /// twice the PCM clips' 8 kHz.
@@ -481,7 +490,7 @@ impl<'a> Tune<'a> {
             looping: false,
             ended: data.len() <= HEADER,
             chip: Chip::new(clock, byte(data, 4) & 1 != 0, oversample, rate),
-            shaper: Shaper::new(byte(data, 5), byte(data, 6), 1 + fast as u32, core::array::from_fn(|i| word(data, 28 + 2 * i) as i16), byte(data, 7), true, 0),
+            shaper: Shaper::new(byte(data, 5), byte(data, 6), 1 + fast as u32, core::array::from_fn(|i| word(data, 28 + 2 * i) as i16), byte(data, 7), true, if byte(data, 4) & FLAT != 0 { FLAT_KNEE } else { 0 }),
         }
     }
 
@@ -956,6 +965,27 @@ mod tests {
         for _ in 0..1000 {
             t.next_sample();
         }
+    }
+
+    /// A flat clip is the chip's output at a plain gain: one voice's
+    /// pulse wave at full level is a third of full scale either way,
+    /// where the limiter takes it to the top.
+    #[test]
+    fn a_flat_clip_is_not_limited() {
+        let mut data = clip(&[(&[(24, 0x0F), (5, 0x00), (6, 0xF0), (3, 0x08), (1, 0x10), (4, PULSE | GATE)], 20)], 0);
+        let peak_of = |d: &[u8]| {
+            let mut t = Tune::new(d);
+            let mut peak = 0;
+            while let Some(s) = t.next_sample() {
+                peak = peak.max((s as i32).abs());
+            }
+            peak
+        };
+        let full = 127 * crate::shape::STEP;
+        assert!(peak_of(&data) > full * 9 / 10);
+        data[4] |= FLAT;
+        let third = peak_of(&data);
+        assert!((third - full / 3).abs() < full / 30, "{third}");
     }
 
     #[test]

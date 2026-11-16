@@ -63,6 +63,12 @@ from `http://<ip>/update`; its settings survive the update.
   `scripts/xm2clip.py --knee` where a module's limiter starts, up to
   off: for a speaker in the buzzer's place, where the buzzer's hard
   limiting is heard as overdrive.
+- For the same speaker: `scripts/speaker-clips.sh` makes the default
+  clip pack with the modules' bass left in and a slower limiter,
+  `scripts/sid2clip.py --flat` a SID tune without the limiter (a
+  firmware older than this plays such a clip limited), and
+  `CLIP_HIGHPASS` and `CLIP_DRIVE` set `scripts/wav2pcm.sh`'s bass
+  cut and drive.
 
 ### Changed
 

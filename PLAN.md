@@ -8984,3 +8984,104 @@ same place and the clock page's "did not answer" line above Save.
 The clips page warns, above the upload's small print, that a new
 pack replaces all the clips and does not add to them (the user).
 
+
+### A clip pack for the speaker — DONE: the second pack (limiter's release 128 ms) heard and kept by the user 2026-11-15
+
+"Build a clip pack that targets speaker, for both standard pack and
+local" (the user). The clips so far are shaped for the buzzer: the
+bass cut at 300 Hz (900 Hz twice for PCM) and 20 dB of drive into a
+limiter, which `speaker-mod/README.md` already says will be thin and
+compressed on a speaker. What a speaker's clips should be was settled
+on the breadboard's headphones on 2026-11-13, for the PT3 tunes: the
+high-pass at 100 Hz once, no limiter, a plain gain 3 dB over the
+peak, some 0.1 % of the samples at the rails ("sync_i_cut_louder").
+The pack is every other clip brought to that:
+
+| clip | for the speaker | RMS of full scale, at the rails | as the clocks have it |
+| --- | --- | --- | --- |
+| Trantor | as it is: the Spectrum's speaker bit | | |
+| Halftime | `xm2clip.py --highpass 100 --passes 1 --knee 94 --drive 180` | 0.19, 0.02 % | 0.40, 1.6 % |
+| Keygen | the same with `--knee 96` | 0.20, 0.02 % | 0.42, 1.8 % |
+| Donkey Kong | `sid2clip.py --mute 2 --highpass 100 --passes 1 --flat` | 0.25, 0.09 % | 0.37, 1.6 % |
+| Futurama | `CLIP_HIGHPASS=100 CLIP_DRIVE=10 wav2pcm.sh wav/futurama_theme.wav` (16 kHz, the whole of it) | 0.30, none | 0.48 |
+| Hibernation, PPK, Synchronization | as they are: the converter's defaults are that choice | 0.21, 0.14, 0.21 | |
+
+A module's knee is its own: the mix's peak after the 100 Hz
+high-pass is 95 575 for Halftime and 97 880 for Keygen (the player's
+output with `--knee 255`, a plain gain, scaled back), so 94 and 96
+(in 1024s) put the peak at full scale, and the drive of 180 takes it
+1.4 times over, as the PT3 clips' is. Without the drive they are
+0.14, quieter than everything else in the pack. Futurama's 10 dB is
+"Futurama D" of 2026-11-13, made for the hiss the user heard at 20 dB
+and never judged; its bass is back (18 % of the energy under 150 Hz,
+none before).
+
+Two things had to be added for it. `scripts/wav2pcm.sh` reads
+`CLIP_HIGHPASS` (a corner, applied once) and `CLIP_DRIVE` (dB); with
+neither it does what it did. And the SID's header has no spare byte
+for a knee as `XMC2` has, so it gets what `PT31` got: flags bit 1,
+`sid::FLAT`, `scripts/sid2clip.py --flat`, for which the knee is three
+voices at their top (`FLAT_KNEE`, 96) and the header's drive a plain
+gain. Donkey Kong's filter passes that level in 0.09 % of the
+samples, which are clipped. **A firmware older than this ignores the
+bit and plays the clip limited**, with the bass in: the local pack's
+Donkey Kong wants this firmware on the clock. The host test
+`a_flat_clip_is_not_limited`: one voice's pulse wave at full level is
+a third of full scale flat and the whole of it limited. 158 tests.
+
+`scripts/speaker-clips.sh` makes the standard pack from `clips/` and
+`mods/`: the clips in `packs/speaker/`, the pack
+`packs/clips-default-speaker.bin`, 171 862 bytes, under the default
+pack's names and in its order, so a melody setting means the same
+tune. The local one, by hand, in `packs/clips-local.bin`'s order:
+
+```
+scripts/mkpack.py packs/clips-local-speaker.bin clips/trantor.bpr packs/speaker/halftime.xmc packs/speaker/keygen.xmc packs/speaker/donkey_kong.sidc packs/speaker/futurama.pcm pt3/hibernation.pt3c pt3/ppk.pt3c=PPK pt3/synchronization.pt3c
+```
+
+700 557 bytes. Both pass `the_pack_file_parses`. Neither is in the CI
+or a release.
+
+To hear, on a clock with the speaker in and this firmware:
+`scripts/clips.sh <ip> packs/clips-local-speaker.bin`. What nobody
+knows yet: whether a plain gain is loud enough for an alarm on a
+32 Ω speaker (the clips are 3 to 6 dB under the buzzer's by RMS),
+whether 100 Hz is too low a cut for a speaker that small (the
+README's range is 100 to 300), and Futurama at 10 dB against 20.
+
+**Heard, 2026-11-15: "They are much quiter now"** (the user, of the
+pack above). A plain gain is 6 dB under the buzzer's clips and that
+is too little. The level comes back from the limiter, with the knee
+and drive the clocks have and only the release changed, so that the
+gain follows the tune and not the wave: on the host, the cut at
+100 Hz in all, RMS of full scale and the samples at the rails,
+
+| tune | no limiter (the pack above) | release 128 ms (`--release 10`) | 32 ms (`--release 8`) | the clocks' clip (16 ms, 300 Hz) |
+| --- | --- | --- | --- | --- |
+| Halftime | 0.19 | 0.33, 0.33 % | 0.40, 1.1 % | 0.40, 1.6 % |
+| Keygen | 0.20 | 0.32, 0.30 % | 0.42, 1.1 % | 0.42, 1.8 % |
+| Donkey Kong | 0.25 | 0.33, 0.37 % | 0.41, 1.2 % | 0.37, 1.6 % |
+| Hibernation | 0.21 | 0.34, 0.21 % | 0.43, 0.76 % | |
+| PPK | 0.14 | 0.37, 0.13 % | 0.47, 0.74 % | |
+| Synchronization | 0.21 | 0.31, 0.17 % | 0.40, 0.69 % | 0.37 |
+
+The second pack is the 128 ms column: 4 dB over the first and 2 dB
+under the clocks' clips. Modules `--highpass 100 --passes 1 --release
+10` (`scripts/speaker-clips.sh`), Donkey Kong the same with `--mute
+2` and no `--flat`, so it needs no newer firmware; the PT3 tunes
+`--limiter --noise 16 --highpass 100 --passes 1 --release 10`
+(`--restart` for Hibernation and Synchronization), in
+`packs/speaker/` beside the rest; Futurama `CLIP_DRIVE=15`, 0.39.
+"Limiter hurts PT3s" was said of the 16 ms release; whether 128 ms
+does is to be heard, and 32 ms is the next step if this is still
+quiet. `sid2clip.py --flat` stays, used by nothing in the pack. The
+local pack:
+
+```
+scripts/mkpack.py packs/clips-local-speaker.bin clips/trantor.bpr packs/speaker/halftime.xmc packs/speaker/keygen.xmc packs/speaker/donkey_kong.sidc packs/speaker/futurama.pcm packs/speaker/hibernation.pt3c packs/speaker/ppk.pt3c=PPK packs/speaker/synchronization.pt3c
+```
+
+**Kept, 2026-11-15**: "Yeah, it is good now. Let's keep this
+version" (the user, of the second pack). The speaker's clips are the
+buzzer's with the high-pass at 100 Hz once and `--release 10`; the
+PT3 tunes limited that way included.

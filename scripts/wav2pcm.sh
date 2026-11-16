@@ -17,6 +17,11 @@
 # buzzer (2026-11-12), and gets a header saying so (PCM1, then the
 # rate) for the firmware to read, as it does at 31250; 8000 is half
 # the flash, bare samples.
+# For a speaker in the buzzer's place, which plays the bass and on
+# which 20 dB of drive is heard as hiss and overdrive, two variables:
+# CLIP_HIGHPASS, the corner in Hz, then applied once (12 dB an octave),
+# and CLIP_DRIVE, the dB pushed into the limiter (0 for none):
+#   CLIP_HIGHPASS=100 CLIP_DRIVE=10 scripts/wav2pcm.sh in.wav out.pcm
 # Then:  ALARM_CLIP=<out.pcm> ALARM_CLIP_LABEL='…' cargo build --release
 set -eu
 
@@ -26,11 +31,13 @@ out=${2:?$usage}
 seconds=${3:-}
 skip=${4:-0}
 rate=${5:-16000}
+if [ -n "${CLIP_HIGHPASS:-}" ]; then cut="highpass $CLIP_HIGHPASS"; else cut='highpass 900 highpass 900'; fi
+drive=${CLIP_DRIVE:-20}
 case $rate in 8000 | 16000 | 31250) ;; *) echo "rate must be 8000, 16000 or 31250" >&2; exit 1 ;; esac
 
 sox "$in" -t raw -e unsigned-integer -b 8 "$out.raw" \
-    remix - trim "$skip" ${seconds:+"$seconds"} highpass 900 highpass 900 rate -h "$rate" \
-    norm -0.5 gain -l 20 norm -0.5 ${seconds:+fade t 0 "$seconds" 1.5}
+    remix - trim "$skip" ${seconds:+"$seconds"} $cut rate -h "$rate" \
+    norm -0.5 gain -l "$drive" norm -0.5 ${seconds:+fade t 0 "$seconds" 1.5}
 if [ "$rate" != 8000 ]; then
     # clip::PCM_MAGIC and the rate, little-endian.
     case $rate in 16000) header='PCM1\200\076\000\000' ;; *) header='PCM1\022\172\000\000' ;; esac

@@ -476,6 +476,7 @@ def main():
     parser.add_argument("--steps", type=int, choices=(2, 4), help="steps of the chip a sample (default 2, or 4 at --rate 16000, 62 500 or 64 000 steps a second; 4 at the default rate is twice the processor's time for less aliasing)")
     parser.add_argument("--rate", type=int, default=FAST, choices=(RATE, FAST), help="samples a second the player makes of it (default 31250, 8 Mbit/s through the chip's converter; or 16000)")
     parser.add_argument("--passes", type=int, default=1, choices=(0, 1, 2), help="how many times it is applied, 12 dB an octave each (default 1)")
+    parser.add_argument("--flat", action="store_true", help="no limiter, for a speaker: --drive is then a plain gain, 127 (the default) for the three voices at their top level as full scale, and what passes that is clipped (a firmware older than the flag plays the clip limited)")
     args = parser.parse_args()
     if not (0 <= args.drive <= 255 and 0 <= args.release <= 15):
         sys.exit("--drive is 1 to 255, --release 1 to 15")
@@ -586,7 +587,7 @@ def main():
         body.append(0x80)
     ms = round(len(frames) * cycles * 1000 / clock)
     out = bytearray(MAGIC)
-    out += struct.pack("<BBBBIIIII5hBB", int(model == "8580"), args.drive, args.release, args.passes, clock, ms, cycles, len(frames), loop_at, *section, steps, int(args.rate == FAST))
+    out += struct.pack("<BBBBIIIII5hBB", int(model == "8580") | (2 if args.flat else 0), args.drive, args.release, args.passes, clock, ms, cycles, len(frames), loop_at, *section, steps, int(args.rate == FAST))
     assert len(out) == HEADER
     out += body
     open(args.out, "wb").write(out)
@@ -598,6 +599,8 @@ def main():
         print(f"  the gates closed for the first {args.mute} frames")
     if args.passes:
         print(f"  high-pass {args.highpass:g} Hz, {12 * args.passes} dB an octave")
+    if args.flat:
+        print(f"  flat: no limiter, a plain gain of {(args.drive or 127) / 127:.2f}")
     for what, count in sorted(cpu.notes.items()):
         print(f"  not played: {what} ({count} times)")
 
