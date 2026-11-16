@@ -11,7 +11,8 @@ the chip: the register writes of each frame, in order, less the ones
 that change nothing.
 
     scripts/sid2clip.py tune.sid tune.sidc [--song N] [--seconds S] [--mute FRAMES]
-                        [--model 6581|8580] [--highpass HZ] [--passes N]
+                        [--model 6581|8580] [--system pal|ntsc]
+                        [--highpass HZ] [--passes N]
                         [--drive N] [--release N] [--steps 4] [--rate 16000]
 
 A tune goes on for ever, so the memory is hashed after every call: when
@@ -26,6 +27,11 @@ cut (300 Hz at 12 dB an octave by default), --drive and --release the
 limiter (scripts/xm2clip.py has the same four). --steps 2 steps the
 chip 32 000 times a second and not 64 000: half the processor's time on
 the clock, and more aliasing in high notes.
+
+--system plays the tune as the other machine would, whatever the file
+says it was written for: a PAL tune on an NTSC C64 is called 59.83
+times a second and not 50.12, and the chip's clock is 3.8 % faster,
+two thirds of a semitone higher.
 
 Some routines sound a short burst as they start, before the music;
 --mute keeps every voice's gate closed for that many frames.
@@ -470,6 +476,7 @@ def main():
     parser.add_argument("--seconds", type=float, default=0, help="cut the tune here, loop or not (default: at its loop, looked for over 600 s)")
     parser.add_argument("--mute", type=int, default=0, metavar="FRAMES", help="keep the voices' gates closed for this many frames from the start: for a routine that clicks as it starts up")
     parser.add_argument("--model", choices=("6581", "8580"), help="the chip, for the filter's curve (default: what the file asks for, else 6581)")
+    parser.add_argument("--system", choices=("pal", "ntsc"), help="the machine, for the chip's clock and the calls a second (default: what the file asks for, else PAL)")
     parser.add_argument("--drive", type=int, default=0, help="what the limiter aims a peak at, full scale being 127; over that clips (default: the player's, 127)")
     parser.add_argument("--release", type=int, default=0, help="the limiter lets go by 1/2^N a sample at 8 kHz (default: the player's, 7)")
     parser.add_argument("--highpass", type=float, default=300, help="the high-pass's corner in Hz (default 300)")
@@ -506,7 +513,7 @@ def main():
     song = args.song or start or 1
     if not 1 <= song <= songs:
         sys.exit(f"song {song}: the file has {songs}")
-    system = NTSC if flags >> 2 & 3 == 2 else PAL
+    system = {"pal": PAL, "ntsc": NTSC, None: NTSC if flags >> 2 & 3 == 2 else PAL}[args.system]
     clock, screen = system
     model = args.model or ("8580" if flags >> 4 & 3 == 2 else "6581")
 

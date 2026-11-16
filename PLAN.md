@@ -9146,6 +9146,42 @@ page and the access point's both have the setting, it works as
 expected, and with the power lowered the board, whose ceramic antenna
 is poor, connects reliably.
 
+### A SID tune on the other machine: `sid2clip.py --system` — DONE, heard by the user on test-clock's speaker 2026-11-15
+
+The user, of Donkey Kong: "it might be playing a little bit slower
+than I am used to", and which C64 the clock models. Neither: the
+converter takes the machine from the file's flags (PAL unless it says
+NTSC) and writes the chip's clock and the cycles a frame into the
+clip's header, and `sid::Tune` takes pitch and tempo from those. The
+file says PAL, called once a screen, and the clip had 985 248 Hz and
+19 656 cycles a frame, 50.12 calls a second, 83.0 s: as a PAL machine
+plays it. The clip's 31 250 samples a second are 8 Mbit/s exactly, so
+the line adds nothing.
+
+`scripts/sid2clip.py --system pal|ntsc` plays the tune as that machine
+would whatever the file says (the clock, the screen's cycles and the
+KERNAL's timer value all go by it); without it the file's flag, as
+before, and the default made the old clip again byte for byte. A PAL
+tune as NTSC is called 59.83 times a second, 19 % faster, on a chip
+clock 3.8 % faster, two thirds of a semitone up: Donkey Kong is 69.6 s
+and goes round from 31.1 s, the same 4162 frames and 62 216 bytes.
+Nothing in the firmware changed.
+
+**Heard, 2026-11-15**, both in one pack on test-clock's speaker, the
+speaker pack with the NTSC one as a ninth clip: "NTSC is the one I
+remember" (the user). The local clips are now NTSC under the old name
+and label, so a melody setting means the same tune:
+
+```
+scripts/sid2clip.py sid/Donkey_Kong.sid sid/donkey_kong.sidc --mute 2 --system ntsc
+scripts/sid2clip.py sid/Donkey_Kong.sid packs/speaker/donkey_kong.sidc --mute 2 --highpass 100 --passes 1 --release 10 --system ntsc
+```
+
+and `packs/clips-local.bin` and `packs/clips-local-speaker.bin` made
+again from them, the same eight clips in the same order, 700 557
+bytes each; test-clock has the speaker one. White-clock and
+martin-clock have the PAL clip until their pack is uploaded again.
+
 ### Backlog, board revision: a line output on the adapter for an amplifier — an idea of 2026-11-15, nothing built or measured; to be tried on the bench board when the amplifiers arrive
 
 The user's, of the speaker mod: with a proper amplifier in place of
