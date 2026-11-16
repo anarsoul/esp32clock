@@ -31,6 +31,14 @@ from `http://<ip>/update`; its settings survive the update.
 
 ### Added
 
+- The Wi-Fi transmit power is a setting (`tx_power` in `/api`, a
+  select on `/settings`): the driver's levels from 2 to 16 dBm, 16
+  being the default and the most there is, for a clock whose antenna
+  works better with less. Too little and the clock cannot reach the
+  network; the access point (both buttons for 10 s), which always
+  transmits at 11 dBm, has the setting on its setup page.
+  `WIFI_TX_POWER_QDBM` at build time is the default of
+  a clock with nothing stored.
 - A fifth page, `/clips`: the pack in use and its clips, and the
   upload of another with the PIN from the panel (`POST /clips`, also
   `scripts/clips.sh <ip> [pack]` with the token). The clock restarts

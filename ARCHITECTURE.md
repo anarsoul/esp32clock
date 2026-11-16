@@ -75,7 +75,7 @@ executor** runs the rest cooperatively.
 | thread | `storage::persist_task` | the `nvs` map | debounced save of changed settings |
 | thread | `net::net_task` | the stack's runner | embassy-net |
 | thread | `http::http_task` × `LISTENERS` | a socket each | pages, `/api`, commands, OTA upload |
-| thread, station | `net::wifi_task` | the Wi-Fi controller | scan, connect, DHCP on and off, RSSI |
+| thread, station | `net::wifi_task` | the Wi-Fi controller | scan, connect, DHCP on and off, RSSI, the transmit power setting |
 | thread, station | `net::ntp_task`, `hostname_task`, `monitor_task`, `probe_task` | sockets | time sync, DHCP hostname, link log, gateway ping and the self-heal trigger |
 | thread, station | `mqtt::mqtt_task` | a socket | Home Assistant session |
 | thread, access point | `net::ap_task`, `dhcpd::dhcpd_task`, `dnsd::dnsd_task` | the controller, sockets | the setup network, its leases, captive DNS |

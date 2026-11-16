@@ -209,8 +209,9 @@ async fn scan_networks(controller: &mut WifiController<'static>) {
 /// connected, because the driver refuses a scan in AP-only mode.
 #[embassy_executor::task]
 pub async fn ap_task(mut controller: WifiController<'static>, ssid: heapless::String<32>) -> ! {
-    match controller.set_max_tx_power(config::WIFI_MAX_TX_POWER_QDBM) {
-        Ok(()) => info!("wifi: max tx power {} dBm", config::WIFI_MAX_TX_POWER_QDBM as f32 / 4.0),
+    // The access point's own power, not the station's setting.
+    match controller.set_max_tx_power(config::AP_TX_POWER_QDBM) {
+        Ok(()) => info!("wifi: max tx power {} dBm, the access point's", config::AP_TX_POWER_QDBM as f32 / 4.0),
         Err(e) => warn!("wifi: set_max_tx_power: {e:?}"),
     }
     let cfg = ssid.as_str().try_into().and_then(|ssid| {
@@ -244,6 +245,26 @@ pub async fn ap_task(mut controller: WifiController<'static>, ssid: heapless::St
             }
             Either::Second(()) => scan_networks(&mut controller).await,
         }
+    }
+}
+
+/// Give the driver the station's transmit power of the settings, held
+/// under the ceiling, if it is not the one last given (`applied`).
+/// Called before every connect and every `RSSI_PERIOD`, so a change on
+/// the page needs no reset. The access point has its own
+/// (`config::AP_TX_POWER_QDBM`). A refusal is tried again at the
+/// next call.
+fn apply_tx_power(controller: &mut WifiController<'static>, applied: &mut Option<i8>) {
+    let qdbm = settings::get().tx_power_qdbm.min(config::WIFI_MAX_TX_POWER_QDBM);
+    if *applied == Some(qdbm) {
+        return;
+    }
+    match controller.set_max_tx_power(qdbm) {
+        Ok(()) => {
+            info!("wifi: max tx power {} dBm", qdbm as f32 / 4.0);
+            *applied = Some(qdbm);
+        }
+        Err(e) => warn!("wifi: set_max_tx_power: {e:?}"),
     }
 }
 
@@ -379,10 +400,7 @@ pub async fn wifi_task(mut controller: WifiController<'static>, stack: Stack<'st
         }
     };
 
-    match controller.set_max_tx_power(config::WIFI_MAX_TX_POWER_QDBM) {
-        Ok(()) => info!("wifi: max tx power {} dBm", config::WIFI_MAX_TX_POWER_QDBM as f32 / 4.0),
-        Err(e) => warn!("wifi: set_max_tx_power: {e:?}"),
-    }
+    let mut power = None;
 
     // Failed connects in a row, and when the run of them started. A
     // run that reaches either limit ends in `heal::reset`: the driver,
@@ -392,6 +410,7 @@ pub async fn wifi_task(mut controller: WifiController<'static>, stack: Stack<'st
     let mut failures: u32 = 0;
     let mut first_failure: Option<Instant> = None;
     loop {
+        apply_tx_power(&mut controller, &mut power);
         if let Err(e) = controller.set_config(&cfg) {
             error!("wifi: set_config: {e:?}");
             Timer::after(RECONNECT_DELAY).await;
@@ -459,6 +478,7 @@ pub async fn wifi_task(mut controller: WifiController<'static>, stack: Stack<'st
                     break;
                 }
                 Either::Second(()) => {
+                    apply_tx_power(&mut controller, &mut power);
                     publish_rssi(&controller);
                     samples += 1;
                     if samples.is_multiple_of(STATUS_EVERY) {

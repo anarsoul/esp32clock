@@ -242,6 +242,7 @@ firmware version, the network and the address the clock got.
 | `TZ_OFFSET_MINUTES` | the older variable, minutes east of UTC, stored as a fixed rule (`-420` is `<-07>7`); `TZ_RULE` wins if both are set | 0 |
 | `API_TOKEN` | bearer token for the scripts and the API's protected keys | none |
 | `MAX_CURRENT_STEP` | LED current ceiling, 1 to 15; 5 is the 50 % step | 5 |
+| `WIFI_TX_POWER_QDBM` | the default Wi-Fi transmit power in quarter dBm, for a clock with no stored setting: 8, 20, 28, 34, 44, 52, 56, 60 or 68 | 68 (16 dBm) |
 | `AP_PASSWORD` | the clock's own access point's password | `esp32clock` |
 | `MQTT_HOST`, `MQTT_PORT`, `MQTT_USER`, `MQTT_PASSWORD` | the Home Assistant broker; empty host for no MQTT, see below | empty, 1883 |
 
@@ -416,7 +417,12 @@ The clock serves four pages, linked to each other at the top of each:
 - `/settings`: the timezone (a POSIX TZ rule; the button beside it
   fills in the browser's own zone, and the line under the form shows
   the local time the rule gives), 12/24 hour, the temperature on the
-  panel and the thermometer's offset, the hostname.
+  panel and the thermometer's offset, the hostname, and the Wi-Fi
+  transmit power (2 to 16 dBm, 16 by default; `tx_power` in `/api`).
+  Lower it only for a clock whose antenna needs less: with too little
+  the clock may not reach the network; then hold both buttons for
+  10 s, and set it again on the access point's setup page. The access
+  point itself always transmits at 11 dBm.
 - `/ha`: the MQTT broker for Home Assistant, see below.
 - `/system`: the firmware update, the API token, a reboot, and a
   switch to the access point for giving the clock another network.

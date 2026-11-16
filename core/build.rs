@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 fn main() {
     // `config.rs` reads these with `option_env!`, so this crate is what must rebuild when they change.
-    for var in ["WIFI_SSID", "WIFI_PASSWORD", "TZ_OFFSET_MINUTES", "TZ_RULE", "API_TOKEN", "MAX_CURRENT_STEP", "AP_PASSWORD", "ESP_RADIO_CONFIG_WIFI_MTU", "MQTT_HOST", "MQTT_PORT", "MQTT_USER", "MQTT_PASSWORD", "CLIP_KBPS", "CLIP_CARRIER_KHZ", "CLIP_MODULATOR", "CLIP_PDM_BITS", "ALARM_CLIP", "ALARM_CLIP_LABEL"] {
+    for var in ["WIFI_SSID", "WIFI_PASSWORD", "TZ_OFFSET_MINUTES", "TZ_RULE", "API_TOKEN", "MAX_CURRENT_STEP", "WIFI_TX_POWER_QDBM", "AP_PASSWORD", "ESP_RADIO_CONFIG_WIFI_MTU", "MQTT_HOST", "MQTT_PORT", "MQTT_USER", "MQTT_PASSWORD", "CLIP_KBPS", "CLIP_CARRIER_KHZ", "CLIP_MODULATOR", "CLIP_PDM_BITS", "ALARM_CLIP", "ALARM_CLIP_LABEL"] {
         println!("cargo:rerun-if-env-changed={var}");
     }
     clips();

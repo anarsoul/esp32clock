@@ -15,7 +15,7 @@ use embassy_sync::watch::{Receiver, Watch};
 
 use crate::config::{
     API_TOKEN, DEFAULT_ALARM, DEFAULT_BRIGHTNESS, DEFAULT_COLOR, DEFAULT_HOSTNAME, DEFAULT_TEMP_OFFSET_DC, DEFAULT_TWELVE_HOUR,
-    DEFAULT_TZ_OFFSET_MINUTES, DEFAULT_TZ_RULE, MAX_CURRENT_STEP, MQTT_HOST, MQTT_PASSWORD, MQTT_PORT, MQTT_USER, WIFI_PASSWORD, WIFI_SSID,
+    DEFAULT_TX_POWER_QDBM, DEFAULT_TZ_OFFSET_MINUTES, DEFAULT_TZ_RULE, MAX_CURRENT_STEP, MQTT_HOST, MQTT_PASSWORD, MQTT_PORT, MQTT_USER, WIFI_MAX_TX_POWER_QDBM, WIFI_PASSWORD, WIFI_SSID,
 };
 use crate::melody;
 use crate::panel::{Levels, MAX_LEVEL};
@@ -409,6 +409,42 @@ impl TempShow {
     }
 }
 
+/// The Wi-Fi transmit powers the driver has, as the form and API name
+/// them in dBm and as it takes them in quarter dBm (the table in
+/// esp-wifi-sys's `esp_wifi_set_max_tx_power` doc; 16 dBm is 66 to 71,
+/// and 68 is what the clocks have run at). The 18 and 20 dBm levels are
+/// left out: `config::WIFI_MAX_TX_POWER_QDBM` says why.
+const TX_POWER_ALL: [(&str, i8); 9] =
+    [("2", 8), ("5", 20), ("7", 28), ("8.5", 34), ("11", 44), ("13", 52), ("14", 56), ("15", 60), ("16", 68)];
+
+/// The transmit powers offered: those within the ceiling.
+pub const TX_POWER_CHOICES: &[(&str, i8)] = {
+    let mut n = 0;
+    while n < TX_POWER_ALL.len() && TX_POWER_ALL[n].1 <= WIFI_MAX_TX_POWER_QDBM {
+        n += 1;
+    }
+    TX_POWER_ALL.split_at(n).0
+};
+
+/// The quarter dBm of the power named `name` (`8.5`, `16`).
+pub fn tx_power_from_name(name: &str) -> Option<i8> {
+    TX_POWER_CHOICES.iter().find(|(n, _)| *n == name).map(|(_, q)| *q)
+}
+
+/// The name of a power in quarter dBm, if it is one of the choices.
+pub const fn tx_power_name(qdbm: i8) -> Option<&'static str> {
+    let mut i = 0;
+    while i < TX_POWER_CHOICES.len() {
+        if TX_POWER_CHOICES[i].1 == qdbm {
+            return Some(TX_POWER_CHOICES[i].0);
+        }
+        i += 1;
+    }
+    None
+}
+
+const _: () = assert!(tx_power_name(DEFAULT_TX_POWER_QDBM).is_some(), "WIFI_TX_POWER_QDBM must be 8, 20, 28, 34, 44, 52, 56, 60 or 68");
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Settings {
     pub color: usize,
@@ -450,10 +486,14 @@ pub struct Settings {
     /// The broker was cleared on the page, so the build's `MQTT_HOST`
     /// must not fill it back in at boot. A flag bit like `token_cleared`.
     pub mqtt_cleared: bool,
+    /// The Wi-Fi transmit power in quarter dBm, one of
+    /// `TX_POWER_CHOICES`, for a clock whose antenna wants less than
+    /// the ceiling.
+    pub tx_power_qdbm: i8,
 }
 
 /// Bytes in a stored record.
-pub const RECORD_LEN: usize = 385;
+pub const RECORD_LEN: usize = 386;
 
 /// The thermometer offset's bound, tenths of a degree either way.
 pub const TEMP_OFFSET_LIMIT_DC: i16 = 100;
@@ -462,7 +502,7 @@ pub const TEMP_OFFSET_LIMIT_DC: i16 = 100;
 /// the new fields and teach `from_record` the old one, or the user's
 /// settings are lost; never reorder, since an older image reads a newer
 /// record by its prefix.
-const RECORD_VERSION: u8 = 11;
+const RECORD_VERSION: u8 = 12;
 
 /// Where the hostname sits in a version 3 record.
 const RECORD_HOSTNAME_LEN: usize = 9;
@@ -516,7 +556,10 @@ const RECORD_BROKER_PASSWORD: usize = RECORD_BROKER_PASSWORD_LEN + 1;
 /// so an older image shows standard time after a rollback.
 const RECORD_TZ_LEN: usize = RECORD_BROKER_PASSWORD + BROKER_PASSWORD_MAX;
 const RECORD_TZ: usize = RECORD_TZ_LEN + 1;
-const _: () = assert!(RECORD_TZ + TZ_MAX == RECORD_LEN, "RECORD_LEN does not match the layout");
+
+/// Where the transmit power sits in a version 12 record: quarter dBm.
+const RECORD_TX_POWER: usize = RECORD_TZ + TZ_MAX;
+const _: () = assert!(RECORD_TX_POWER + 1 == RECORD_LEN, "RECORD_LEN does not match the layout");
 
 /// The timezone at boot until the user sets it: `TZ_RULE` from the build,
 /// checked here so a bad rule fails the build, or else `TZ_OFFSET_MINUTES`
@@ -567,6 +610,7 @@ impl Settings {
         token_cleared: false,
         mqtt: Broker::NONE,
         mqtt_cleared: false,
+        tx_power_qdbm: DEFAULT_TX_POWER_QDBM,
     };
 
     /// Fill in what the build has and the record lacks: the network, the
@@ -614,6 +658,7 @@ impl Settings {
             && self.wifi.is_valid()
             && valid_token(self.token.0.as_str())
             && self.mqtt.is_valid()
+            && tx_power_name(self.tx_power_qdbm).is_some()
     }
 
     /// Whether the alarm rings on `weekday` (0 Monday to 6 Sunday).
@@ -627,7 +672,8 @@ impl Settings {
     /// (`0xff` for random), then the SSID, the password and the token,
     /// each a length byte and a padded field, then the flags byte, the
     /// thermometer offset, the temperature-on-the-panel byte, and the
-    /// broker: host, port, user and password; then the timezone rule.
+    /// broker: host, port, user and password; then the timezone rule and
+    /// the transmit power.
     pub fn to_record(&self) -> [u8; RECORD_LEN] {
         // The old minute field, for an image before version 11, which
         // checks it against `TZ_LIMIT_MINUTES`; a rule's standard offset
@@ -667,6 +713,7 @@ impl Settings {
         r[RECORD_BROKER_PASSWORD..RECORD_BROKER_PASSWORD + BROKER_PASSWORD_MAX].copy_from_slice(&self.mqtt.password.0.bytes);
         r[RECORD_TZ_LEN] = self.tz.len;
         r[RECORD_TZ..RECORD_TZ + TZ_MAX].copy_from_slice(&self.tz.bytes);
+        r[RECORD_TX_POWER] = self.tx_power_qdbm as u8;
         r
     }
 
@@ -764,6 +811,10 @@ impl Settings {
             s.tz = Text::from_record(*r.get(RECORD_TZ_LEN)?, r.get(RECORD_TZ..RECORD_TZ + TZ_MAX)?)?;
             tz::parse(s.tz.as_str())?;
         }
+        if version >= 12 {
+            s.tx_power_qdbm = *r.get(RECORD_TX_POWER)? as i8;
+            tx_power_name(s.tx_power_qdbm)?;
+        }
         s.color = s.color.min(PALETTE.len() - 1);
         // A record saved by a build with a higher ceiling may name a step
         // this build does not offer: land on the brightest one instead of
@@ -852,6 +903,7 @@ mod tests {
                 password: Secret(Text::new(&"w".repeat(BROKER_PASSWORD_MAX)).unwrap()),
             },
             mqtt_cleared: false,
+            tx_power_qdbm: 34,
         }
     }
 
@@ -940,6 +992,7 @@ mod tests {
             8 => RECORD_TEMP_SHOW,
             9 => RECORD_BROKER_HOST_LEN,
             10 => RECORD_TZ_LEN,
+            11 => RECORD_TX_POWER,
             _ => RECORD_LEN,
         }
     }
@@ -958,7 +1011,15 @@ mod tests {
             // Up to version 10 the timezone was minutes; the record keeps
             // the rule's standard offset there, so an old image reads 600.
             let fixed = tz::fixed(600);
-            assert_eq!(got.tz, if version >= 2 { fixed } else { d.tz }, "v{version} timezone");
+            assert_eq!(
+                got.tz,
+                match version {
+                    11.. => s.tz,
+                    2.. => fixed,
+                    _ => d.tz,
+                },
+                "v{version} timezone"
+            );
             assert_eq!(got.hostname, if version >= 3 { s.hostname } else { d.hostname });
             assert_eq!(got.alarm_days, if version >= 4 { s.alarm_days } else { d.alarm_days });
             assert_eq!(got.melody, if version >= 5 { s.melody } else { d.melody });
@@ -969,6 +1030,7 @@ mod tests {
             assert_eq!(got.temp_show, if version >= 9 { s.temp_show } else { d.temp_show }, "v{version} temperature on the panel");
             assert_eq!(got.mqtt, if version >= 10 { s.mqtt } else { Broker::NONE }, "v{version} broker");
             assert!(!got.mqtt_cleared);
+            assert_eq!(got.tx_power_qdbm, d.tx_power_qdbm, "v{version} has no transmit power");
         }
     }
 
@@ -1182,6 +1244,23 @@ mod tests {
         let mut bad = ok.to_record();
         bad[RECORD_TEMP_SHOW] = 3;
         assert_eq!(Settings::from_record(&bad), None, "a bad temperature byte is a bad record");
+        // The transmit power: the driver's levels up to the ceiling.
+        assert_eq!(TX_POWER_CHOICES.last().map(|c| c.1), Some(WIFI_MAX_TX_POWER_QDBM));
+        for (name, qdbm) in TX_POWER_CHOICES {
+            assert!(Settings { tx_power_qdbm: *qdbm, ..ok }.is_valid());
+            assert_eq!(tx_power_from_name(name), Some(*qdbm));
+            assert_eq!(tx_power_name(*qdbm), Some(*name));
+            // 68 is inside the 16 dBm level, which starts at 66.
+            let quarters = (name.parse::<f32>().unwrap() * 4.0) as i8;
+            assert!((quarters..=quarters + 4).contains(qdbm), "{name} dBm in quarters");
+        }
+        for q in [0, 7, 9, 44 + 1, 72, 80, -8] {
+            assert!(!Settings { tx_power_qdbm: q, ..ok }.is_valid(), "{q}");
+        }
+        assert_eq!(tx_power_from_name("18"), None);
+        let mut bad = ok.to_record();
+        bad[RECORD_TX_POWER] = 72;
+        assert_eq!(Settings::from_record(&bad), None, "a power above the ceiling is a bad record");
         assert!(Settings { alarm_days: DAYS_WEEKEND, ..ok }.alarm_on(5));
         assert!(!Settings { alarm_days: DAYS_WEEKEND, ..ok }.alarm_on(4));
         assert_eq!(RECORD_LEN, ok.to_record().len());

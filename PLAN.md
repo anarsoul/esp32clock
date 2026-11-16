@@ -9086,6 +9086,66 @@ version" (the user, of the second pack). The speaker's clips are the
 buzzer's with the high-pass at 100 Hz once and `--release 10`; the
 PT3 tunes limited that way included.
 
+### Wi-Fi transmit power as a setting — DONE, verified by the user on the bench board 2026-11-15
+
+The user's, 2026-11-15: the bench board's ceramic antenna is poor and
+it needs less than the 16 dBm the clocks run at (the working tree had
+`WIFI_MAX_TX_POWER_QDBM` edited to 44 for it). Asked whether a build
+variable or a stored setting, the user chose the setting: one image
+for every clock.
+
+- `Settings::tx_power_qdbm`, quarter dBm as the driver takes it, one
+  of `settings::TX_POWER_CHOICES`: the driver's levels up to the
+  ceiling, 2, 5, 7, 8.5, 11, 13, 14, 15 and 16 dBm (8, 20, 28, 34, 44,
+  52, 56, 60, 68; the table in esp-wifi-sys's
+  `esp_wifi_set_max_tx_power` doc). `config::WIFI_MAX_TX_POWER_QDBM`
+  stays 68 and is now the cap: the table is cut at it, so nothing
+  above it can be chosen, stored or read back, and `net.rs` clamps
+  once more. What 18 and 20 dBm did is in the constant's comment.
+- Record version 12, one byte appended after the timezone rule
+  (`RECORD_LEN` 386). A byte that is not a listed level is a bad
+  record, as the temperature byte is. An older record gets the
+  default.
+- The default is 68, or `WIFI_TX_POWER_QDBM` from the build, which a
+  `const` assert holds to the listed levels: for a board that cannot
+  join at 16 dBm before anyone has reached its page. Like the
+  thermometer offset's default it is for a clock with no record or
+  one older than version 12; a stored value stays.
+- The key is `tx_power`, its value the dBm as the table names it
+  (`8.5`, `16`), a number in the JSON. A select on `/settings` under
+  Network. Not guarded by the token (it cannot go above the ceiling;
+  too low costs the LAN, as a wrong hostname's users know, and the
+  access point's hold brings the clock back) and not among
+  `mqtt::SET_KEYS`: the bus is no way to take the clock off the
+  network. No Home Assistant entity; the state JSON carries the key.
+- The user, while it was being built: the page must say that leaving
+  the default is dangerous, since the clock may not connect. First
+  the access point was to put the default back; then the user changed
+  that: the access point transmits at a fixed 11 dBm
+  (`config::AP_TX_POWER_QDBM`, 44: "typically enough for a phone"),
+  leaves the station's setting alone, and its setup form has the
+  select, so a clock set too low is brought back by the hold and the
+  form. The settings page's note says so. A save on the access point
+  with a network stored resets into the station, as any does there.
+  The settings page is 3812 bytes of 8032, the setup page without a
+  list 3601 at its worst (the list's budget still fits: 4977 hostile).
+- `net::wifi_task` applies it before every connect and looks again
+  every `RSSI_PERIOD` (10 s), so a change needs no reset; the log
+  line says the setting, as before. `ap_task` sets its own once.
+
+To verify on the bench board: the boot line `wifi: max tx power 16
+dBm`; pick 11 dBm on `/settings`, within 10 s the line again with 11;
+`/api` has `"tx_power":11`; the access point's figure for the clock
+drops; after `scripts/reload.sh` the first connect says 11. Hold both
+buttons 10 s: `wifi: max tx power 11 dBm, the access point's`, the
+setup form shows the select at 11; pick 16, Save and join, and the
+station says 16.
+
+Verified by the user on the bench board, 2026-11-15: the station's
+page and the access point's both have the setting, it works as
+expected, and with the power lowered the board, whose ceramic antenna
+is poor, connects reliably.
+
 ### Backlog, board revision: a line output on the adapter for an amplifier — an idea of 2026-11-15, nothing built or measured; to be tried on the bench board when the amplifiers arrive
 
 The user's, of the speaker mod: with a proper amplifier in place of

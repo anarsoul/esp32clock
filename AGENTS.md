@@ -58,6 +58,7 @@ WIFI_SSID='…' WIFI_PASSWORD='…' TZ_RULE='<-07>7' API_TOKEN='…' cargo run -
 TZ_OFFSET_MINUTES=-420 cargo build --release   # the older variable: minutes east of UTC, stored as the fixed rule <-07>7
 node scripts/tz-check.mjs                 # the page's browser-zone script (src/tz.js) against zones with known rules
 MAX_CURRENT_STEP=8 cargo build --release   # optional: raise the drive-current ceiling (default 5)
+WIFI_TX_POWER_QDBM=44 cargo build --release   # optional: the default of the transmit power setting, quarter dBm, one of its levels (default 68)
 MQTT_HOST=10.1.1.5 MQTT_USER=clock MQTT_PASSWORD='…' cargo build --release   # optional: the Home Assistant broker (MQTT_PORT defaults to 1883)
 API_TOKEN='…' scripts/ota.sh <ip>      # later updates, over the LAN
 scripts/ota.sh                          # just the image file, for http://<ip>/system
@@ -142,7 +143,7 @@ temperature on the panel (`temp_show`: `off`, `c` or `f`, default
 `c`; with a reading in hand the UI shows ` 23C` with the degree mark
 for seconds 30 to 34 of every minute in clock mode, `ui::TEMP_SHOW_AT`
 and `TEMP_SHOW_SECS`), DHCP
-hostname, Wi-Fi network, API token and MQTT broker (`mqtt_host`,
+hostname, Wi-Fi transmit power (`tx_power`, dBm: `2`, `5`, `7`, `8.5`, `11`, `13`, `14`, `15` or `16`, see "Wi-Fi power" below), Wi-Fi network, API token and MQTT broker (`mqtt_host`,
 `mqtt_port`, `mqtt_user`, `mqtt_password`; see "Home Assistant" below)
 are settings:
 saved in the `nvs` partition, editable from the buttons and from
@@ -150,7 +151,7 @@ the clock's pages or `/api` (form-encoded keys, JSON back). The pages
 are five, each starting with a line of links to the others
 (`form::Page`): `/` (the alarm with Play and Stop, the display, the
 status lines), `/settings` (timezone, 12 hour, the temperature on the
-panel and its offset, hostname, and the local-time line), `/ha` (the
+panel and its offset, hostname, the transmit power with its warning, and the local-time line), `/ha` (the
 MQTT broker and its status line) and `/system` (below). Each form is
 posted to its own page and is a partial update, as `/api` is: only
 the keys sent change, and a checkbox is sent either way, a hidden
@@ -276,7 +277,7 @@ last two bytes of the MAC), WPA2 with `AP_PASSWORD` from the build
 (default `esp32clock`), channel 1, the clock at `http://192.168.4.1/`
 with its own DHCP server (`src/dhcpd.rs`, eight leases, replies
 broadcast) and no time, so no alarm. `GET /` there is the setup form
-(network, password, timezone, hostname); saving answers a page and the
+(network, password, timezone, hostname, the station's transmit power); saving answers a page and the
 clock resets into the network once the record is written, or at once
 if nothing changed. Both switches (`heal::switch_mode`) start the carry
 record over, keeping only the OTA boot count: no time, heals or alarm
@@ -631,9 +632,21 @@ module ends with its `#[cfg(test)] mod tests`.
   11; the supply, not the firmware, is the limit (2026-10-22). Never
   derive the current from how much is lit, and never park the panel
   all-white at high current; the drivers get hot.
-- **Wi-Fi power:** `WIFI_MAX_TX_POWER_QDBM` is 68, which the driver
-  rounds to its 16 dBm level (the level table is in the constant's
-  comment; the boot log prints the setting). The access point hears the
+- **Wi-Fi power:** a setting since 2026-11-15, verified on the bench board that day (`tx_power`, a select
+  on `/settings`; `settings::TX_POWER_CHOICES`, the driver's levels
+  from 2 to 16 dBm; record version 12), for a board whose antenna
+  wants less, as the bench board's ceramic one. `net::apply_tx_power`
+  gives it to the driver before every connect and every 10 s, so a
+  change needs no reset. Not an MQTT `set/` key. It is the station's
+  only: the access point transmits at `config::AP_TX_POWER_QDBM`, 44
+  (11 dBm, enough for a phone beside the clock), whatever the setting,
+  and never changes it, and the setup form has the select too, which
+  is the way back for a clock set too low to reach its network; the
+  settings page says so (the user's, 2026-11-15, after a first version
+  that reset the setting on the access point). The default is `WIFI_TX_POWER_QDBM` from the build,
+  else the ceiling. `WIFI_MAX_TX_POWER_QDBM` is 68, the ceiling, which
+  the driver rounds to its 16 dBm level (the level table is in the
+  constant's comment; the log prints the setting). The access point hears the
   clock about 20 dB below what the clock hears of it, so the uplink is
   the side that fails, and the clock's own RSSI line looks fine while
   pages and lease renewals are lost. 14 and 16 dBm each gained a full
@@ -715,7 +728,7 @@ module ends with its `#[cfg(test)] mod tests`.
   the 88 this said);
   `core::http::PAGE_MAX` (8032) is what a page may take, and the
   `form` tests build each page at its worst case and assert it
-  (2026-11-14, since the split in four, with the three clips of `clips/`: the clock page 4353 with the status lines, a stored SSID of 32 `"` and a 64-byte broker host in them; settings 2433 with a 48-byte timezone rule of `<`, four bytes each through `HtmlStr`; Home Assistant 2253 with a user of 32 `"`; system 3876; setup with twelve 32-character networks about 3200. The one page before it was 5564, and 5865 with nine clips. Since 2026-11-15, with the PIN asked for at the click, the notices, the day checkboxes and the forms' own post: clock 5989, and 7205 with a full pack of sixteen clips at their longest, which leaves 827 bytes; settings 3138, Home Assistant 3110, clips 3686, system 4828, setup without a list 3084). `cargo host-test` after adding a field
+  (2026-11-14, since the split in four, with the three clips of `clips/`: the clock page 4353 with the status lines, a stored SSID of 32 `"` and a 64-byte broker host in them; settings 2433 with a 48-byte timezone rule of `<`, four bytes each through `HtmlStr`; Home Assistant 2253 with a user of 32 `"`; system 3876; setup with twelve 32-character networks about 3200. The one page before it was 5564, and 5865 with nine clips. Since 2026-11-15, with the PIN asked for at the click, the notices, the day checkboxes and the forms' own post: clock 5989, and 7205 with a full pack of sixteen clips at their longest, which leaves 827 bytes; settings 3138 (3812 with the transmit power), Home Assistant 3110, clips 3686, system 4828, setup without a list 3084). `cargo host-test` after adding a field
   or label; the test prints the sizes with `-- --nocapture`. The setup
   page's network list stops at `form::NETWORK_LIST_BUDGET` (1900)
   bytes, strongest first, with a "N more not shown" line, because a
@@ -737,7 +750,7 @@ module ends with its `#[cfg(test)] mod tests`.
   (test-clock, 2026-11-14). Static RAM: `ota.rs` holds 11 KB
   of buffers, and what the statics leave of DRAM is the main stack,
   66.9 KB on 2026-11-08 (67.1 on 2026-11-07; the ring's descriptors and
-  conf words are 160 bytes, the gap statistics and buffer channels went) (`Settings` is a 385-byte record and sits in several task futures: the 49-byte timezone rule cost 2.2 KB of stack); check `.stack` in `llvm-readelf -S` after adding one, and compare with a build of `HEAD` in a worktree when in doubt: one `Response` per listener loop, since a second one in another arm of the same loop was not overlapped by the compiler and cost 6 KB per listener until it was hoisted (2026-11-07). `src/tz.js` (5.8 KB) is sent from one response buffer and a `const` assert in `src/http.rs` keeps it under `RESPONSE_BUF` with its header; it was trimmed to comments of a line each to fit.
+  conf words are 160 bytes, the gap statistics and buffer channels went) (`Settings` is a 386-byte record and sits in several task futures: the 49-byte timezone rule cost 2.2 KB of stack); check `.stack` in `llvm-readelf -S` after adding one, and compare with a build of `HEAD` in a worktree when in doubt: one `Response` per listener loop, since a second one in another arm of the same loop was not overlapped by the compiler and cost 6 KB per listener until it was hoisted (2026-11-07). `src/tz.js` (5.8 KB) is sent from one response buffer and a `const` assert in `src/http.rs` keeps it under `RESPONSE_BUF` with its header; it was trimmed to comments of a line each to fit.
 - A PCM clip is 16 KB of flash a second at 16 kHz, 8 KB at 8 kHz (the
   27.6 s test clip is 442 KB of `.rodata`, held once: `melody::CLIP_DATA` is a `static`; a beeper clip is 1 to 3 KB a second, a tracker module some 10 KB whatever its length)
   and must leave the pack inside its partition, or the image inside its slot; the ring is 16 KB of
@@ -752,7 +765,7 @@ module ends with its `#[cfg(test)] mod tests`.
   or two, runs there above the Wi-Fi driver.
 - `form::apply` decodes each key into 16 bytes and each value into 64
   (`form::VALUE_MAX`, the password); longer input is reported as a bad
-  key or value before parsing. The record is `settings::RECORD_LEN` (385) bytes and the map scratch in `storage.rs` 512, which must hold
+  key or value before parsing. The record is `settings::RECORD_LEN` (386) bytes and the map scratch in `storage.rs` 512, which must hold
   the item (record plus 9 bytes, padded to a word).
 - The MQTT task's future holds its socket buffers (1 KB receive, 2 KB
   send), the 1 KB `BumpBuffer`, the state JSON (1 KB) and the

@@ -107,6 +107,13 @@ pub const AP_SSID_PREFIX: &str = "clock-";
 pub const AP_ADDRESS: [u8; 4] = [192, 168, 4, 1];
 pub const AP_PREFIX_LEN: u8 = 24;
 pub const AP_CHANNEL: u8 = 1;
+
+/// Transmit power of the clock's own access point, in quarter dBm:
+/// 11 dBm, typically enough for a phone beside the clock (the user,
+/// 2026-11-15). Fixed, whatever the station's setting, so a station
+/// power set too low or too high for the board's antenna does not take
+/// the setup page away with it.
+pub const AP_TX_POWER_QDBM: i8 = 44;
 pub const AP_LEASE_SECS: u32 = 3600;
 
 /// Boots an updated image gets before the previous slot is booted again.
@@ -274,8 +281,23 @@ pub const CLIP_SIGMA_DELTA: bool = match option_env!("CLIP_MODULATOR") {
 /// radiates louder and decodes worse. 72 (18 dBm) was already past the
 /// knee: the near AP read -47 but jumping, the far AP read -73 against
 /// -70 at 68, the probe took 70 ms and association took five tries. 68
-/// is the ceiling.
+/// is the ceiling. Since 2026-11-15 the power is a setting
+/// (`settings::TX_POWER_CHOICES`, the levels up to this one), for a
+/// board whose antenna wants less, and this is only its cap.
 pub const WIFI_MAX_TX_POWER_QDBM: i8 = 68;
+
+/// The transmit power of a clock with no record, or one older than
+/// version 12, in quarter dBm: `WIFI_TX_POWER_QDBM` from the build, for
+/// a board that cannot join at the ceiling before its page is reached,
+/// else the ceiling. `settings` asserts it is one of the levels offered.
+pub const DEFAULT_TX_POWER_QDBM: i8 = match option_env!("WIFI_TX_POWER_QDBM") {
+    Some(s) => {
+        let q = parse_i32(s);
+        assert!(q >= 8 && q <= WIFI_MAX_TX_POWER_QDBM as i32, "WIFI_TX_POWER_QDBM must be 8 to 68");
+        q as i8
+    }
+    None => WIFI_MAX_TX_POWER_QDBM,
+};
 
 /// Frames the Wi-Fi driver queues for the network stack before it drops
 /// new ones. esp-radio's default of 5 overflowed on bursts of LAN
@@ -349,11 +371,11 @@ const fn parse_i32(s: &str) -> i32 {
         neg = b[0] == b'-';
         i = 1;
     }
-    assert!(i < b.len(), "TZ_OFFSET_MINUTES and MAX_CURRENT_STEP must be integers");
+    assert!(i < b.len(), "TZ_OFFSET_MINUTES, MAX_CURRENT_STEP and WIFI_TX_POWER_QDBM must be integers");
     let mut v: i32 = 0;
     while i < b.len() {
         let c = b[i];
-        assert!(c >= b'0' && c <= b'9', "TZ_OFFSET_MINUTES and MAX_CURRENT_STEP must be integers");
+        assert!(c >= b'0' && c <= b'9', "TZ_OFFSET_MINUTES, MAX_CURRENT_STEP and WIFI_TX_POWER_QDBM must be integers");
         v = v * 10 + (c - b'0') as i32;
         i += 1;
     }
