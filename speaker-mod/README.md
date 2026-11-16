@@ -10,26 +10,26 @@ overloaded (speaker, Q1, GPIO5, the 5 V supply), then the sound.
 
 ## The short version
 
-The one that has been on a clock (2026-11-15), and the easiest with a
-sound that is good enough:
+The one that has been on a clock and heard (2026-11-15, the 8 Ω
+0.25 W speaker), and the easiest:
 
 - the speaker in LS1's pads, with RS in its lead unless it is the
   32 Ω 0.5 W one;
 - D1, a 1N4148, across the pads;
-- CBE, 47 nF or 33 nF, across Q1's base and emitter legs;
-- R5 left as the kit has it, 10 kΩ.
+- R5 at 5.1 kΩ;
+- RBE, 2.2 kΩ, across Q1's base and emitter legs.
 
-The 32 Ω 0.5 W speaker is the one to want: no RS, nothing that gets
-hot, and 6 dB more than the 8 Ω 0.25 W one, which works too, behind
-its 22 Ω (two 47 Ω in parallel on the clock tried).
+Q1 is a switch and the speaker's coil is the filter. The 32 Ω 0.5 W
+speaker is the one to want: no RS, nothing that gets hot, and 6 dB
+more than the 8 Ω 0.25 W one, which works too, behind its 22 Ω (two
+47 Ω in parallel on the clock tried). That RS runs hot on any clip,
+0.3 W, which is in order.
 
-10 kΩ is right for a load near 30 Ω (the bare 32 Ω speaker, or 8 Ω
-and its RS) and a transistor like the one tried, whose gain was near
-300; one with less gain is only quieter. The 32 Ω 0.25 W speaker
-behind 27 Ω is twice the load and wants about 20 kΩ. Read the DC
-voltage across the pads while a clip plays: 2.0 to 2.8 V is in order,
-3 V or more (or an RS too hot to touch) wants a larger R5. The rest
-of this page is the reasoning, the figures and the other variants.
+A capacitor in RBE's place, which makes Q1 a linear stage, was on the
+same clock first: it works, RS runs cooler, R5 has to be found for
+each transistor, and it was quieter and heavier in the bass. It is
+"The alternative" below. The rest of this page is the reasoning, the
+figures and the other variants.
 
 ## The stage as the kit has it
 
@@ -63,7 +63,7 @@ is more than Q1 (500 mA) and the supply will give.
 ```
  +5 V ─────────────┬──────────┐
                    │          │
-                 [CBE]        │E
+                 [RBE]        │E
                    │          │
  GPIO5 ───[R5]─────┴─────────B  Q1  S8550
                               │C
@@ -82,9 +82,9 @@ is more than Q1 (500 mA) and the supply will give.
 | SPK | in LS1's pads | in LS1's pads | in LS1's pads | the buzzer comes out |
 | D1 | 1N4148 | 1N4148 | 1N4148 | across LS1's pads, band to LS1 `+` (Q1's collector) |
 | RS | none (a wire) | 27 Ω, 0.25 W | 22 Ω, 0.5 W (or two 47 Ω 0.25 W in parallel) | in series with one speaker lead, off the board, in heat-shrink |
-| R5 | 5.1 kΩ | 5.1 kΩ | 5.1 kΩ | R5's place; the kit's 10 kΩ also works, quieter; with CBE it is trimmed, see "Step 2" |
-| CBE | optional, 47 nF | optional, 47 nF | optional, 47 nF | see "Step 2" |
-| CS | with CBE, 220 nF | with CBE, 220 nF | with CBE, 220 nF | across LS1's pads, see "Step 2" |
+| R5 | 5.1 kΩ | 5.1 kΩ | 5.1 kΩ | R5's place; the kit's 10 kΩ also works, quieter |
+| RBE | 2.2 kΩ | 2.2 kΩ | 2.2 kΩ | from Q1's base to its emitter, see "Step 2" |
+| CBE, CS | | | | in RBE's place and across LS1's pads, for "The alternative" only |
 
 **Step 1, required: SPK, D1 and RS.** Nothing on the board changes but
 what is soldered to LS1's two pads; a clock that has the README's
@@ -104,21 +104,46 @@ buzzer mod already has D1 and the 5.1 kΩ.
 - RS goes in the speaker's lead and D1 across the pads, so the diode
   spans the resistor and the speaker together.
 
-**Step 2, optional, for the sound: Q1 as a linear stage, CBE = 47 nF
-and R5 to suit the transistor.** CBE is a ceramic capacitor from Q1's
-base to its emitter (+5 V), on the solder side across the two legs; it
-never sees more than 0.7 V, so any voltage rating will do.
+**Step 2, for the sound: R5 = 5.1 kΩ and RBE = 2.2 kΩ.** RBE goes
+from Q1's base to its emitter (+5 V), on the solder side across the
+two legs.
 
-With step 1 alone Q1 is a switch. 5.1 kΩ gives it 0.84 mA of base
-current, which saturates it at 85 mA only if its gain is over 100 and
-at 160 mA only over 190, so what it does depends on the transistor in
-hand; and where it does saturate, nothing takes the base's charge out
-when GPIO5 lets go, which on the breadboard copy of the stage
-(`bench/`, 2026-11-13, a BC557 with 50 mA) stretched every pulse and
-distorted the clips with heavy bass until a resistor from base to
-emitter went in.
+With 5.1 kΩ alone Q1 gets 0.84 mA of base current and nothing takes
+the base's charge out when GPIO5 lets go, which on the breadboard
+copy of the stage (`bench/`, 2026-11-13, a BC557 with 50 mA)
+stretched every pulse and distorted the clips with heavy bass until
+2.2 kΩ from base to emitter went in. RBE is the way out for the
+charge, and takes 0.3 mA of the drive, which leaves the base 0.55 mA.
 
-Step 2 goes the other way and keeps Q1 out of saturation altogether.
+On the clock tried (2026-11-15: the 8 Ω speaker behind 23.5 Ω, a
+transistor whose gain came out near 300) that is a base current that
+just carries the 160 mA of the load: Q1 reaches the rail and is
+hardly saturated, so it also lets go quickly. Heard there after the
+alternative below, on the same clips: louder and less heavy in the
+bass, and the better of the two. The level is the supply's and the
+load's and not the transistor's, the reason nothing is trimmed, and
+the speaker is driven with a voltage through RS, which damps its
+resonance where a current source does not. RS is hot with it, 0.3 W
+on any clip, as "The figures" has it.
+
+- A transistor with less gain than about 290 does not reach the rail
+  with these values at 160 mA and is quieter; 3.3 kΩ at R5 with the
+  same RBE gives the base 1 mA, enough for a gain of 160. GPIO5 sinks
+  1.3 mA then.
+- Keep RBE under half of R5: GPIO5 is a 3.3 V pin on a 5 V stage, and
+  RBE must not pass enough through the released pin to turn Q1 on.
+- Not on a scope yet: whether the pulses at the collector are as long
+  as GPIO5's at 8 Mbit/s.
+
+### The alternative: Q1 as a linear stage, a capacitor in RBE's place
+
+CBE, 47 nF, from Q1's base to its emitter where RBE would be, and R5
+to suit the transistor: a ceramic capacitor that never sees more than
+0.7 V, so any voltage rating will do. This was on the clock before
+step 2's pair and lost to it by ear; it is kept for what was learned
+and for a clock whose RS must stay cool.
+
+It goes the other way and keeps Q1 out of saturation altogether.
 R5 turns each `1` of the bitstream into a fixed charge into the base
 node (the base sits 0.65 V under the rail whatever happens, so R5 is
 a current source of 4.3 V / R5 while GPIO5 is low), CBE holds that
@@ -215,9 +240,7 @@ draws pulses.
   these speakers).
 - **No resistor from base to emitter with CBE.** It would take the
   first 0.65 V / RBE of every bit's current past the base, a dead zone
-  at the quiet end. The earlier form of this step was such a pair
-  (R5 2.2 kΩ, RBE 1 kΩ: Q1 switching hard with a way out for the
-  charge); it is the alternative if the linear stage disappoints.
+  at the quiet end: the two are one or the other.
 - Tones and beeper clips are as loud as before: with GPIO5 low for a
   whole half-wave Q1 goes to the edge of saturation as the switch did,
   its edges rounded over some 20 µs.
@@ -226,13 +249,18 @@ draws pulses.
   collector current dies away as 1/t: 1 mA after a quarter of a
   millisecond, 1 µA after a quarter of a second.
 
-None of this has been on a clock or a breadboard. The model is one
-equation for the base and a current-limited coil (no Early effect, no
-gain that falls with current, a second-order modulator standing in
-for the chip's), so the percentages rank the capacitors and do not
-predict a measurement.
+The percentages are a model's, not a measurement: one equation for
+the base and a current-limited coil (no Early effect, no gain that
+falls with current, a second-order modulator standing in for the
+chip's), so they rank the capacitors and no more. What the clock said
+of it (2026-11-15, 47 nF, no CS, R5 from 5.1 to 20 kΩ): it plays, at
+10 and 12 kΩ with RS no longer hot, and step 2's switch then sounded
+better. What the model leaves out is the likely reason: the
+transistor's gain, which moves with its current, is in the signal
+here and not in a switch, and a current source lets the speaker's
+resonance through, which is the heavier bass.
 
-## The figures, Q1 switching (step 1 alone)
+## The figures, Q1 switching (steps 1 and 2)
 
 Supply taken as 5.0 V with nothing lost in Q1, so the real figures are
 a little lower. "Stuck on" is the fault case, "tone" a square wave half
@@ -269,7 +297,7 @@ the time on, "clip" the bitstream at its loudest sustained level
   Of the three it is the poorest fit.
 - Q1 is inside a TO-92's 625 mW in every case, saturated or not.
 
-## The figures, Q1 linear (step 2)
+## The figures, Q1 linear (the alternative)
 
 A gain of 200 assumed for R5, 0.2 V left across Q1 at the top, the
 bias at half of what is left (2.4 V across LS1's pads). "Clip" is the
@@ -305,7 +333,7 @@ drive Q1 fully on, so those rows of the table above hold here too.
 ```
  +5 V ─────────────┬──────────┐
                    │          │
-                 [CBE]        │E
+                 [RBE]        │E
                    │          │
  GPIO5 ───[R5]─────┴─────────B  Q1  S8550
                               │C
@@ -323,7 +351,7 @@ A capacitor in series with the speaker and a pull-down RP from Q1's
 collector to ground, in place of RS. Q1 charges C1 through the speaker
 and RP discharges it through the speaker, so the speaker carries the
 audio and no steady current. C1 is an electrolytic with its `+` to the
-collector; 47 µF is enough for a 32 Ω speaker. D1, R5 and CBE are as
+collector; 47 µF is enough for a 32 Ω speaker. D1, R5 and RBE are as
 above. The tables are for Q1 switching; the linear stage is after
 them.
 
@@ -375,7 +403,7 @@ discharge.
 - With 33 Ω the current while on is past what 5.1 kΩ at R5 saturates
   a switching Q1 for, so this variant belongs with step 2.
 
-**With Q1 linear (step 2)** RP is the collector's load for the steady
+**With Q1 linear (the alternative)** RP is the collector's load for the steady
 current and the speaker takes only the changes, as in any class A
 stage with a coupled load. The bias that gives both halves of the wave
 the same room is no longer half the supply:
@@ -416,7 +444,7 @@ change.
 ## The rest of the board
 
 - The speaker draws 85 to 167 mA in pulses from the 5 V rail (with
-  step 2, 40 to 80 mA steadily for a clip's length), on top of the
+  the linear stage, 40 to 80 mA steadily for a clip's length), on top of the
   panel and Wi-Fi. Do the README's C3 replacement (10 µF) and use
   a 1 A supply; the board is known to brown out on less.
 - No firmware change is needed. The clips in `clips/` have their bass
@@ -463,16 +491,18 @@ drop or two of hot glue.
 ## Check after fitting
 
 1. Nothing playing: 0 V across LS1's pads. Anything else means Q1 is
-   not fully off; stop and look at R5 and GPIO5.
-2. A clip playing, scope on Q1's collector. Step 1 alone: pulses from
-   0 V to within 0.3 V of the rail (saturated) or to a lower flat top
-   (not saturated), and no excursion below −1 V (D1 works). With
-   step 2 and the 220 nF across the pads: the sound's own waveform
-   around the bias with some millivolts of ripple on it, never flat
-   against the rail on the loud passages (R5 too small). Without the
-   220 nF the ripple reaches both the rail and −0.6 V at the bit
-   rate, and only the mean under it is the sound. A multimeter on DC across the pads reads the bias, 2.0
-   to 2.4 V without C1.
-3. After the alarm has rung for its five minutes: the speaker, RS and
-   Q1 warm at most, the 5 V rail without dips, no self-heal or reset
-   in the log.
+   not fully off; stop and look at RBE, R5 and GPIO5.
+2. A clip playing, scope on Q1's collector: pulses from 0 V to within
+   0.3 V of the rail (saturated) or to a lower flat top (not
+   saturated: a smaller R5), and no excursion below −1 V (D1 works).
+   With the linear stage and the 220 nF across the pads: the sound's
+   own waveform around the bias with some millivolts of ripple on it,
+   never flat against the rail on the loud passages (R5 too small).
+   Without the 220 nF the ripple reaches both the rail and −0.6 V at
+   the bit rate, and only the mean under it is the sound. A
+   multimeter on DC across the pads reads the bias there, 2.0 to
+   2.4 V without C1.
+3. After the alarm has rung for its five minutes: the speaker and Q1
+   warm at most, RS hot and no more than that (0.3 W behind the 8 Ω
+   speaker), the 5 V rail without dips, no self-heal or reset in the
+   log.
