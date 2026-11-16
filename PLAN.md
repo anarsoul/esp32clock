@@ -8762,7 +8762,7 @@ reading moved by 0.1 to 0.3 between samples, with single ones 0.4
 up, where the first run's moved by 0.1; the average's code is as it
 was, and the cause was not looked for.
 
-### The pages after a UX review: PIN at the click, a saved notice, the bad field named — built 2026-11-15, run on test-clock in headless Chromium; the setup form and a real upload not tried
+### The pages after a UX review: PIN at the click, a saved notice, the bad field named — built 2026-11-15, run on test-clock in headless Chromium; the setup form the user's, 2026-11-15; a real upload from the page not tried
 
 A read of the five pages and the setup form as served (white-clock,
 test-clock; markup and scripts, nothing clicked) gave twenty findings;
@@ -8856,7 +8856,7 @@ a save; no dark colour scheme; one title for five pages; `HA` and
 the status line has no `role=status`; Rescan was not traced for what
 it keeps of the typed fields.
 
-### The rest of the UX review — built 2026-11-15, run on test-clock in headless Chromium; the setup form not tried
+### The rest of the UX review — built 2026-11-15, run on test-clock in headless Chromium; the setup form the user's, 2026-11-15
 
 The user, of the findings left above: "do all". What each becomes:
 
@@ -8926,6 +8926,11 @@ is white and the notice `#f66`; under a light one black and `#b00`.
 No script error on any page. Not tried: the setup form (Rescan by
 script, the title `Setup`), a form's post with the clock out of
 reach (the fallback to the browser's submit), a phone's width.
+
+The setup form, the user on the access point, 2026-11-15: "setup
+page works as expected". What was looked at was not said, so the
+notices, `Show the password` and Rescan are taken as seen and no
+more than that.
 
 Later the same day, the user's: the firmware section of the system
 page says `Uploading asks for a PIN, which the clock then shows on
