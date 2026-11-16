@@ -17,6 +17,7 @@
 //
 //   openscad -o lid.stl lid.scad
 //   openscad -o lid-template.stl -D 'part="template"' lid.scad
+//   openscad -o lid-speaker.stl -D speaker=true lid.scad
 //
 // The dimensions marked (caliper) were measured on the original lid.
 // The template is a 0.6 mm test of the panel's outline and the post
@@ -89,6 +90,23 @@ vent_n = 5;
 vent_l = 22;
 vent_w = 1.6;
 vent_pitch = 4;
+
+// Speaker socket (speaker-mod/): a ring on the inner face that a round
+// speaker drops into, cone towards the vents. It is in the middle, where
+// the original lid has its own, and the middle vent group, which lies
+// inside it, is its grille.
+// Printed 2026-11-15 with these figures: a speaker sold as 29 mm (28.4 by
+// caliper) fits well with a TPU ring round it, 28 mm inside and 30.2
+// outside (speaker-mod/speaker_shim.3mf).
+speaker = false;
+speaker_d = 30;       // the socket's inner diameter
+speaker_depth = 5;    // the ring's height above the seat
+speaker_seat_d = 27;  // the seat's inner diameter: a ledge inside the ring that the
+speaker_seat_h = 1;   // speaker's rim sits on, this high, so the cone clears the plate
+speaker_wall = 1.6;
+speaker_x = 0;        // the socket's centre along the clock
+speaker_wire_w = 10;  // the cut in the ring for the wires
+speaker_wire_a = 0;   // where the cut faces: 0 is the button end, 180 the USB end
 
 $fn = 48;
 eps = 0.01;
@@ -182,6 +200,23 @@ module vent_slots() {
                     translate([0, sy * (vent_l - vent_w) / 2]) circle(d = vent_w);
 }
 
+module speaker_socket() {
+    ring_h = speaker_seat_h + speaker_depth;
+    translate([speaker_x, 0, top_t - eps]) {
+        difference() {
+            cylinder(d = speaker_d + 2 * speaker_wall, h = ring_h + eps, $fn = 96);
+            translate([0, 0, -1]) cylinder(d = speaker_d, h = ring_h + 2, $fn = 96);
+            rotate([0, 0, speaker_wire_a]) translate([0, -speaker_wire_w / 2, -1])
+                cube([speaker_d, speaker_wire_w, ring_h + 2]);
+        }
+        // the seat goes all the way round, under the wire cut too, so the rim seals
+        difference() {
+            cylinder(d = speaker_d + eps, h = speaker_seat_h + eps, $fn = 96);
+            translate([0, 0, -1]) cylinder(d = speaker_seat_d, h = speaker_seat_h + 2, $fn = 96);
+        }
+    }
+}
+
 module lid() {
     difference() {
         union() {
@@ -193,6 +228,8 @@ module lid() {
         post_holes();
         if (vents) vent_slots();
     }
+    // after the vents, so a seat wider than this one bridges the slots' ends
+    if (speaker) speaker_socket();
 }
 
 module template() {

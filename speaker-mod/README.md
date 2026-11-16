@@ -432,6 +432,34 @@ change.
   high-pass, 100 to 300 Hz: a speaker this size does nothing with the
   bass but heat up. With no limiter at all the clips were too quiet.
 
+## The speaker in the lid
+
+The raised lid (`lid/lid.scad`) has a socket for a round speaker,
+switched on with `speaker=true`:
+
+```
+openscad -o lid-speaker.stl -D speaker=true lid/lid.scad
+```
+
+`lid/lid-speaker-printed.stl` is the one printed and fitted on
+2026-11-15. The socket is a ring on the lid's inner face, in the
+middle, where the original lid has its own: 30 mm inside and 5 mm
+deep, with a 10 mm cut for the wires facing the button end, where the
+buzzer's pads are. Inside it is a ledge 1 mm high and 1.5 mm wide (27 mm
+inside) that the speaker's rim sits on, so the cone stays clear of the
+plate and the rim seals all round. The lid's middle group of vent
+slots lies inside the ring and is the speaker's grille. The figures
+are parameters at the top of the file (`speaker_d`, `speaker_depth`,
+`speaker_seat_d`, `speaker_seat_h`, `speaker_wire_w`,
+`speaker_wire_a`).
+
+The speaker goes in cone towards the vents. One sold as 29 mm
+measured 28.4 mm, and is held by a ring printed in TPU,
+`speaker_shim.3mf`: 28 mm inside, 30.2 mm outside, 5 mm tall, pushed
+over the speaker and then into the socket. That one needed no glue. If
+the fit is not tight, scale the ring in the slicer, or hold it with a
+drop or two of hot glue.
+
 ## Check after fitting
 
 1. Nothing playing: 0 V across LS1's pads. Anything else means Q1 is
