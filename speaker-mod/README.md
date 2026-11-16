@@ -8,6 +8,29 @@ fitting" section says what to measure before trusting it.
 The priorities, in this order: few changes to the board, nothing
 overloaded (speaker, Q1, GPIO5, the 5 V supply), then the sound.
 
+## The short version
+
+The one that has been on a clock (2026-11-15), and the easiest with a
+sound that is good enough:
+
+- the speaker in LS1's pads, with RS in its lead unless it is the
+  32 Ω 0.5 W one;
+- D1, a 1N4148, across the pads;
+- CBE, 47 nF or 33 nF, across Q1's base and emitter legs;
+- R5 left as the kit has it, 10 kΩ.
+
+The 32 Ω 0.5 W speaker is the one to want: no RS, nothing that gets
+hot, and 6 dB more than the 8 Ω 0.25 W one, which works too, behind
+its 22 Ω (two 47 Ω in parallel on the clock tried).
+
+10 kΩ is right for a load near 30 Ω (the bare 32 Ω speaker, or 8 Ω
+and its RS) and a transistor like the one tried, whose gain was near
+300; one with less gain is only quieter. The 32 Ω 0.25 W speaker
+behind 27 Ω is twice the load and wants about 20 kΩ. Read the DC
+voltage across the pads while a clip plays: 2.0 to 2.8 V is in order,
+3 V or more (or an RS too hot to touch) wants a larger R5. The rest
+of this page is the reasoning, the figures and the other variants.
+
 ## The stage as the kit has it
 
 ```
