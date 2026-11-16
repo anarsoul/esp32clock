@@ -9085,3 +9085,82 @@ scripts/mkpack.py packs/clips-local-speaker.bin clips/trantor.bpr packs/speaker/
 version" (the user, of the second pack). The speaker's clips are the
 buzzer's with the high-pass at 100 Hz once and `--release 10`; the
 PT3 tunes limited that way included.
+
+### Backlog, board revision: a line output on the adapter for an amplifier — an idea of 2026-11-15, nothing built or measured; to be tried on the bench board when the amplifiers arrive
+
+The user's, of the speaker mod: with a proper amplifier in place of
+Q1 as the output stage, the adapter can carry the filter, and the
+amplifier's input is soldered to a pad on the adapter. The amplifier
+then has the converter's bits from the pin and no saturating
+transistor between. Everything below is reasoned, not measured.
+
+**The design, the user's of 2026-11-15: a pin of its own and a
+setting that chooses the output.** "That would be cleaner: you
+cannot mess up your board by using wrong firmware version." The
+line output is a second GPIO, push-pull, and GPIO5 stays what it is,
+open-drain to Q1. One firmware and one release image serve both
+kinds of clock, and a wrong setting is silence and never a buzzer
+held on: `line` on a stock clock drives a pin nothing is soldered
+to, `buzzer` on a clock with an amplifier plays into Q1 as it always
+did.
+
+- The pin: GPIO20, the user's yes of 2026-11-15. The firmware uses 0, 1 and 3 to
+  9. GPIO10, the first thought, has the module's own LED on it on
+  both the SuperMini and the Zero (the user, 2026-11-15), which the
+  converter's bits would light. GPIO2 is a strapping pin that must
+  read high at reset, and the filter's capacitor and divider would
+  hold it low. GPIO21 is UART0's TX and carries the ROM's boot text
+  into the amplifier at every reset. GPIO18 and 19 are the USB.
+  GPIO20 is UART0's RX, which nothing uses (the console is the USB
+  one): an input with a pull-up while the ROM runs, so the filter
+  sees one step to 3.3 V at a reset and no data. Where it comes
+  out on each adapter's layout is for the board's drawing.
+- The parts, from the pin to the pad: two RC stages, 1 kΩ / 10 nF and
+  then 10 kΩ / 1 nF (the second at ten times the impedance, so it
+  does not load the first; −3 dB near 10 kHz, 8.2 nF / 820 pF if that
+  is dull); a resistor to ground as a divider, or a trimmer's
+  footprint, since a full-scale clip is about 1 V rms off a 3.3 V pin
+  and a module of the PAM8302's kind (24 dB) clips near 0.1 V rms
+  (about 1.2 kΩ under the 11 kΩ for a tenth; the amplifier's input
+  impedance is in parallel with it, so the level is to be checked on
+  the module); a series capacitor, about 1 µF (many modules have
+  their own).
+- The setting: `output`, `buzzer` (the default, and what every older
+  record reads as) or `line`; a new record version, on `/settings`
+  and in `/api`, not in `mqtt::SET_KEYS`. Read at boot, and a save
+  that changes it resets the clock as a change of network does: the
+  buzzer task's LEDC and the clip task's pin handle are made once in
+  `main.rs`, and swapping them under a playing tune is not worth the
+  code.
+- On `line` the clip's I2S signal goes to that pin through the GPIO
+  matrix without the inverter, and the beeps' LEDC to the same pin,
+  both push-pull; GPIO5 is left released for the whole boot. The pin
+  rests driven low, so the rest is the ground and the rail's noise
+  is not in it, and the clip's ramps start from and return to the
+  bottom rail as they do from the released line now. Whether 30 ms
+  of ramp is a thump through the capacitor is to be heard.
+- The thermometer's hold (`sensors::Hold`) is for Q1's heat and does
+  not apply on `line`.
+- Still true: 3V3 is the converter's reference while a clip plays,
+  so the Wi-Fi's bursts on that rail are in the audio; if they are
+  heard, a single-gate buffer from an RC-filtered supply is the fix,
+  a footprint at most. The amplifier's shutdown pin on one more GPIO
+  is a thought for the idle current, not a plan.
+
+**A first try that needs no firmware: a pull-up on GPIO5.** For the
+bench, before the setting exists, and not for the board. A 470 Ω
+pull-up from the GPIO5 net to 3V3 (never to 5 V), then 10 kΩ /
+680 pF twice (−3 dB near 9 kHz), about 2.2 kΩ to ground for a tenth,
+the capacitor. The line stays open-drain, the beeps work as they
+are, the released line is the top rail, which the ramps already
+start from, and the audio is inverted, which nobody hears. The
+filter charges through the pull-up and R1 and discharges through R1
+alone: a second harmonic of about (Rp/R1)·a/2, some 1 % at full
+scale; 7 mA while the pin is low. A high line turns Q1 on through
+R5, so the buzzer must be off the board, as the speaker mod has it;
+Q1 may stay.
+
+To try on the bench board, in this order: the pull-up and the filter
+on a breadboard with the firmware as it is, the level at the
+amplifier's input, the hiss with a silent clip and with Wi-Fi busy;
+then the setting and the new pin, and the two side by side.
