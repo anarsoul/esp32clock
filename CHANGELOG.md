@@ -47,8 +47,8 @@ from `http://<ip>/update`; its settings survive the update.
 
 - Three more alarm melodies that are not beeps: the title music of
   *Trantor: The Last Stormtrooper* by David Whittaker, as the ZX
-  Spectrum's speaker played it, and two chiptunes by Orion, "Halftime"
-  and "Keygen", played from their tracker modules by a player in the
+  Spectrum's speaker played it, and two chiptunes by Dualtrax (from
+  ORiON's key generators), "Halftime" and "Keygen", played from their tracker modules by a player in the
   firmware. They go out of the buzzer pin as a bitstream from I2S (the
   modules and PCM clips through its PCM-to-PDM converter, at 256 bits
   a sample; `CLIP_MODULATOR=sd` at build time is a software

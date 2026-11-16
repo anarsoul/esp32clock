@@ -27,10 +27,13 @@ point where the game starts it over; pulses as played). It is not a new arrangem
 
 ## `halftime.xmc` and `keygen.xmc`
 
-Two chiptunes by **Orion**, written as FastTracker 2 modules for
-software key generators: "halftime" and "keygentune2003 orn". The
-music is his; copyright remains with him, and nothing here grants any
-right to it.
+Two chiptunes by **Dualtrax** (of Chemical Reaction and Analogik),
+written as FastTracker 2 modules for the key generators of the group
+ORiON: "halftime" (2002) and "keygentune2003 orn". The modules are
+signed in their instrument names, `dt/cro/analogik` and
+`dualtrax/cro/`; see [Dualtrax on Demozoo](https://demozoo.org/sceners/5763/).
+The music is Dualtrax's; copyright remains with its author, and
+nothing here grants any right to it.
 
 The modules themselves are in `mods/` as they were found, and these
 two files are what `scripts/xm2clip.py` makes of them for the clock's

@@ -37,7 +37,8 @@ of. `CLAUDE.md` is a symlink to this file; edit this one.
   by git. Read it; do not modify it.
 - `clips/` holds the clips of the default clip pack
   (`scripts/clips.sh`, the CI and the release make it): Trantor's title
-  music and two of Orion's modules, whose sources are in `mods/`. They
+  music and two of Dualtrax's modules (written for ORiON's key
+  generators, hence the file names), whose sources are in `mods/`. They
   are other people's music, not under the project's licence;
   `clips/README.md` credits each and must go on doing so. A clip
   nobody may redistribute stays in the ignored `wav/`, `tap/`, `sid/` and `pt3/`,
