@@ -42,7 +42,7 @@ use embassy_time::{Duration, with_timeout};
 use embedded_io_async::{Read, Write};
 use log::{info, warn};
 
-use onebitdawn_core::http::{HEADERS_MAX, Method, Own, PAGE_MAX, RESPONSE_BUF, Refused, admit, parse_head};
+use onebitdawn_core::http::{BODY_MAX, HEADERS_MAX, Method, Own, PAGE_MAX, RESPONSE_BUF, Refused, admit, parse_head};
 
 use crate::buzzer;
 use crate::config::HTTP_PORT;
@@ -68,7 +68,6 @@ pub const LISTENERS: usize = 3;
 const RX_BUF: usize = 4096;
 const TX_BUF: usize = 1024;
 const REQUEST_BUF: usize = 1536;
-const BODY_MAX: usize = 512;
 
 /// A client that stalls this long mid-transfer is dropped.
 const TIMEOUT: Duration = Duration::from_secs(5);

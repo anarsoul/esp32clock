@@ -428,11 +428,14 @@ Nits:
   the silent close of the open "oversized requests" item, on the one
   page whose user cannot see the log.
   Checked 2026-11-17: the form also posts the timezone, the hostname
-  and the transmit power now, and a body is refused over `BODY_MAX`
-  (512) whatever the head leaves: every field full and every byte of
-  the names, the password and the rule escaped is over that by an
-  estimate (not computed in a test), a network picked from the list
-  with an ordinary password well under.
+  and the transmit power now, and a body was refused over `BODY_MAX`
+  (512) whatever the head left. Measured by a test the same day
+  (`forms_fit_the_request_body`): 605 bytes with both names, the
+  password and the timezone full and every byte escaped, so
+  `BODY_MAX` is 640 now (built and tested on the host, not on a
+  clock). What is left of the item is the head: at 605 of body it has
+  931 bytes of the 1536, against the 750 or so given above for a
+  phone.
 - **No error from `ap_task` is ever healed.** A failed `set_config`
   logs once and sleeps for ever; the panel shows `AP` with no network
   and only a power cycle or a hold helps. Unlikely with the

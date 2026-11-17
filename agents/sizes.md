@@ -53,6 +53,12 @@ The setup page's network list:
   one segment per round trip.
 - `REQUEST_BUF` (1536) bounds the head; an upload's body stays on the
   socket.
+- A form's or `/api`'s body is read into what the head leaves of that
+  buffer and may be `http::BODY_MAX` (640) at most; over either, the
+  socket is closed with no answer. `forms_fit_the_request_body`
+  measures each form at its worst (`-- --nocapture` prints them): the
+  setup form 605, the Home Assistant form 404, the settings form 255,
+  the clock page's 165. With the setup form at 605 the head has 931.
 - `form::apply` decodes each key into 16 bytes and each value into 64
   (`form::VALUE_MAX`, the password); longer input is reported as a bad
   key or value before parsing.

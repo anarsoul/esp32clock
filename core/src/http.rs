@@ -19,6 +19,16 @@ pub const RESPONSE_BUF: usize = 8 * 1024;
 /// rounded up with room to grow.
 pub const PAGE_MAX: usize = RESPONSE_BUF - 160;
 
+/// The longest body of a request that is not an upload: a form or an
+/// `/api` post. A longer one is not read, and the socket is closed with
+/// no answer. The forms at their worst are measured against it by the
+/// tests in `form`: the setup form is the longest, 605 bytes with both
+/// of its network names, the password and the timezone full and every
+/// byte of them escaped, which 512 did not hold (2026-11-17). No
+/// buffer is this long: the body is read into what the head leaves of
+/// the firmware's request buffer, and has to fit there as well.
+pub const BODY_MAX: usize = 640;
+
 /// The longest head `status_line` writes: `200 OK` with the pages'
 /// content type.
 pub const HEADERS_MAX: usize = 126;

@@ -311,7 +311,9 @@ Each with its figures in `agents/sizes.md`.
   `form::NETWORK_LIST_BUDGET`. `src/tz.js` is held under the buffer by
   a `const` assert.
 - `http::REQUEST_BUF` bounds a request's head; a body stays on the
-  socket. `form::apply` decodes a key into 16 bytes and a value into
+  socket. A form's body must fit `http::BODY_MAX`, which the `form`
+  tests measure each form against: run them after adding a field.
+  `form::apply` decodes a key into 16 bytes and a value into
   `form::VALUE_MAX`.
 - An OTA image must fit a slot and a pack the `clips` partition
   (`partitions.csv`).

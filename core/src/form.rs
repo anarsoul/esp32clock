@@ -1882,6 +1882,112 @@ mod tests {
         names
     }
 
+    /// A value as a browser puts it in a form's body
+    /// (`application/x-www-form-urlencoded`): letters, digits and
+    /// `*-._` as they are, a space as `+`, any other byte as `%XX`.
+    fn urlencoded(value: &str) -> String {
+        let mut out = String::new();
+        for b in value.bytes() {
+            match b {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'*' | b'-' | b'.' | b'_' => out.push(b as char),
+                b' ' => out.push('+'),
+                _ => out.push_str(&format!("%{b:02X}")),
+            }
+        }
+        out
+    }
+
+    /// A form's body from its pairs, in the order given.
+    fn form_body(pairs: &[(&str, String)]) -> String {
+        pairs.iter().map(|(k, v)| format!("{k}={}", urlencoded(v))).collect::<Vec<_>>().join("&")
+    }
+
+    /// The names of `pairs`, each once: what `field_names` gives for
+    /// the page, so a field added to a page fails here until it is
+    /// counted.
+    fn names_of<'a>(pairs: &[(&'a str, String)]) -> Vec<&'a str> {
+        let mut names: Vec<&str> = Vec::new();
+        for (k, _) in pairs {
+            if !names.contains(k) {
+                names.push(k);
+            }
+        }
+        names
+    }
+
+    /// The body of each of the four forms at its longest against
+    /// `http::BODY_MAX`, over which the firmware closes the socket
+    /// with no answer. Every field holds the longest value its
+    /// `maxlength` and the setting's rule allow, in bytes that are all
+    /// escaped where the rule lets them be: a quote for the network's
+    /// names and the passwords, `<` for the timezone (not a rule that
+    /// parses, but a refused form is read too, to be answered). Every
+    /// box is ticked, so the hidden `0` and the `on` are both sent.
+    #[test]
+    fn forms_fit_the_request_body() {
+        use crate::http::BODY_MAX;
+        let q = |n: usize| "\"".repeat(n);
+        let longest = |names: &mut dyn Iterator<Item = &str>| names.max_by_key(|n| urlencoded(n).len()).unwrap().to_string();
+        let tz = "<".repeat(TZ_MAX);
+        let hostname = "h".repeat(HOSTNAME_MAX);
+        let tx_power = longest(&mut TX_POWER_CHOICES.iter().map(|(n, _)| *n));
+        let on = || "on".to_string();
+        let zero = || "0".to_string();
+
+        let setup = [
+            ("ssid_pick", q(SSID_MAX)),
+            ("ssid", q(SSID_MAX)),
+            ("password", q(PASSWORD_MAX)),
+            ("tz", tz.clone()),
+            ("hostname", hostname.clone()),
+            ("tx_power", tx_power.clone()),
+        ];
+        let mut clock = vec![("armed", zero()), ("armed", on()), ("alarm", "23:59".to_string())];
+        clock.extend(DAY_NAMES.iter().map(|d| ("days", d.to_string())));
+        clock.extend([
+            ("skip", zero()),
+            ("skip", on()),
+            ("melody", "m".repeat(crate::pack::NAME_MAX)),
+            ("color", longest(&mut PALETTE_NAMES.iter().copied())),
+            ("brightness", "100".to_string()),
+        ]);
+        let settings = [
+            ("tz", tz),
+            ("twelve_hour", zero()),
+            ("twelve_hour", on()),
+            ("temp_show", longest(&mut TempShow::NAMES.iter().copied())),
+            ("temp_offset", format!("-{}.{}", TEMP_OFFSET_LIMIT_DC / 10, TEMP_OFFSET_LIMIT_DC % 10)),
+            ("hostname", hostname),
+            ("tx_power", tx_power),
+        ];
+        let ha = [
+            ("mqtt_host", "h".repeat(BROKER_HOST_MAX)),
+            ("mqtt_port", "65535".to_string()),
+            ("mqtt_user", q(BROKER_USER_MAX)),
+            ("mqtt_password", q(BROKER_PASSWORD_MAX)),
+        ];
+
+        // Each list is the page's own fields.
+        let out = pages(&Settings::DEFAULT, &status(true), Note::None);
+        let mut provision = String::new();
+        write_provision_page(&mut provision, &Settings::DEFAULT, &status(false), &[], Note::None).unwrap();
+        assert_eq!(names_of(&setup), field_names(&provision));
+        assert_eq!(names_of(&clock), field_names(&out[0]));
+        assert_eq!(names_of(&settings), field_names(&out[1]));
+        assert_eq!(names_of(&ha), field_names(&out[2]));
+
+        let sizes = [
+            ("setup", form_body(&setup).len()),
+            ("clock", form_body(&clock).len()),
+            ("settings", form_body(&settings).len()),
+            ("ha", form_body(&ha).len()),
+        ];
+        println!("form bodies at their worst, of {BODY_MAX}: {sizes:?}");
+        for (form, size) in sizes {
+            assert!(size <= BODY_MAX, "the {form} form's body can be {size} bytes, over {BODY_MAX}");
+        }
+    }
+
     /// Every page at its longest: every string at its limit, the notice,
     /// a custom day list, every checkbox, the longest status.
     #[test]
