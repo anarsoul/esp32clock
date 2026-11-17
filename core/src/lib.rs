@@ -15,6 +15,7 @@
 
 #![cfg_attr(not(test), no_std)]
 
+pub mod adpcm;
 pub mod aip33628;
 pub mod ay;
 pub mod auth;

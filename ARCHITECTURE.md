@@ -30,7 +30,7 @@ shape everything else:
 
 | crate | what it holds |
 | --- | --- |
-| `core/` (`esp32clock-core`) | hardware-independent logic: the driver's wire format, panel map and font, UI state machine, settings and their flash record, form parser and HTML pages, HTTP head parser, auth rules, timezone rules, MQTT topics and discovery payload, the sound players (PCM, beeper, XM, SID, AY/PT3), sensor tables. Builds for the host; each module ends with its tests |
+| `core/` (`esp32clock-core`) | hardware-independent logic: the driver's wire format, panel map and font, UI state machine, settings and their flash record, form parser and HTML pages, HTTP head parser, auth rules, timezone rules, MQTT topics and discovery payload, the sound players (PCM, ADPCM, beeper, XM, SID, AY/PT3), sensor tables. Builds for the host; each module ends with its tests |
 | root (`esp32clock`) | the tasks and drivers around it: `src/*.rs` and `src/bin/main.rs`. Re-exports `core`'s modules from `src/lib.rs`, so both halves are `crate::…` |
 
 A module with both halves has the same name in each crate (`clock`,
@@ -141,8 +141,9 @@ level, so the pin is open drain throughout and released means silent.
   read in place, checked by a SHA-256 at boot; or, with no pack, files
   built into the image (`ALARM_CLIP`). The melody table is the note
   melodies and then the clips of whichever is in force
-  (`melody::get`). A clip is one of five kinds told apart
-  by their first bytes (`clip::Stream`): raw PCM, a ZX Spectrum beeper
+  (`melody::get`). A clip is one of six kinds told apart
+  by their first bytes (`clip::Stream`): raw PCM, the same as IMA
+  ADPCM at four bits a sample (`adpcm`), a ZX Spectrum beeper
   bitstream, a FastTracker module (`xm`), a Commodore 64 register log
   played through a software SID (`sid`), a Pro Tracker 3 module played
   through a software AY-3-8910 (`pt3`, `ay`). The players are pure and

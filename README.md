@@ -323,6 +323,10 @@ an upload. The alarm sound is stored by its place in the list, so
 check it after changing packs; a sound that is no longer there is the
 beeps.
 
+Sampled sound is made with `scripts/wav2pcm.sh in.wav wav/tune.pcm`
+(16 KB of flash a second), or with the output named `wav/tune.adp` as
+IMA ADPCM at half that, with a little noise added.
+
 A clock flashed before the partition existed keeps its old partition
 table through updates over the LAN: it runs the new firmware, with the
 note melodies only, until it is flashed once over USB or from the web

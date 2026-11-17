@@ -37,6 +37,7 @@
 
 use core::ops::Range;
 
+use crate::adpcm;
 use crate::config;
 use crate::pt3;
 use crate::refs::{self, Refs};
@@ -122,6 +123,8 @@ pub const RAMP: usize = 240;
 enum Body<'a> {
     /// Raw PCM, as it is.
     Pcm(&'a [u8]),
+    /// PCM at four bits a sample, decoded as it goes (`adpcm::Decoder`).
+    Adpcm(adpcm::Decoder<'a>),
     /// A tracker module, played as it goes (`xm::Tune`).
     Tune(xm::Tune<'a>),
     /// A Commodore 64 tune, the same (`sid::Tune`).
@@ -198,6 +201,15 @@ impl<'a> Player<'a> {
         self.step = if ratio.is_some() { CONVERTER_LEVEL } else { LEVEL };
     }
 
+    /// The clip `data`, PCM as ADPCM, as this player's body, for
+    /// `Stream::new`.
+    fn take_adpcm(&mut self, data: &'a [u8]) {
+        let decoder = adpcm::Decoder::new(data);
+        self.len = Some(decoder.len());
+        self.pcm_hz = adpcm::rate(data);
+        self.body = Body::Adpcm(decoder);
+    }
+
     /// The clip `data`, a tracker module, as this player's body. This
     /// and the two after it are for `Stream::new`, which says why they
     /// are not inlined.
@@ -239,6 +251,12 @@ impl<'a> Player<'a> {
         match &mut self.body {
             Body::Pcm(pcm) if looping && !pcm.is_empty() => self.len = None,
             Body::Pcm(_) => {}
+            Body::Adpcm(decoder) => {
+                decoder.set_looping(looping);
+                if looping && !decoder.is_empty() {
+                    self.len = None;
+                }
+            }
             Body::Tune(tune) => tune.set_looping(looping),
             Body::Sid(tune) => tune.set_looping(looping),
             Body::Ay(tune) => tune.set_looping(looping),
@@ -253,12 +271,14 @@ impl<'a> Player<'a> {
             return Some(-FULL + FULL * k as i32 / RAMP as i32);
         }
         if self.len.is_none_or(|n| k < RAMP + n) {
-            // A tune's sample is in `xm::STEP`ths of PCM's step.
+            // A tune's sample is in `xm::STEP`ths of PCM's step, and
+            // so is ADPCM's.
             let step = self.step;
             let pcm_level = |s: u8| (s as i32 - 128) * step;
             let level = match &mut self.body {
                 Body::Pcm(pcm) if self.looping && !pcm.is_empty() => Some(pcm_level(pcm[(k - RAMP) % pcm.len()])),
                 Body::Pcm(pcm) => pcm.get(k - RAMP).copied().map(pcm_level),
+                Body::Adpcm(decoder) => decoder.next_sample().map(|s| s as i32 * step / xm::STEP),
                 Body::Tune(tune) => tune.next_sample().map(|s| s as i32 * step / xm::STEP),
                 Body::Sid(tune) => tune.next_sample().map(|s| s as i32 * step / xm::STEP),
                 Body::Ay(tune) => tune.next_sample().map(|s| s as i32 * step / xm::STEP),
@@ -275,7 +295,7 @@ impl<'a> Player<'a> {
     /// Samples a second the body gives.
     pub fn sample_rate(&self) -> u32 {
         match &self.body {
-            Body::Pcm(_) => self.pcm_hz,
+            Body::Pcm(_) | Body::Adpcm(_) => self.pcm_hz,
             Body::Tune(tune) => tune.rate(),
             Body::Sid(tune) => tune.rate(),
             Body::Ay(tune) => tune.rate(),
@@ -518,6 +538,8 @@ pub const fn duration_ms(data: &[u8]) -> u32 {
     if is_beeper(data) {
         let ticks = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
         (ticks as u64 * 1000 / BEEPER_TICK_HZ as u64) as u32
+    } else if adpcm::is_clip(data) {
+        adpcm::duration_ms(data)
     } else if xm::is_tune(data) {
         xm::duration_ms(data)
     } else if sid::is_tune(data) {
@@ -695,8 +717,8 @@ impl RunSource for Beeper<'_> {
 /// A clip of any kind as the line's bitstream.
 #[allow(clippy::large_enum_variant, reason = "there is no heap to box the tune's state in, and one clip plays at a time")]
 pub enum Stream<'a> {
-    /// PCM, or a tracker module, a SID tune or a PT3 module through the
-    /// same modulator.
+    /// PCM, as it is or as ADPCM, or a tracker module, a SID tune or
+    /// a PT3 module through the same modulator.
     Pcm(Player<'a>),
     Beeper(Runs<Beeper<'a>>),
 }
@@ -715,10 +737,12 @@ impl<'a> Stream<'a> {
         if is_beeper(data) {
             return Self::Beeper(Runs::new(Beeper::new(data).looped(looping)));
         }
-        let tune = xm::is_tune(data) || sid::is_tune(data) || pt3::is_tune(data);
+        let tune = adpcm::is_clip(data) || xm::is_tune(data) || sid::is_tune(data) || pt3::is_tune(data);
         let mut stream = Self::Pcm(if tune { Player::new(&[]) } else { Player::pcm(data) });
         if let Self::Pcm(player) = &mut stream {
-            if xm::is_tune(data) {
+            if adpcm::is_clip(data) {
+                player.take_adpcm(data);
+            } else if xm::is_tune(data) {
                 player.take_tune(data);
             } else if sid::is_tune(data) {
                 player.take_sid(data);
@@ -1481,6 +1505,29 @@ mod tests {
                 assert_eq!(i16::from_le_bytes(*pair) as i32, tune.next_sample().unwrap() as i32 * CONVERTER_LEVEL / xm::STEP / 2, "sample {i}");
             }
         }
+        // So do ADPCM's: sixteen bits, not through PCM's eight.
+        let mut clip = adpcm::MAGIC.to_vec();
+        clip.extend_from_slice(&16_000u32.to_le_bytes());
+        clip.extend((0..600u32).map(|i| (i * 37 % 251) as u8));
+        let mut stream = Stream::new(&clip, false);
+        assert_eq!((stream.sample_rate(), duration_ms(&clip)), (16_000, 75));
+        if let Stream::Pcm(p) = &mut stream {
+            assert_eq!(p.periods(), 2 * RAMP + 1200 - 1);
+            p.set_converter(Some(128));
+            let mut out = vec![0u8; 2 * (RAMP + 1200 + RAMP)];
+            p.fill(&mut out);
+            let got: Vec<i16> = out.as_chunks::<2>().0.iter().map(|p| i16::from_le_bytes(*p)).collect();
+            let mut decoder = adpcm::Decoder::new(&clip);
+            for (i, &s) in got[RAMP - 1..RAMP - 1 + 1200].iter().enumerate() {
+                assert_eq!(s as i32, decoder.next_sample().unwrap() as i32 * CONVERTER_LEVEL / xm::STEP / 2, "sample {i}");
+            }
+            assert!(p.done() && got[RAMP - 1 + 1200..].windows(2).all(|w| w[0] >= w[1]), "then the ramp down");
+        }
+        // Looped, it never ends and goes round with no ramp between.
+        let mut stream = Stream::new(&clip, true);
+        let mut out = vec![0u8; CHUNK];
+        (0..40).for_each(|_| stream.fill(&mut out));
+        assert!(!stream.done());
         // The build's choice is every PCM clip's and module's, and never
         // a beeper clip's; the stream's rest follows.
         let runs = beeper_clip(&[3, 5]);

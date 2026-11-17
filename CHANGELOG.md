@@ -31,6 +31,11 @@ from `http://<ip>/update`; its settings survive the update.
 
 ### Added
 
+- A sampled clip can be IMA ADPCM, four bits a sample: half the flash
+  of the same clip as PCM, 8 KB a second at 16 kHz.
+  `scripts/wav2pcm.sh in.wav out.adp` makes one from a sound file and
+  `scripts/adpcm.py` from a PCM clip. A firmware before this one plays
+  such a clip as noise.
 - The Wi-Fi transmit power is a setting (`tx_power` in `/api`, a
   select on `/settings`): the driver's levels from 2 to 16 dBm, 16
   being the default and the most there is, for a clock whose antenna

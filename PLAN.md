@@ -9335,6 +9335,87 @@ day and tested on the host; the local packs made again with it.
   project's has a SID tune, so nothing shipped changes.
 - Trantor packs to the same 67 559 bytes through `packrefs.py`.
 
+### PCM clips at half the flash: IMA ADPCM, `ADP1` — the A/B heard on white-clock 2026-11-16 ("not bad", "way better than PCM 8k"); the format built 2026-11-16 and heard by the user on a speaker the same day ("audible, but acceptable"); the buzzer through the clock's own decoder and the serial log's clip line not yet
+
+The user, 2026-11-16: would the references of `BPR3` and `SID2` (an
+LZ) do for PCM too?
+
+**What was measured** (the clips in `wav/`):
+
+- No. lz4 -9, references with no entropy coder as `refs` is, takes
+  0.6 % off Futurama at 16 kHz and 1 % off a rendered Halftime; gzip
+  4 %, xz 6 %. Under 1 % of the 8-byte windows of a clip have been in
+  it before: a bar played again is not the same samples. The samples
+  are 7.7 bits each by their histogram and their differences 7.8 to
+  8.0, the 900 Hz high-pass and 20 dB of limiter having left
+  something near noise, so an entropy coder has nothing either.
+- The lossy way, IMA ADPCM at 4 bits a sample, is 2:1 exactly. Its
+  error on Futurama (16 kHz, the buzzer's clip) is 17.6 dB under the
+  signal, 20.5 on the clip made flat for a speaker: it predicts a
+  sample from the last, and there is little to predict.
+- The A/B, with no decoder on the clock: the clip encoded and decoded
+  on the host and stored as PCM, in one pack with the clip as it was
+  (A), the round trip (B) and the 8 kHz clip (C), which is the same
+  flash as B today. The user on white-clock: B "is not bad. I hear the
+  difference, but yet it is way better than PCM 8k".
+- sox's own encoder (`-t ima`) does worse on the same clip, 13.7 dB,
+  so the encoder is the project's. One that keeps the four best paths
+  through the coder's states (a beam, as ffmpeg's trellis) gains
+  0.9 dB over the plain one, 1.3 with sixteen, at no cost to the
+  decoder.
+
+**Design:**
+
+- A sixth kind of clip, `ADP1`: the magic, the rate as a `u32`
+  (8000, 16000 or 31250, as `PCM1`), then the codes, two a byte, the
+  high nibble first, which is sox's raw `ima`, so a clip's body plays
+  on the host (`tail -c +9 clip.adp | play -t ima -r 16000 -c 1 -`).
+  The coder starts from a prediction of 0 and step index 0; a clip
+  has as many samples as it has nibbles.
+- `core/src/adpcm.rs`: `Decoder`, the standard IMA step with its two
+  tables, the codes read in place, three words of state. Going round
+  for a ringing alarm starts the state over with the clip.
+- `clip::Player` gets it as a body beside the tunes; its samples are
+  16 bits, in `xm::STEP`ths of PCM's step, so they go to the
+  converter as a tune's do and not through 8 bits.
+- `scripts/adpcm.py` is the encoder (16-bit raw or a PCM clip in,
+  `--search` paths kept, 4 by default) and, with `--decode`, the way
+  back to 16-bit raw. `scripts/wav2pcm.sh` writes ADPCM when the
+  output's name ends in `.adp`, from sox's 16-bit samples.
+- Not looped unless asked, as PCM; `mkpack.py` and `ALARM_CLIP` need
+  nothing.
+- Tests: the decoder against samples sox decoded from the same codes,
+  a sine through an encoder in the test and back, the end, the loop,
+  a bad rate, the clip through `Player` to the converter's samples.
+
+**Built, 2026-11-16:**
+
+- As designed; 168 host tests. `Player` builds the decoder in place
+  (`take_adpcm`), a few words, so the clip task's frame is as it was.
+- Futurama (27.6 s at 16 kHz) is 221 109 bytes for 442 209, the
+  error 18.4 dB under the signal with four paths and 17.6 with the
+  plain encoder, which is what the user heard; the encoder takes 36 s
+  for it. sox decodes the clip's body to the samples
+  `adpcm.py --decode` gives.
+- A firmware before this takes an `ADP1` clip for bare PCM at 8 kHz
+  and plays noise, so a pack with one needs the firmware first.
+- `packs/ab/adpcm.bin` is now the default clips, Futurama as PCM and
+  Futurama as ADPCM, encoded from the PCM clip so the two differ by
+  the coder alone. Owed: heard on a clock, with the clip's line in
+  the serial log (the fill time against PCM's).
+- `packs/ab/adpcm-speaker.bin`: the local speaker pack in its order,
+  its Futurama (`packs/speaker/futurama.pcm`, a 100 Hz high-pass and
+  10 dB of drive) as A and the same as ADPCM, 19.0 dB, as the ninth
+  clip, B. The user, 2026-11-16, with the decoder on the clock: "The
+  difference is audible, but acceptable." So ADPCM is a choice for a
+  clip that has to be smaller, not a replacement for PCM.
+- The user then: Futurama as ADPCM in the local packs.
+  `wav/futurama.adp` and `packs/speaker/futurama.adp`, each from its
+  PCM clip, take the PCM's place in `packs/clips-local.bin` and
+  `packs/clips-local-speaker.bin` under the same name and at the same
+  place: 351 026 bytes each for 572 126. Such a pack needs this
+  firmware on the clock first.
+
 ### Backlog, board revision: a line output on the adapter for an amplifier — an idea of 2026-11-15, nothing built or measured; to be tried on the bench board when the amplifiers arrive
 
 The user's, of the speaker mod: with a proper amplifier in place of

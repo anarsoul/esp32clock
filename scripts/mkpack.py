@@ -6,12 +6,12 @@
     scripts/mkpack.py out.bin clip[:loop|:once][=Label] ...
 
 A clip is a file `ALARM_CLIP` would take: raw PCM (scripts/wav2pcm.sh),
-a beeper clip (scripts/zxbeeper.py), a tracker module
+as it is or as ADPCM (scripts/adpcm.py), a beeper clip (scripts/zxbeeper.py), a tracker module
 (scripts/xm2clip.py), a Commodore 64 tune (scripts/sid2clip.py) or a
 ZX Spectrum one (scripts/pt32clip.py). As there, a clip's API name is
 its file's name without the extension, in lower case with everything
 but letters turned into `_`, and its label the same in words unless
-`=Label` gives another; a clip with a header (all but PCM) is taken to
+`=Label` gives another; a tune (all but PCM and ADPCM) is taken to
 be made to loop, so a ringing alarm plays it round and round with no
 gap, unless `:once` says otherwise, and PCM not unless `:loop` does.
 

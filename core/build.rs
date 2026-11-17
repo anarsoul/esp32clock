@@ -21,7 +21,8 @@ fn main() {
 const DEFAULT_CLIPS: &str = "";
 
 /// `ALARM_CLIP` names the clips to build in as the last melodies, files
-/// separated by commas: raw PCM (`scripts/wav2pcm.sh`), a beeper clip
+/// separated by commas: raw PCM (`scripts/wav2pcm.sh`), as it is or as
+/// ADPCM (`scripts/adpcm.py`), a beeper clip
 /// (`scripts/zxbeeper.py`), a tracker module (`scripts/xm2clip.py`), a
 /// Commodore 64 tune (`scripts/sid2clip.py`) or a ZX Spectrum one
 /// (`scripts/pt32clip.py`).
@@ -34,7 +35,7 @@ const DEFAULT_CLIPS: &str = "";
 /// A ringing alarm plays a clip round and round with no gap if the clip
 /// is made to go round, and with a pause between passes, as the note
 /// melodies have, if it is not. A beeper clip, a module, a SID tune and
-/// a PT3 module are taken to be, PCM not; `:loop` or `:once` after a file's name says otherwise.
+/// a PT3 module are taken to be, PCM and ADPCM not; `:loop` or `:once` after a file's name says otherwise.
 /// `melody.rs` includes what this writes.
 fn clips() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().expect("core/ has a parent");
