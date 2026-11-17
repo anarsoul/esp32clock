@@ -37,8 +37,10 @@ of. `CLAUDE.md` is a symlink to this file; edit this one.
   by git. Read it; do not modify it.
 - `clips/` holds the clips of the default clip pack
   (`scripts/clips.sh`, the CI and the release make it): Trantor's title
-  music and two of Dualtrax's modules (written for ORiON's key
-  generators, hence the file names), whose sources are in `mods/`. They
+  music, two of Dualtrax's modules (written for ORiON's key
+  generators, hence the file names) and n1k-o's "synchronization", a
+  PT3 module that is here with his permission (the user asked him,
+  2026-11-16); the modules' sources are in `mods/`. They
   are other people's music, not under the project's licence;
   `clips/README.md` credits each and must go on doing so. A clip
   nobody may redistribute stays in the ignored `wav/`, `tap/`, `sid/` and `pt3/`,
@@ -73,7 +75,7 @@ CLIP_HIGHPASS=100 CLIP_DRIVE=10 scripts/wav2pcm.sh in.wav wav/tune.pcm   # the s
 scripts/xm2clip.py tune.xm mods/tune.xmc [--highpass 900 --passes 2] [--raise 1:2] [--drive 160 --release 5] [--knee 100] [--rate 16000] [--bits 8]   # a FastTracker 2 module for the clock's own player; lists what it uses that the player lacks; the bass cut, an instrument's octave and the limiter are the clip's (--knee is the level the limiter starts at, in 1024s of the mix where one voice is 32; the default is 20 dB of drive, for the buzzer, and a knee above the tune's peak is the limiter off, for a speaker; the clip is at `clip::FAST_HZ`, 31 250 samples a second, here and in the two below, which the chip's converter at 256 bits a sample sends at 8 Mbit/s exactly: the default since 2026-11-13, heard on the breadboard stage and on white-clock; 32 kHz is not among the converter's whole dividers, and at CLIP_PDM_BITS=384 such a clip is refused; --rate 16000 is the rate before it, half a module's share of the processor, and 8000 a module's third)
 scripts/sid2clip.py tune.sid sid/tune.sidc [--song 2] [--seconds 90] [--mute 2] [--model 8580] [--system ntsc] [--steps 4] [--rate 16000] [--highpass 300 --passes 1]   # a Commodore 64 tune (PSID) for the clock's own SID: runs the tune's 6502 code on the host and keeps each frame's register writes, to the point where the tune loops; --mute keeps the voices' gates closed for the first frames, for a routine that clicks as it starts; says what it does that the clock will not play; --system plays it as the other machine would, whatever the file says (a PAL tune on an NTSC C64: 59.83 calls a second for 50.12, the pitch 3.8 % up); --flat for a speaker: no limiter, --drive then a plain gain with the three voices at their top as full scale (flags bit 1; a firmware before 2026-11-15 plays such a clip limited)
 scripts/pt32clip.py tune.pt3 pt3/tune.pt3c [--machine pentagon|spectrum] [--clock 1773400] [--chip ym] [--restart] [--highpass 100 --passes 1] [--drive 180] [--rate 16000] [--limiter --highpass 300 --noise 11] [--noise-lowpass 3000]   # a ZX Spectrum tune (Pro Tracker 3 or Vortex Tracker II module) for the clock's own player and AY-3-8910: the module as it is behind a header with the machine's clock and frame rate (by the module's tone table unless told), the length and where it goes round; --restart for a module whose loop is only its ending; the clip is the chip as it is but for a 100 Hz high-pass, at a plain gain 3 dB over three channels at full scale, the user's choice of 2026-11-13 on headphones and on white-clock over the limiter, which --limiter brings back as the first PT3 clips had it
-scripts/speaker-clips.sh   # the default pack for a clock with a speaker in the buzzer's place (speaker-mod/): packs/clips-default-speaker.bin, the two modules made again with a 100 Hz high-pass and the limiter's release at 128 ms (`--release 10`), under the default pack's names; heard and kept by the user 2026-11-15, after a pack with the limiter off was too quiet
+scripts/speaker-clips.sh   # the default pack for a clock with a speaker in the buzzer's place (speaker-mod/): packs/clips-default-speaker.bin, the two XM modules made again with a 100 Hz high-pass and the limiter's release at 128 ms (`--release 10`) and Synchronization with `--limiter --noise 16` and the same two, under the default pack's names; heard and kept by the user 2026-11-15, after a pack with the limiter off was too quiet
 scripts/mkpack.py packs/mine.bin clips/trantor.bpr wav/tune.pcm:loop=My\ Tune   # a clip pack for the `clips` partition: up to 16 clips, named and looped as ALARM_CLIP's are, `=Label` for another label
 CLIP_PACK_FILE=packs/mine.bin cargo host-test the_pack_file_parses -- --nocapture   # the pack through the parser the clock reads it with
 API_TOKEN='…' scripts/clips.sh <ip> [pack]   # POST /clips: write the pack (the default one, made of clips/, if none is named) and restart; with no arguments just make packs/clips-default.bin
@@ -743,7 +745,7 @@ module ends with its `#[cfg(test)] mod tests`.
 - An OTA image must fit a slot (`partitions.csv`, 0x160000 = 1408 KB
   since the `clips` partition took half a megabyte of each, 2026-11-14;
   1920 KB on a clock with the old table); the release image is 877 KB,
-  and 1045 KB with the three clips of `clips/` built in. A build with
+  and 1045 KB with the first three clips of `clips/` built in (Synchronization, the fourth since 2026-11-16, is 11 KB more). A build with
   Futurama in `ALARM_CLIP` as well no longer fits. A clip pack must
   fit its partition, 0x120000 = 1152 KB to the end of the 4 MB flash (`scripts/mkpack.py` refuses a larger one), and its
   SHA-256 is checked in software at every boot before the settings

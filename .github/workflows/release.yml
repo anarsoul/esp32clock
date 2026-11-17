@@ -49,7 +49,7 @@ jobs:
       - name: Test the core crate on the host
         run: cargo host-test
       - name: Test with the clips built in
-        run: ALARM_CLIP=clips/trantor.bpr,clips/halftime.xmc,clips/keygen.xmc cargo host-test
+        run: ALARM_CLIP=clips/trantor.bpr,clips/halftime.xmc,clips/keygen.xmc,clips/synchronization.pt3c cargo host-test
       - name: Build
         run: cargo build --release
       - name: Clippy
@@ -80,7 +80,8 @@ jobs:
           # firmware has no clips built in, so the web installer writes
           # it too. Checked by the parser the clock reads it with.
           scripts/mkpack.py "images/esp32clock-clips-${GITHUB_REF_NAME}.bin" \
-            clips/trantor.bpr clips/halftime.xmc clips/keygen.xmc
+            clips/trantor.bpr clips/halftime.xmc clips/keygen.xmc \
+            clips/synchronization.pt3c
           CLIP_PACK_FILE="images/esp32clock-clips-${GITHUB_REF_NAME}.bin" \
             cargo host-test the_pack_file_parses -- --nocapture
           ls -l images

@@ -8,7 +8,7 @@
 #        scripts/clips.sh            make the default pack only and print
 #                                    its path, for the clock's Clips page
 #
-# Without a pack named, the default one is made of the three clips in
+# Without a pack named, the default one is made of the four clips in
 # clips/ (scripts/mkpack.py; python3) as packs/clips-default.bin. The
 # clock answers once the pack is written and checked, then reboots; the
 # panel is dark meanwhile. A megabyte takes about half a minute.
@@ -20,7 +20,8 @@ cd "$(dirname "$0")/.."
 
 if [ -z "$pack" ]; then
     pack=packs/clips-default.bin
-    scripts/mkpack.py "$pack" clips/trantor.bpr clips/halftime.xmc clips/keygen.xmc
+    scripts/mkpack.py "$pack" clips/trantor.bpr clips/halftime.xmc clips/keygen.xmc \
+        clips/synchronization.pt3c
 fi
 if [ "$host" = - ]; then
     printf '%s (%s bytes)\n' "$pack" "$(stat -c %s "$pack")"

@@ -1202,7 +1202,7 @@ change.
   cut and limiter set for the buzzer and will sound thin and
   compressed on a speaker. `scripts/speaker-clips.sh` makes the
   default pack for one, `packs/clips-default-speaker.bin`: the same
-  three clips under the same names, the two modules with the
+  four clips under the same names, the three modules with the
   high-pass at 100 Hz and the limiter letting go over 128 ms, so
   that it follows the tune's level and not its waveform, and
   `scripts/clips.sh <ip> packs/clips-default-speaker.bin` sends it.

@@ -9086,6 +9086,25 @@ version" (the user, of the second pack). The speaker's clips are the
 buzzer's with the high-pass at 100 Hz once and `--release 10`; the
 PT3 tunes limited that way included.
 
+### Synchronization in the default pack — 2026-11-16, built and tested on the host; the pack not on a clock yet
+
+"synchronization can be converted and moved to clips and default
+pack. I've got permission from n1k-o (Oleg Nikitin) to use it for this
+project" (the user). The module is signed `nq`, 27.06.2015.
+
+- `mods/nq-synchronization.pt3` is the module, copied from the ignored
+  `pt3/`; `clips/synchronization.pt3c` is `scripts/pt32clip.py … --restart`
+  with the converter's defaults, byte for byte the `pt3/` clip the
+  clocks have heard since 2026-11-13 (`cmp`).
+- It is the fourth and last clip of the default pack
+  (`scripts/clips.sh`, the CI, the release), so the three before it
+  keep their places and a stored melody its tune.
+- The speaker's pack (`scripts/speaker-clips.sh`) has it as the kept
+  pack of 2026-11-15 did: `--limiter --noise 16 --highpass 100
+  --passes 1 --release 10 --restart`.
+- `clips/README.md` credits n1k-o and says the permission is to this
+  project. Hibernation and PPK stay in `pt3/`: nobody was asked.
+
 ### Wi-Fi transmit power as a setting — DONE, verified by the user on the bench board 2026-11-15
 
 The user's, 2026-11-15: the bench board's ceramic antenna is poor and

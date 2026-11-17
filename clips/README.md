@@ -4,7 +4,7 @@ The clips of the default clip pack, the extra alarm melodies a clock
 has in its `clips` partition (see the README's "Clip packs"):
 
 ```
-scripts/clips.sh                                       # packs/clips-default.bin, these three
+scripts/clips.sh                                       # packs/clips-default.bin, these four
 scripts/mkpack.py packs/one.bin clips/trantor.bpr      # a pack of one of them
 ALARM_CLIP=clips/trantor.bpr cargo build --release     # or built into the firmware, the older way
 ```
@@ -43,4 +43,21 @@ and samples rearranged, nothing rendered.
 ```
 scripts/xm2clip.py "mods/Orion - Nero Burning ROM v5.5.7.8kg.xm" clips/halftime.xmc
 scripts/xm2clip.py mods/Orion-Nero6.3.0.2.xm clips/keygen.xmc
+```
+
+## `synchronization.pt3c`
+
+"synchronization" (2015) by **n1k-o** (Oleg Nikitin), a ZX Spectrum
+tune for the AY-3-8910, written in Vortex Tracker II; the module is
+signed `nq`. It is here with his permission, given to this project
+(2026-11-16). The music is his; copyright remains with
+its author, and nothing here grants any right to it beyond that.
+
+The module is in `mods/` as it was found, and this file is the module
+as it is behind the header `scripts/pt32clip.py` gives it for the
+clock's own player and AY (`core/src/pt3.rs`, `core/src/ay.rs`), with
+the converter's defaults: nothing rendered.
+
+```
+scripts/pt32clip.py mods/nq-synchronization.pt3 clips/synchronization.pt3c --restart
 ```
