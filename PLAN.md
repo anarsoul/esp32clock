@@ -9770,8 +9770,13 @@ The user's, and what the readiness check of the same day left open.
 - [ ] The default pack heard on a stock buzzer circuit (no diode, R5
   at 10 kΩ), which is what a builder has; the README's wording on the
   mod by what is heard.
-- [ ] Whether the installer's list goes on offering v0.1 to v0.4 (the
-  old partition table, the `esp32clock` token).
+- [x] The installer's list no longer offers v0.1 to v0.4 (the old
+  partition table, the `esp32clock` token): `docs/index.html` leaves
+  them out by tag (`OLD`); their files stay on `gh-pages` and their
+  GitHub releases as they are. The page is deployed by the release
+  workflow, so this is live with the next tag. Checked under Node
+  against GitHub's list as it is today, which leaves nothing, the
+  page's fallback to `latest/`.
 - [ ] The annotated tag; then the release's three files and one
   install from the live page, since the workflow has not run with the
   pack and the new names.

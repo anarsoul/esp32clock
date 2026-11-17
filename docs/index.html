@@ -213,6 +213,10 @@
     var about = document.getElementById('about'), ota = document.getElementById('ota');
     var otaname = document.getElementById('otaname');
     var releases = {};
+    // Not offered: the releases under the project's old name, which
+    // write a partition table with no room for the clip pack and carry
+    // an API token that was printed in the manual.
+    var OLD = ['v0.1', 'v0.2', 'v0.3', 'v0.4'];
 
     function show(tag) {
       button.setAttribute('manifest', tag + '/manifest.json');
@@ -241,7 +245,7 @@
     fetch('https://api.github.com/repos/anarsoul/onebitdawn/releases')
       .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
       .then(function (list) {
-        list = list.filter(function (r) { return !r.draft && !r.prerelease; });
+        list = list.filter(function (r) { return !r.draft && !r.prerelease && OLD.indexOf(r.tag_name) < 0; });
         if (!list.length) return Promise.reject('none');
         select.textContent = '';
         list.forEach(function (r, i) {
