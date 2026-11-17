@@ -171,6 +171,16 @@ gets marginal: the access point hears the clock about 20 dB worse than
 the clock hears it. An external antenna has been measured 25 to 30 dB
 better than the chip antenna in the same spot.
 
+Some ESP32-C3 SuperMini boards with the ceramic antenna need a lower
+transmit power: at the default, 16 dBm, their antenna's mismatch makes
+the link worse, not better, and the clock may fail to join its network
+at all. The clock's own access point always transmits at a low power,
+11 dBm, whatever the setting, so it can be reached either way. If the
+clock does not connect to your network, hold both buttons for 10 s to
+put it back into the access point, and choose a lower transmit power
+on the setup form at `http://192.168.4.1/`; go down a step at a time
+until it connects.
+
 What the adapter connects:
 
 | ESP32-C3 pin | socket pin | net | role |
