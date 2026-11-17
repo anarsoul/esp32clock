@@ -9747,3 +9747,31 @@ alone, one PIN one action, the `set/` allow list, resets through
 path", "Compatibility" and "Conventions" are as they were.
 `ARCHITECTURE.md`, `MANUAL.md` and two scripts' headers point at the
 new places.
+
+### To do before the first public release — a list, 2026-11-17
+
+The user's, and what the readiness check of the same day left open.
+
+- [x] Screenshots of the web interface (the user's): six in
+  `screenshots/`, taken from white-clock with headless Chromium at
+  420 px and twice the scale, the clock page light and dark and the
+  others dark, the network's name and the broker blurred in the page
+  before the capture (the user's choice; the version line reads
+  `v0.4-67-gfb0e18f`). Three in the README under the feature list,
+  all six in the manual beside what they show; the manual said four
+  pages and has `/clips` in its list now.
+- [ ] A picture of the board with the buzzer mod, beside the README's
+  description of it (the user's; a photograph, so the user's to take).
+- [ ] `CHANGELOG.md`: `[Unreleased]` made the version's section, the
+  compare links under it.
+- [ ] An install of an image with no token from the web installer or
+  the CI's artifact: the access point's setup, then a token set with
+  the PIN.
+- [ ] The default pack heard on a stock buzzer circuit (no diode, R5
+  at 10 kΩ), which is what a builder has; the README's wording on the
+  mod by what is heard.
+- [ ] Whether the installer's list goes on offering v0.1 to v0.4 (the
+  old partition table, the `esp32clock` token).
+- [ ] The annotated tag; then the release's three files and one
+  install from the live page, since the workflow has not run with the
+  pack and the new names.

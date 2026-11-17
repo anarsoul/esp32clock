@@ -97,6 +97,10 @@ Then install it, either way:
   The script is one `curl`: a `POST` of the raw file to `/ota` with
   `Authorization: Bearer <token>`.
 
+<p align="center">
+  <img src="screenshots/system.png" width="320" alt="The System page: firmware update, API token, reboot and access point">
+</p>
+
 The new image goes to the other slot; a failed or interrupted write
 leaves the running one in place, and a new image that cannot reach the
 network within three boots is rolled back. Settings are kept.
@@ -127,6 +131,10 @@ after writing the pack and is left with the note melodies until the
 next upload: update the firmware, or convert the clip again. The alarm sound is stored by its place in the list, so
 check it after changing packs; a sound that is no longer there is the
 beeps.
+
+<p align="center">
+  <img src="screenshots/clips.png" width="320" alt="The Clips page: the pack in use, its clips and the upload">
+</p>
 
 Sampled sound is made with `scripts/wav2pcm.sh in.wav wav/tune.pcm`
 (16 KB of flash a second), or with the output named `wav/tune.adp` as
@@ -220,7 +228,14 @@ A clock with no address yet shows `no1P` instead.
 
 Any press ends a ringing alarm or the IP display.
 
-The clock serves four pages, linked to each other at the top of each:
+The clock serves five pages, linked to each other at the top of each,
+in the browser's light or dark:
+
+<p align="center">
+  <img src="screenshots/clock-light.png" width="280" align="top" alt="The clock page in the light theme">
+  <img src="screenshots/clock.png" width="280" align="top" alt="The clock page in the dark theme">
+  <img src="screenshots/settings.png" width="280" align="top" alt="The settings page">
+</p>
 
 - `http://<ip>/`: the alarm (armed, time, days, skip the next one,
   the melody with Play and Stop) and the display (colour and
@@ -237,6 +252,8 @@ The clock serves four pages, linked to each other at the top of each:
   10 s, and set it again on the access point's setup page. The access
   point itself always transmits at 11 dBm.
 - `/ha`: the MQTT broker for Home Assistant, see below.
+- `/clips`: the clip pack in use and the upload of another, see
+  "Clip packs" above.
 - `/system`: the firmware update, the API token, a reboot, and a
   switch to the access point for giving the clock another network.
   Each action puts a four-digit PIN on the panel when its button is
@@ -278,6 +295,10 @@ mosquitto_pub -t onebitdawn/clock-a1b2c3/set/color -m cyan
 
 Only the clock's own settings can be set this way; the network, the
 hostname, the token and the broker itself cannot.
+
+<p align="center">
+  <img src="screenshots/home-assistant.png" width="320" alt="The Home Assistant page: the broker and its status line">
+</p>
 
 ## Development
 
