@@ -124,7 +124,11 @@ Common to all:
   that differ from what the page was served with: a name goes with
   every pair the form has under it (a checkbox with its hidden `0`,
   the days all that are ticked), so a tab opened a while ago puts
-  back nothing it did not change. A refusal's notice is
+  back nothing it did not change. A post that gets no answer says so
+  above Save (`The clock did not answer; try again.`) and leaves the
+  form as typed, so Save again posts the same fields; the script never
+  falls back to the browser's submit, which posts the whole form. A
+  refusal's notice is
   taken out of the answer and put above the form, which stays as
   typed, and a saved form goes on to the page the redirect named.
   Without script the form is posted and reloaded.
@@ -136,7 +140,7 @@ The clock page, `/`:
   form is saved, not as they are chosen.
 - The script makes Play and Stop plain buttons: as the form's first
   submit buttons, Enter in the alarm time would play the tune.
-- Play or Stop that fails says so above Save.
+- Play or Stop that fails says so in the same line above Save.
 - The alarm's days are seven checkboxes all named `days`.
   `form::apply` reads a `days` key repeated in one body as a union:
   the first replaces, the rest add; none ticked sends no key and

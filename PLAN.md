@@ -80,6 +80,21 @@ Save and the posts read from the browser:
 | Save with nothing changed, `/` and `/ha` | empty | nothing changed, `Saved`, MQTT stayed connected |
 | `/settings`: 12 hour ticked, offset −0.5 | `twelve_hour=0&twelve_hour=on&temp_offset=-0.5` | both set, the rest as it was |
 
+**A finding, 2026-11-17, after the commit** (a review the user
+passed on, reproduced under Node): when `fetch` failed the script
+fell back to `f.submit()`, which posts the whole form, so a stale tab
+whose answer was lost put its colour back after all. The fallback is
+gone: the line above Save, which was the clock page's for Play and
+Stop, is part of `SAVE` on all three pages (`The clock did not answer;
+try again.`), the submit hides it and a failure shows it, and the
+form stays as typed, so Save again posts the same fields. Checked on
+test-clock with the browser taken offline: a stale tab (lime, the
+clock since set to blue) with the alarm time changed posted
+`alarm=02%3A30` once and nothing else, showed the line and kept the
+field and the mark; back online, Save posted `alarm=02%3A30` again and
+the clock had 02:30 and was still blue. Play offline shows the same
+line.
+
 The settings were put back as found. Not seen: the panel itself, and
 `/ha` with a field changed (it would have moved the bench clock's
 broker session).

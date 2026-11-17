@@ -882,9 +882,11 @@ impl core::fmt::Display for Check {
     }
 }
 
-/// How a settings form ends: Save, centred, and under it the mark
-/// `UNSAVED_JS` shows, so the button does not move when it appears.
-const SAVE: &str = "<p class=c><button>Save</button><br><b id=u hidden>Changes not saved yet.</b></p>";
+/// How a settings form ends: the line a script shows when a post of
+/// its own got no answer (`E`), then Save, centred, and under it the
+/// mark `UNSAVED_JS` shows, so the button does not move when it
+/// appears.
+const SAVE: &str = "<p class=err id=e role=alert hidden>The clock did not answer; try again.</p><p class=c><button>Save</button><br><b id=u hidden>Changes not saved yet.</b></p>";
 
 /// The script of a page with a settings form, without its tags: the
 /// unsaved-changes mark, shown while any named control of the first
@@ -898,20 +900,23 @@ const SAVE: &str = "<p class=c><button>Save</button><br><b id=u hidden>Changes n
 /// notice of a refusal, in this page or in an answer): a refused
 /// form's notice is taken out of the answer and put above the form,
 /// which stays as it was typed, and a saved one goes on to the page
-/// the redirect named; a request that fails is left to the browser's
-/// own submit.
-const UNSAVED_JS: &str = "var D=document,f=D.forms[0],u=D.getElementById('u'),X='p.err:not([id])';history.replaceState(0,'',location.pathname);\
+/// the redirect named. A request that fails shows the line above Save
+/// (`E`) and leaves the form as it is, so Save again posts the same
+/// fields; the browser's own submit, which posts the whole form, is
+/// only for a page without script.
+const UNSAVED_JS: &str = "var D=document,f=D.forms[0],u=D.getElementById('u'),g=D.getElementById('e'),X='p.err:not([id])';function E(h){g.hidden=h}history.replaceState(0,'',location.pathname);\
 function G(){var s=new Set;for(var e of f.elements)if(e.name&&(e.type=='checkbox'?e.checked!=e.defaultChecked:\
 e.options?!e.options[e.selectedIndex].defaultSelected:e.value!=e.defaultValue))s.add(e.name);return s}\
-f.onsubmit=function(e){e.preventDefault();var s=G(),b=new URLSearchParams;new FormData(f).forEach(function(v,k){if(s.has(k))b.append(k,v)});\
+f.onsubmit=function(e){e.preventDefault();E(1);var s=G(),b=new URLSearchParams;new FormData(f).forEach(function(v,k){if(s.has(k))b.append(k,v)});\
 fetch(f.action,{method:'POST',body:b}).then(function(r){return r.text().then(function(h){\
 var n=new DOMParser().parseFromString(h,'text/html').querySelector(X),o=D.querySelector(X);if(!n){location.replace(r.url);return}\
-if(o)o.remove();f.before(n);n.scrollIntoView({block:'center'})})}).catch(function(){f.submit()})};\
+if(o)o.remove();f.before(n);n.scrollIntoView({block:'center'})})}).catch(function(){E(0)})};\
 f.oninput=function(){u.hidden=!G().size};";
 
 /// The clock page's own script, after `UNSAVED_JS`. `P` posts a body
 /// and fails on anything but a 2xx or the redirect Play and Stop answer
-/// with; `E` shows or hides the line that says a post failed. Play and
+/// with; `E`, the form script's, shows or hides the line that says a
+/// post failed. Play and
 /// Stop become plain buttons, so that Enter in the alarm form is Save
 /// (a form's default button is its first submit button, which Play
 /// is), and post the chosen tune to the button's own address without
@@ -919,7 +924,7 @@ f.oninput=function(){u.hidden=!G().size};";
 /// seven boxes (`C`) when one is chosen, before the form's own input
 /// handler looks for unsaved changes, and say `Custom` when the boxes
 /// are ticked into none of them.
-const CLOCK_JS: &str = "var m=D.getElementById('m'),g=D.getElementById('e');function E(h){g.hidden=h}\
+const CLOCK_JS: &str = "var m=D.getElementById('m');\
 function P(a,b){return fetch(a,{method:'POST',redirect:'manual',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:b})\
 .then(function(r){if(!r.ok&&r.type!='opaqueredirect')throw 0;E(1)})}\
 for(let i of'pq'){let b=D.getElementById(i);b.type='button';b.onclick=function(){P(b.formAction,'melody='+m.value).catch(function(){E(0)})}}\
@@ -932,7 +937,7 @@ f.addEventListener('input',function(e){if(e.target!=y){var k=0;C.forEach(functio
 /// posts the display's two selects with the alarm. The alarm's
 /// days are seven checkboxes under one name, and under them is when it
 /// rings next (`NextAlarm`). Above Save is
-/// the line the script shows when Play or Stop failed. `note` is what became of the last post of
+/// the line the script shows when Play, Stop or Save got no answer. `note` is what became of the last post of
 /// a form; the page says so above them.
 pub fn write_page(
     out: &mut impl core::fmt::Write,
@@ -976,7 +981,7 @@ pub fn write_page(
     for (i, pct) in BRIGHTNESS_STEPS.iter().enumerate() {
         write!(out, "<option value={pct}{}>{pct} %</option>", if i == s.brightness { " selected" } else { "" })?;
     }
-    write!(out, "</select></label></fieldset><p class=err id=e role=alert hidden>The clock did not answer; nothing was changed.</p>{SAVE}</form><script>")?;
+    write!(out, "</select></label></fieldset>{SAVE}</form><script>")?;
     out.write_str(UNSAVED_JS)?;
     out.write_str(CLOCK_JS)?;
     out.write_str("</script><div class=st>")?;
@@ -2147,8 +2152,13 @@ mod tests {
         for out in &out[..3] {
             // Only the names that were changed are posted, each with
             // all its pairs.
-            assert!(out.contains("f.onsubmit=function(e){e.preventDefault();var s=G(),b=new URLSearchParams;new FormData(f).forEach(function(v,k){if(s.has(k))b.append(k,v)});fetch(f.action,{method:'POST',body:b})"), "{out}");
-            assert!(out.contains("X='p.err:not([id])'") && out.contains("if(!n){location.replace(r.url);return}") && out.contains(".catch(function(){f.submit()})"));
+            assert!(out.contains("f.onsubmit=function(e){e.preventDefault();E(1);var s=G(),b=new URLSearchParams;new FormData(f).forEach(function(v,k){if(s.has(k))b.append(k,v)});fetch(f.action,{method:'POST',body:b})"), "{out}");
+            assert!(out.contains("X='p.err:not([id])'") && out.contains("if(!n){location.replace(r.url);return}") && out.contains(".catch(function(){E(0)})"));
+            // A post with no answer says so above Save and is never
+            // followed by the browser's own submit, which would post
+            // the whole form, a stale tab's colour with it.
+            assert!(!out.contains("f.submit()"));
+            assert!(out.contains("<p class=err id=e role=alert hidden>The clock did not answer; try again.</p><p class=c><button>Save</button>"), "{out}");
         }
         // The broker page: whether a password is stored, and the poll
         // with the state the page was served in.
@@ -2190,7 +2200,7 @@ mod tests {
         // selects keep their names, so Save posts them with the alarm
         // and nothing is applied before it.
         assert_eq!(out[0].matches("<form").count(), 1);
-        assert!(out[0].contains("</select></label></fieldset><p class=err id=e role=alert hidden>The clock did not answer; nothing was changed.</p><p class=c><button>Save</button>"), "{}", out[0]);
+        assert!(out[0].contains("</select></label></fieldset><p class=err id=e role=alert hidden>The clock did not answer; try again.</p><p class=c><button>Save</button>"), "{}", out[0]);
         assert!(out[0].ends_with("</small></p></div></body></html>") && !out[0].contains("Scriptable"), "the page ends with the status lines");
         assert!(out[0].contains("<option value=orange selected>Orange</option>"));
         assert!(out[0].contains("<fieldset><legend>Display</legend><label>Colour <select name=color>"));
@@ -2269,6 +2279,7 @@ mod tests {
         let out = pages(&Settings::DEFAULT, &status(true), Note::None);
         for out in &out[..3] {
             assert!(out.contains("<p class=c><button>Save</button><br><b id=u hidden>Changes not saved yet.</b></p>"), "{out}");
+            assert_eq!(out.matches(" id=e ").count(), 1);
             assert!(out.contains("history.replaceState(0,'',location.pathname)"), "the notice's query leaves the address");
             assert_eq!(out.matches("<script>").count(), 1);
             assert!(out.contains("f=D.forms[0]") && out.contains("f.oninput=function(){u.hidden=!G().size}"), "{out}");
