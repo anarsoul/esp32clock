@@ -528,6 +528,30 @@ const fn has_magic(data: &[u8], magic: &[u8; 4], header: usize) -> bool {
     data.len() >= header && data[0] == magic[0] && data[1] == magic[1] && data[2] == magic[2] && data[3] == magic[3]
 }
 
+/// The first three bytes of each kind of clip; the fourth is the
+/// format's version, a digit.
+const FAMILIES: [&[u8; 3]; 6] = [b"PCM", b"ADP", b"BPR", b"XMC", b"SID", b"PT3"];
+
+/// Whether `data` says it is a clip of one of the kinds and no player
+/// here reads it: a version from before or after this firmware's (a
+/// newer converter's), or a header cut short. Such a clip would be
+/// taken for PCM with no header and played as noise, so a pack with
+/// one is refused, and a build.
+pub const fn is_unsupported(data: &[u8]) -> bool {
+    if data.len() < 3 {
+        return false;
+    }
+    let mut k = 0;
+    while k < FAMILIES.len() {
+        let f = FAMILIES[k];
+        if data[0] == f[0] && data[1] == f[1] && data[2] == f[2] {
+            return !(has_magic(data, PCM_MAGIC, PCM_HEADER) || is_beeper(data) || adpcm::is_clip(data) || xm::is_tune(data) || sid::is_tune(data) || pt3::is_tune(data));
+        }
+        k += 1;
+    }
+    false
+}
+
 /// Whether `data` is a beeper clip.
 pub const fn is_beeper(data: &[u8]) -> bool {
     has_magic(data, BEEPER_MAGIC, BEEPER_HEADER) || has_magic(data, BEEPER_PACKED_MAGIC, BEEPER_HEADER)
@@ -1026,6 +1050,25 @@ mod tests {
         assert!((duty - 0.5).abs() < 0.01, "{duty}");
         // And after the end, zeros, whatever the buffer held.
         assert!(s[bits / 8..].iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn a_version_no_player_reads_is_not_pcm() {
+        for magic in [b"PCM2", b"ADP0", b"BPR1", b"BPR4", b"XMC1", b"XMC3", b"SID3", b"PT30", b"PT32"] {
+            let mut clip = magic.to_vec();
+            clip.extend_from_slice(&[128; 8000]);
+            assert!(is_unsupported(&clip), "{:?}", core::str::from_utf8(magic));
+        }
+        // A header cut short is no clip either.
+        assert!(is_unsupported(b"SID1") && is_unsupported(b"PCM1\x80"));
+        // What is played, and PCM with no header.
+        let mut pcm = PCM_MAGIC.to_vec();
+        pcm.extend_from_slice(&[0x80, 0x3e, 0, 0, 128]);
+        let mut beeper = BEEPER_PACKED_MAGIC.to_vec();
+        beeper.extend_from_slice(&[0; 4]);
+        for clip in [&pcm[..], &beeper, &[128; 16], b"PC", b"", b"RIFF...."] {
+            assert!(!is_unsupported(clip), "{clip:?}");
+        }
     }
 
     #[test]

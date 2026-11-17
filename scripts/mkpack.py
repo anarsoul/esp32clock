@@ -43,6 +43,10 @@ ROOM = 0x120000
 # The note melodies' names (core/src/melody.rs) and the random draw's.
 RESERVED = {"beeps", "twinkle", "ode", "frere", "morning", "westminster", "reveille", "elise", "jingle", "random"}
 LOOPING = (b"BPR", b"XMC", b"SID", b"PT3")
+# The clips' magics this firmware plays (clip::is_unsupported): the
+# fourth byte is the format's version.
+FAMILIES = (b"PCM", b"ADP", b"BPR", b"XMC", b"SID", b"PT3")
+PLAYED = (b"PCM1", b"ADP1", b"BPR2", b"BPR3", b"XMC2", b"SID1", b"SID2", b"PT31")
 
 
 def fail(message):
@@ -75,6 +79,8 @@ def clip(arg):
         fail(f"{arg}: the label {label!r} is longer than {LABEL_MAX} bytes")
     if not label.strip() or any(c in '<>&"' or ord(c) < 32 or ord(c) == 127 for c in label):
         fail(f"{arg}: the label {label!r} is empty or has one of < > & \" or a control character")
+    if data.startswith(FAMILIES) and not data.startswith(PLAYED):
+        fail(f"{arg}: a clip of the version {data[:4].decode('latin-1')}, which the firmware does not play; convert it again")
     loops = data.startswith(LOOPING) if asked is None else asked
     return name, label, loops, data
 

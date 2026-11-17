@@ -119,7 +119,11 @@ espflash write-bin 0x2e0000 packs/mine.bin && espflash reset   # or over USB
 or open `http://<ip>/clips`, which shows the pack in use and uploads
 one with the PIN from the panel. The clock checks a pack (a SHA-256
 at its end) when it is uploaded and at every boot, and restarts after
-an upload. The alarm sound is stored by its place in the list, so
+an upload. A pack with a clip in a version of its format the firmware
+does not play (made by a newer converter, or a very old one) is
+refused, by `scripts/mkpack.py` and by the clock, which finds it only
+after writing the pack and is left with the note melodies until the
+next upload: update the firmware, or convert the clip again. The alarm sound is stored by its place in the list, so
 check it after changing packs; a sound that is no longer there is the
 beeps.
 

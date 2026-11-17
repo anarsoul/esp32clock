@@ -63,8 +63,9 @@ pub enum PackError {
     /// A label that is empty, not UTF-8, or has a control character or
     /// one of `< > & "`.
     Label(usize),
-    /// Less than a second of sound, or a clip of a format the players
-    /// no longer read.
+    /// Less than a second of sound, or a clip of a format's version
+    /// the players do not read, an old one or a newer converter's
+    /// (`clip::is_unsupported`).
     Clip(usize),
     Hash,
 }
@@ -81,7 +82,7 @@ impl PackError {
             PackError::Entry(_) => "clip pack: an entry points outside the pack",
             PackError::Name(_) => "clip pack: a clip's name is taken or not a-z and _",
             PackError::Label(_) => "clip pack: a clip's label is empty or has characters a page cannot show",
-            PackError::Clip(_) => "clip pack: a clip is shorter than a second or of an old format",
+            PackError::Clip(_) => "clip pack: a clip is shorter than a second or of a version this firmware does not play",
             PackError::Hash => "clip pack hash mismatch: truncated or corrupt",
         }
     }
@@ -179,7 +180,7 @@ impl<'a> Pack<'a> {
         // What is asked of a clip built in (`melody::BUILT_IN`).
         for k in 0..count {
             let clip = pack.clip(k).ok_or(PackError::Entry(k))?.data;
-            if crate::clip::duration_ms(clip) < CLIP_MIN_MS || crate::clip::is_old_beeper(clip) || crate::xm::is_old_tune(clip) {
+            if crate::clip::duration_ms(clip) < CLIP_MIN_MS || crate::clip::is_unsupported(clip) {
                 return Err(PackError::Clip(k));
             }
         }
@@ -357,6 +358,12 @@ pub(crate) mod tests {
         assert_eq!(Pack::parse(&build(&[("short", "Short", false, &[128; 7999])])).unwrap_err(), PackError::Clip(0));
         assert_eq!(Pack::parse(&build(&[("ok", "Ok", false, &SECOND), ("old", "Old", true, b"BPR1\0\0\0\0")])).unwrap_err(), PackError::Clip(1));
         assert_eq!(Pack::parse(&build(&[("old", "Old", true, b"XMC1....")])).unwrap_err(), PackError::Clip(0));
+        // A version from a newer converter, behind a second of anything.
+        for magic in [b"PCM2", b"ADP2", b"BPR4", b"XMC3", b"SID3", b"PT32"] {
+            let mut clip = magic.to_vec();
+            clip.extend_from_slice(&SECOND);
+            assert_eq!(Pack::parse(&build(&[("new", "New", false, &clip)])).unwrap_err(), PackError::Clip(0), "{:?}", core::str::from_utf8(magic));
+        }
     }
 
     #[test]

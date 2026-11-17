@@ -9599,3 +9599,33 @@ keeps the old name wherever it is history.
 - The pages: heading `onebitdawn: <hostname>`, title `<hostname>:
   <page> - onebitdawn` (the hostname first, for a narrow tab), the
   setup form `onebitdawn setup`. 18 bytes a page more.
+
+### A clip of a version no player reads is refused — 2026-11-17, built and tested on the host; no upload of such a pack tried on a clock
+
+The user's question: is there a version in a clip's header, and can a
+clip of an unsupported one be rejected. There is: the fourth byte of
+every kind's magic is the format's version (`PCM1`, `ADP1`, `BPR2`
+and `BPR3`, `XMC2`, `SID1` and `SID2`, `PT31`), and the pack has a
+version byte of its own. Only `BPR1` and `XMC1` were refused, by
+name; any other digit, a newer converter's clip on an older firmware,
+matched no player, was taken for PCM with no header and played as
+noise. No format changed, so every clip and pack there is stays good.
+
+- `clip::is_unsupported`: the clip starts with one of the kinds'
+  three letters (`FAMILIES`) and no player takes it, which covers an
+  older version, a newer one and a header cut short. PCM with no
+  header is still PCM; one that starts with those letters by chance
+  would be refused, which no real sound does.
+- `Pack::parse` refuses a pack with such a clip (`PackError::Clip`,
+  "a version this firmware does not play"); on an upload that is
+  after the write, as the checks of a clip's length and the hash are,
+  so the clock is left without a pack, with the note melodies, until
+  the next upload (only the pack's header is checked before the
+  erase; the clips' first bytes arrive later in the body, so checking
+  them first would mean reading the pack into RAM, which there is not);
+  the `ALARM_CLIP` assert
+  fails the build; `scripts/mkpack.py` refuses to make the pack
+  (`PLAYED`, to be kept with the players' magics).
+- Not done: a `PCM1` clip at a rate the player does not know is still
+  played at 8 kHz, and unknown flag bits in a tune's header are
+  ignored.
