@@ -13,6 +13,11 @@ from `http://<ip>/update`; its settings survive the update.
 
 ### Changed
 
+- The README is condensed to what the project is, how it differs from
+  the original, how to build the clock and what the clips are. The
+  rest (building from source, updates over the LAN, clip packs, the
+  buttons, the pages, `/api`, Home Assistant) is now `MANUAL.md`.
+
 - The clips (the alarm melodies that are not notes) are no longer
   part of the firmware: they are a *clip pack* in a new 1152 KB flash
   partition, `clips`: half a megabyte from each of the two firmware

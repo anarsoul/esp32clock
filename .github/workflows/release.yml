@@ -16,7 +16,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  # What the prebuilt image is configured with; see ci.yml and the README.
+  # What the prebuilt image is configured with; see ci.yml and MANUAL.md.
   WIFI_SSID: ""
   WIFI_PASSWORD: ""
   TZ_RULE: "<-07>7" # Vancouver, UTC-7 all year
@@ -130,7 +130,7 @@ jobs:
             The images carry no network (the clock boots as its own access
             point, `clock-xxxx`, password `esp32clock`, setup form at
             http://192.168.4.1/), Vancouver time without daylight saving (`<-07>7`) and the API token
-            `esp32clock`; see the README's "Prebuilt images". What changed
+            `esp32clock`; see "Prebuilt images" in MANUAL.md. What changed
             is in CHANGELOG.md.
 
   pages:

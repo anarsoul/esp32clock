@@ -1140,7 +1140,7 @@ const PIN_FORM: &str = "<div id=w><form id=q hidden><label>PIN the clock is show
 /// `/reload` and `/ap`. A click on an action's button puts a
 /// four-digit PIN on the panel and the field for it under the button
 /// (`PIN_JS`); a PIN is one action, and the next click draws another. The page says little: what the token is for and
-/// its rules are the README's, and a bad one is refused with them. `token_set` says whether a token is set now.
+/// its rules are the manual's (`MANUAL.md`), and a bad one is refused with them. `token_set` says whether a token is set now.
 /// On the access point (`st.mode`) the button
 /// that leads there is left out.
 pub fn write_system_page(

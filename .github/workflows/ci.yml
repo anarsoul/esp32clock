@@ -1,7 +1,7 @@
 # Build, lint and test on every push and pull request, and publish the
 # OTA image and the default clip pack as workflow artifacts. The image is built with no network
 # (the clock boots as an access point), Vancouver time and the
-# API token `esp32clock`; the README's "Prebuilt image" section says how
+# API token `esp32clock`; "Prebuilt images" in MANUAL.md says how
 # to use it and what to change after the first boot.
 name: CI
 

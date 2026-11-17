@@ -1,7 +1,7 @@
 # Clips
 
 The clips of the default clip pack, the extra alarm melodies a clock
-has in its `clips` partition (see the README's "Clip packs"):
+has in its `clips` partition (see "Clip packs" in `MANUAL.md`):
 
 ```
 scripts/clips.sh                                       # packs/clips-default.bin, these four

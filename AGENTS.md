@@ -7,6 +7,11 @@ generator, on one DMA segmented transfer the hardware loops for ever;
 see `PLAN.md` for the full design and its history.
 `ARCHITECTURE.md` is the brief overview (crates, tasks, data paths,
 resets).
+`README.md` is short on purpose (the user, 2026-11-16): what the
+project is, how it differs from the original, how to build the clock,
+what the clips are. Everything else a user needs (building from
+source, updates, clip packs, the buttons, the pages, `/api`, Home
+Assistant) is `MANUAL.md`; document a user-visible change there.
 The repo is a two-member workspace: the firmware is the root package,
 and `core/` (`esp32clock-core`) is the hardware-independent half, a
 `no_std` library the firmware re-exports and the host runs the tests
@@ -195,7 +200,7 @@ what it was served with, unless the form has unsaved changes. The
 pages follow the browser's light or dark (`color-scheme`), a link is
 one colour whether visited or not (`a{color:LinkText}`), a page's
 title is `<hostname>: <page>` under the common heading, and the pages
-say nothing of `/api`: that is the README's (the user, 2026-11-15:
+say nothing of `/api`: that is the manual's, `MANUAL.md` (the user, 2026-11-15:
 "it should be in the documentation, not in the interface"). The
 network keys `ssid` and `password` are taken on `/api` only with the
 `Bearer` token, refused as `403` on the key alone (never on whether the
