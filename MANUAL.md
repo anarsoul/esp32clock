@@ -232,9 +232,9 @@ The clock serves five pages, linked to each other at the top of each,
 in the browser's light or dark:
 
 <p align="center">
-  <img src="screenshots/clock-light.png" width="280" align="top" alt="The clock page in the light theme">
-  <img src="screenshots/clock.png" width="280" align="top" alt="The clock page in the dark theme">
-  <img src="screenshots/settings.png" width="280" align="top" alt="The settings page">
+  <img src="screenshots/clock-light.png" width="31%" align="top" alt="The clock page in the light theme">
+  <img src="screenshots/clock.png" width="31%" align="top" alt="The clock page in the dark theme">
+  <img src="screenshots/settings.png" width="31%" align="top" alt="The settings page">
 </p>
 
 - `http://<ip>/`: the alarm (armed, time, days, skip the next one,

@@ -32,9 +32,9 @@ What the clock does:
   minutes, carrying the time and the alarm state across the reset.
 
 <p align="center">
-  <img src="screenshots/clock-light.png" width="280" align="top" alt="The clock page: the alarm, the display and the status lines">
-  <img src="screenshots/settings.png" width="280" align="top" alt="The settings page: timezone, temperature and network, in the dark theme">
-  <img src="screenshots/home-assistant.png" width="280" align="top" alt="The Home Assistant page: the MQTT broker">
+  <img src="screenshots/clock-light.png" width="31%" align="top" alt="The clock page: the alarm, the display and the status lines">
+  <img src="screenshots/settings.png" width="31%" align="top" alt="The settings page: timezone, temperature and network, in the dark theme">
+  <img src="screenshots/home-assistant.png" width="31%" align="top" alt="The Home Assistant page: the MQTT broker">
 </p>
 
 The clock's pages, in the browser's light or dark; the manual has
