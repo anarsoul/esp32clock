@@ -31,7 +31,8 @@ use crate::shape::Shaper;
 
 /// The first bytes of a converted tune.
 pub const MAGIC: &[u8; 4] = b"PT31";
-/// The header: magic; flags (`FINE`, `AFRESH`, `FAST`, `FLAT`); the limiter's drive
+/// The header: magic; flags (`FINE`, `AFRESH`, `FAST`, `FLAT`, and the limiter's
+/// knee in the top four bits, `KNEES`); the limiter's drive
 /// and release (0 for the shaper's own) and how many times the
 /// high-pass is applied; the chip's clock in Hz as `u32`; the length in
 /// ms, played once; the clock cycles a frame; the frames; the frame
@@ -59,6 +60,15 @@ const FLAT: u8 = 8;
 /// The limiter's knee for a `FLAT` clip, in `Shaper::new`'s 1024s:
 /// three channels at 32767.
 const FLAT_KNEE: u8 = 96;
+/// The limiter's knee for a clip that is not `FLAT`, by the top four
+/// bits of the flags, in `Shaper::new`'s 1024s: none for the shaper's
+/// own, 20 dB of drive, and each step 2 dB less of it, the last being
+/// next to none, three channels at their top. A level under the knee
+/// gets a plain gain and only what is over it is brought down, so a
+/// higher knee is a limiter heard less, for a speaker. The header had
+/// no byte left for it; a firmware older than this (2026-11-16) reads
+/// past the bits and limits hard.
+const KNEES: [u8; 16] = [0, 4, 5, 6, 7, 9, 12, 15, 18, 23, 29, 37, 46, 58, 74, 93];
 /// The mean of a `FLAT` clip's output moves by 1/2^9 of the way a
 /// sample at `RATE`, a corner of 5 Hz; a shift more at `FAST_HZ`.
 const MEAN_SHIFT: u32 = 9;
@@ -397,7 +407,7 @@ impl<'a> Tune<'a> {
             looping: false,
             ended: byte(m, POSITIONS) == 0,
             chip: Chip::new(byte(data, 4) & FINE != 0),
-            shaper: Shaper::new(byte(data, 5), byte(data, 6), 1 + fast as u32, core::array::from_fn(|i| word(data, 28 + 2 * i) as i16), byte(data, 7), true, if flat { FLAT_KNEE } else { 0 }),
+            shaper: Shaper::new(byte(data, 5), byte(data, 6), 1 + fast as u32, core::array::from_fn(|i| word(data, 28 + 2 * i) as i16), byte(data, 7), true, if flat { FLAT_KNEE } else { KNEES[(byte(data, 4) >> 4) as usize] }),
         };
         tune.start();
         tune
@@ -1227,6 +1237,25 @@ mod tests {
         assert!((high - low - swing).abs() < swing / 30 && (high + low).abs() < swing / 30, "{low} {high}");
         let rises = settled.windows(2).filter(|w| w[0] <= 0 && w[1] > 0).count() as f64 * RATE as f64 / settled.len() as f64;
         assert!((rises - CLOCK as f64 / 16.0 / 0xF9 as f64).abs() < 3.0, "{rises}");
+        // The header may put the limiter's knee higher: the same note,
+        // which the limiter's own knee brings to full scale, is then
+        // under the knee and at a plain gain, the knee being full scale
+        // (a channel at its top is 32767 to the shaper, a quarter of
+        // that in the mix as `raw_mix` gives it).
+        let top = 4 * *mix.iter().max().unwrap() as i32;
+        for (step, &knee) in KNEES.iter().enumerate().skip(1) {
+            let mut data = module.clip();
+            data[4] |= (step as u8) << 4;
+            let mut t = Tune::new(&data);
+            let mut kneed = Vec::new();
+            while let Some(s) = t.next_sample() {
+                kneed.push(s as i32);
+            }
+            assert_eq!(kneed.len(), out.len());
+            let peak = kneed.iter().map(|s| s.abs()).max().unwrap();
+            let want = (top * 127 * crate::shape::STEP / (knee as i32 * 1024)).min(127 * crate::shape::STEP);
+            assert!((peak - want).abs() <= 8, "{step}: {peak} {want}");
+        }
         // The header may ask for the noise lower: a drum, the noise
         // alone at full level, is that much quieter in the mix.
         let drum = Module::new().sample(2, &[[0, 0x10 | 15, 0, 0]], 0).pattern(&[0xB1, 10, 0xD2, note(45)], &[], &[]);

@@ -9423,6 +9423,77 @@ LZ) do for PCM too?
   242 ms, its Futurama the same 524 ms and no underrun. The buzzer
   through the decoder is still not heard.
 
+### The PT3 clips' limiter: the buzzer's as the speaker's, the speaker's to be made gentler — 2026-11-16, the buzzer's clip converted and tested on the host, not heard on a buzzer; a knee for the PT3 limiter built, and `--knee 37 --drive 150` chosen by the user on test-clock's speaker
+
+The user, hearing Synchronization and PPK on test-clock's speaker with
+the limiter (`--limiter --noise 16 --highpass 100 --passes 1 --release
+10`, the speaker pack's) and flat (the buzzer's): "what we have now
+for speaker should be there for beeper (beeper should not be flat for
+sure). For speaker we want to keep limiter, but make it less
+agressive". Of PPK: "limiter is quite noticeable in it". This takes
+back the choice of 2026-11-13 for the buzzer, which was made against
+the limiter at its 16 ms release.
+
+- The buzzer: `clips/synchronization.pt3c` is now the speaker pack's
+  clip byte for byte (`cmp`), the recipe in `clips/README.md`.
+  `scripts/pt32clip.py`'s default is still the plain gain. Not heard
+  on a buzzer: the limited clips the buzzers had were cut at 300 Hz
+  with the noise at 11 sixteenths, and this one is 100 Hz and 16.
+- A flat clip cannot be brought to the limited one's level for a fair
+  comparison: at the header's top gain, 255, Synchronization is 0.297
+  of full scale RMS against 0.307 with 1.0 % of the samples clipped,
+  and PPK 0.199 against 0.366.
+- The speaker: `PT31` has no knee, so what there is to turn is the
+  release and the level a peak is aimed at. On the host (RMS of full
+  scale, samples at the rails, the spread of the level in 50 ms
+  windows between its 10th and 90th percentiles):
+
+| | Synchronization | PPK |
+| --- | --- | --- |
+| flat, gain 180 | 0.214, 0.11 % | 0.141, 0.01 % |
+| A `--release 10`, 128 ms (now) | 0.307, 0.17 %, 5.5 dB | 0.366, 0.13 %, 6.9 dB |
+| B `--release 11`, 256 ms | 0.261, 0.09 %, 6.2 dB | 0.284, 0.05 %, 8.8 dB |
+| C `--release 12`, 512 ms | 0.231, 0.05 %, 6.9 dB | 0.239, 0.03 %, 9.9 dB |
+| D `--release 12 --drive 160` | 0.288, 0.63 %, 6.8 dB | 0.299, 0.46 %, 9.9 dB |
+| `--release 14`, 2 s (15 is the same) | 0.191, 0.01 %, 9.0 dB | 0.162, 0.00 %, 13.7 dB |
+
+  A to D of both tunes were in `packs/ab/sync-limiter.bin` on
+  test-clock; not heard, since the user asked for the knee instead.
+- "Why not to add knee?" (the user). `XMC2` has a byte for it; `PT31`
+  and the SID's header have none, only `FLAT`, which is a fixed knee
+  of 96. `PT31`'s flags had four bits spare, and they are now the
+  knee, `pt3::KNEES`: 0 the shaper's own (3000, 20 dB of drive), each
+  step 2 dB more, 4 to 93 in `Shaper::new`'s 1024s. A firmware
+  without it reads past the bits and limits hard. `scripts/pt32clip.py
+  --knee N` takes the level as `xm2clip.py` does and writes the
+  nearest step. Host test: one channel's note at each step is at the
+  plain gain the knee gives. 168 tests, clippy clean, the firmware on
+  test-clock by OTA.
+- What the knee does, at `--release 10` (RMS, at the rails, spread):
+
+| knee | Synchronization | PPK |
+| --- | --- | --- |
+| the shaper's own (A) | 0.307, 0.17 %, 5.5 dB | 0.366, 0.13 %, 6.9 dB |
+| 9 | 0.301, 0.16 %, 5.4 dB | 0.344, 0.11 %, 7.6 dB |
+| 15 | 0.294, 0.15 %, 5.5 dB | 0.319, 0.10 %, 10.2 dB |
+| 23 (B) | 0.287, 0.15 %, 5.4 dB | 0.283, 0.08 %, 12.3 dB |
+| 37 (C) | 0.271, 0.12 %, 6.3 dB | 0.227, 0.04 %, 14.4 dB |
+| 37, `--drive 150` (D) | 0.317, 0.78 % | 0.267, 0.35 % |
+| 58 | 0.232, 0.07 %, 9.1 dB | 0.163, 0.01 %, 16.0 dB |
+
+  Synchronization sits over the knee most of the time, so it changes
+  little under 37; PPK's quiet parts come down with every step. A to
+  D of both tunes are in `packs/ab/sync-limiter.bin` on test-clock
+  (`sync_a` … `ppk_d`) after the speaker pack's first three clips.
+- **Chosen, 2026-11-16: "D seems to be better"** (the user, on
+  test-clock's speaker): `--knee 37 --drive 150` with the rest as it
+  was. `scripts/speaker-clips.sh` makes Synchronization that way;
+  the buzzer's clip stays at the hard limiter. The speaker's XM
+  modules are as they were.
+  The local speaker pack (`packs/clips-local-speaker.bin`, with
+  `packs/speaker/futurama.adp` since the ADPCM work) has Hibernation,
+  PPK and Synchronization made the same way.
+
 ### Backlog, board revision: a line output on the adapter for an amplifier — an idea of 2026-11-15, nothing built or measured; to be tried on the bench board when the amplifiers arrive
 
 The user's, of the speaker mod: with a proper amplifier in place of

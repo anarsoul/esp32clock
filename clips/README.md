@@ -57,9 +57,11 @@ its author, and nothing here grants any right to it beyond that.
 
 The module is in `mods/` as it was found, and this file is the module
 as it is behind the header `scripts/pt32clip.py` gives it for the
-clock's own player and AY (`core/src/pt3.rs`, `core/src/ay.rs`), with
-the converter's defaults: nothing rendered.
+clock's own player and AY (`core/src/pt3.rs`, `core/src/ay.rs`):
+nothing rendered. The header asks the player for its limiter, letting
+go over 128 ms, and a high-pass at 100 Hz.
 
 ```
-scripts/pt32clip.py mods/nq-synchronization.pt3 clips/synchronization.pt3c --restart
+scripts/pt32clip.py mods/nq-synchronization.pt3 clips/synchronization.pt3c --restart \
+    --limiter --noise 16 --highpass 100 --passes 1 --release 10
 ```

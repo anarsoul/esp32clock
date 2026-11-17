@@ -10,7 +10,7 @@ written on, how long it plays, and how the clock is to shape it.
 
     scripts/pt32clip.py tune.pt3 tune.pt3c [--machine pentagon|spectrum] [--clock HZ]
                         [--chip ay|ym] [--restart] [--highpass HZ] [--passes N] [--drive N]
-                        [--noise N] [--noise-lowpass HZ] [--limiter] [--release N] [--rate 16000]
+                        [--noise N] [--noise-lowpass HZ] [--limiter] [--release N] [--knee N] [--rate 16000]
 
 A module does not say what clocked its chip or how often its player
 ran. A Pentagon has 1 750 000 Hz and 48.83 frames a second, a Spectrum
@@ -36,7 +36,14 @@ The user's ear chose this on headphones and then on a clock's buzzer
 --limiter is the shaping the tracker modules have, as the PT3 clips
 had it before: the player limits hard, 20 dB of drive, and --drive and
 --release are then the limiter's (scripts/xm2clip.py has the same);
-it wants --highpass 300 with it, the cut it was heard with. A tune's
+it wants --highpass 300 with it, the cut it was heard with. --knee N
+is the level the limiter starts at, in 1024s of the mix as
+scripts/xm2clip.py's is (one channel at its top is 32, the three 96):
+a level under it gets a plain gain and what is over it is brought
+down, so a higher knee is a limiter that is heard less, for a
+speaker. The clip keeps it as one of fifteen steps, 2 dB apart, from
+the player's own, 20 dB of drive, to next to none, and the nearest is
+taken; a firmware older than 2026-11-16 limits hard whatever it says. A tune's
 drums are the chip's noise, of which the limiter made too much:
 --noise N mixes every channel that has the noise in it at N sixteenths
 of its level (16, the chip's own, by default; 11 was the limited
@@ -57,6 +64,7 @@ HEADER = 40
 RATE = 16000  # pt3::RATE
 FAST_HZ = 31250  # clip::FAST_HZ
 FINE, AFRESH, FAST, FLAT = 1, 2, 4, 8  # the header's flags
+KNEES = (0, 4, 5, 6, 7, 9, 12, 15, 18, 23, 29, 37, 46, 58, 74, 93)  # pt3::KNEES, by the flags' top four bits
 # The chip's clock in Hz and its cycles a frame: the processor's are
 # twice both.
 MACHINES = {"pentagon": (1_750_000, 71680 // 2), "spectrum": (1_773_400, 70908 // 2)}
@@ -157,6 +165,7 @@ def main():
     parser.add_argument("--noise-lowpass", type=float, default=0, metavar="HZ", help="low-pass the noise at this corner (default: none)")
     parser.add_argument("--drive", type=int, help="the gain: 127 is the three channels at their top level as full scale (default 180, 3 dB over that; to 255); with --limiter, what the limiter aims a peak at (default: the player's, 127)")
     parser.add_argument("--release", type=int, default=0, help="the limiter lets go by 1/2^N a sample at 8 kHz (default: the player's, 7)")
+    parser.add_argument("--knee", type=int, default=0, help="with --limiter, the level it starts at, in 1024s of the mix where one channel at its top is 32 (default: the player's, 20 dB of drive); the nearest of the clip's fifteen steps is taken")
     parser.add_argument("--rate", type=int, default=FAST_HZ, choices=(RATE, FAST_HZ), help="samples a second the player makes of it (default 31250, 8 Mbit/s through the chip's converter; or 16000)")
     parser.add_argument("--highpass", type=float, default=100, help="the high-pass's corner in Hz (default 100)")
     parser.add_argument("--passes", type=int, choices=(0, 1, 2), help="how many times it is applied, 12 dB an octave each (default 1; 0 for none, not with --limiter: the player then takes out the mean alone)")
@@ -171,6 +180,12 @@ def main():
         sys.exit("--passes 0 is not for a clip with --limiter")
     if args.drive is None:
         args.drive = 180 if args.flat else 0
+    if args.knee and args.flat:
+        sys.exit("--knee is the limiter's: give --limiter with it")
+    if not 0 <= args.knee <= 255:
+        sys.exit("--knee is 1 to 255")
+    # The step whose knee is nearest in dB.
+    step = min(range(1, 16), key=lambda k: abs(math.log(KNEES[k] / args.knee))) if args.knee else 0
     if not (0 <= args.drive <= 255 and 0 <= args.release <= 15):
         sys.exit("--drive is 1 to 255, --release 1 to 15")
     if args.clock and not 500_000 <= args.clock <= 4_000_000:
@@ -207,7 +222,7 @@ def main():
     # The frame is the machine's, in the chip's cycles as its clock is given.
     cycles = round(cycles * clock / MACHINES[machine][0])
 
-    flags = (FINE if args.chip == "ym" else 0) | (AFRESH if args.restart else 0) | (FAST if args.rate == FAST_HZ else 0) | (FLAT if args.flat else 0)
+    flags = (FINE if args.chip == "ym" else 0) | (AFRESH if args.restart else 0) | (FAST if args.rate == FAST_HZ else 0) | (FLAT if args.flat else 0) | step << 4
     out = bytearray(MAGIC)
     out += struct.pack("<BBBBIIIII5hBB", flags, args.drive, args.release, args.passes, clock, ms, cycles, frames, loop_frame, *section, args.noise % 16, lowpass)
     assert len(out) == HEADER
@@ -222,7 +237,7 @@ def main():
     else:
         looped = f"goes round from {loop_frame * ms / frames / 1000:.1f} s (position {loop} of {positions}, {(frames - loop_frame) * ms / frames / 1000:.1f} s of it)"
     print(f"  {ms / 1000:.1f} s, {frames} frames, {looped}; {len(out)} bytes")
-    print((f"  gain {args.drive or 127}/127, no limiter; " if args.flat else "  the limiter; ") + (f"high-pass {args.highpass:g} Hz, {12 * args.passes} dB an octave" if args.passes else "no high-pass") + (f"; noise at {args.noise}/16" if args.noise < 16 else "") + (f"; noise low-passed at {args.noise_lowpass:g} Hz ({lowpass}/256 a sample)" if lowpass else ""))
+    print((f"  gain {args.drive or 127}/127, no limiter; " if args.flat else "  the limiter" + (f", knee {KNEES[step]} (step {step}, {2 * step} dB over the player's own)" if step else "") + "; ") + (f"high-pass {args.highpass:g} Hz, {12 * args.passes} dB an octave" if args.passes else "no high-pass") + (f"; noise at {args.noise}/16" if args.noise < 16 else "") + (f"; noise low-passed at {args.noise_lowpass:g} Hz ({lowpass}/256 a sample)" if lowpass else ""))
     if module.uses:
         print("  uses: " + ", ".join(f"{what} ({count})" for what, count in sorted(module.uses.items())))
 
