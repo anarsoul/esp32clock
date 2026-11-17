@@ -28,7 +28,7 @@ target/
 # Reference material, not part of this project
 3rdparty/
 
-# Local credentials for the build (WIFI_SSID, OTA_TOKEN, ...)
+# Local credentials for the build (WIFI_SSID, API_TOKEN, ...)
 .env
 
 # KiCad working files under adapter/: backups, lock files, per-user
@@ -41,6 +41,9 @@ temp-freerouting.dsn
 panelizer.log
 fp-info-cache
 _autosave-*
+
+# The first adapter project, kept on disk beside the two that replaced it
+adapter/_old/
 
 # Sound for the sampled alarm clip: source files and the PCM built from them
 wav/
@@ -57,3 +60,9 @@ pt3/
 # Clip packs made by scripts/mkpack.py: the default one is built by the
 # CI, a local one holds music that may not be redistributed
 packs/
+
+# Photographs of the printed lids
+lid/pics/
+
+# Python's bytecode cache, left by the scripts and the bench simulations
+__pycache__/

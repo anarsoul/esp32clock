@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1300" height="680" viewBox="0 0 1300 680" font-family="DejaVu Sans, Liberation Sans, Arial, sans-serif">
+  <rect width="1300" height="680" fill="#ffffff"/>
+  <text x="40" y="44" font-size="24" font-weight="bold" fill="#111">Headphone tap for the buzzer line (GPIO5)</text>
+
+  <g stroke="#111" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <!-- C3 decoupling -->
+    <path d="M60 120 V200 M42 200 H78 M42 212 H78 M60 212 V520"/>
+    <!-- GPIO5 to A, base bus -->
+    <path d="M186 300 H380 M380 220 V380 M380 220 H430 M380 380 H430"/>
+    <!-- R1 -->
+    <path d="M260 120 V150 M260 250 V300"/>
+    <rect x="246" y="150" width="28" height="100"/>
+    <!-- Q1 NPN -->
+    <circle cx="448" cy="220" r="36"/>
+    <path d="M430 196 V244" stroke-width="4"/>
+    <path d="M430 208 L470 190 V120 M430 232 L470 250 V300"/>
+    <!-- Q2 PNP -->
+    <circle cx="448" cy="380" r="36"/>
+    <path d="M430 356 V404" stroke-width="4"/>
+    <path d="M430 368 L470 350 V300 M430 392 L470 410 V520"/>
+    <!-- E to R2 to B -->
+    <path d="M470 300 H540 M640 300 H790"/>
+    <rect x="540" y="286" width="100" height="28"/>
+    <!-- C1 -->
+    <path d="M700 300 V390 M682 390 H718 M682 402 H718 M700 402 V520"/>
+    <!-- C2 -->
+    <path d="M790 280 V320 M802 280 V320 M802 300 H940"/>
+    <!-- R3 -->
+    <path d="M880 300 V220 H940 M1040 220 H1130"/>
+    <rect x="940" y="206" width="100" height="28"/>
+    <!-- R4 -->
+    <path d="M1040 300 H1130"/>
+    <rect x="940" y="286" width="100" height="28"/>
+    <!-- R5 -->
+    <path d="M880 300 V360 M880 460 V520"/>
+    <rect x="866" y="360" width="28" height="100"/>
+    <!-- sleeve -->
+    <path d="M1130 380 H1080 V520"/>
+    <!-- jack -->
+    <rect x="1130" y="190" width="120" height="220" rx="8"/>
+    <!-- 3V3 bars -->
+    <path d="M44 120 H76 M244 120 H276 M454 120 H486"/>
+    <!-- grounds -->
+    <g id="gnd">
+      <path d="M42 520 H78 M48 528 H72 M54 536 H66"/>
+    </g>
+    <path d="M452 520 H488 M458 528 H482 M464 536 H476"/>
+    <path d="M682 520 H718 M688 528 H712 M694 536 H706"/>
+    <path d="M862 520 H898 M868 528 H892 M874 536 H886"/>
+    <path d="M1062 520 H1098 M1068 528 H1092 M1074 536 H1086"/>
+    <!-- GPIO terminal -->
+    <circle cx="180" cy="300" r="6" fill="#fff"/>
+  </g>
+
+  <!-- emitter arrows and junction dots -->
+  <g fill="#111">
+    <polygon points="466,248.2 453,247.9 457.1,238.7"/>
+    <polygon points="435,365.8 448,365.4 443.9,356.3"/>
+    <circle cx="260" cy="300" r="5"/>
+    <circle cx="380" cy="300" r="5"/>
+    <circle cx="470" cy="300" r="5"/>
+    <circle cx="700" cy="300" r="5"/>
+    <circle cx="880" cy="300" r="5"/>
+  </g>
+
+  <!-- labels -->
+  <g font-size="18" fill="#111">
+    <text x="60" y="108" text-anchor="middle">3V3</text>
+    <text x="260" y="108" text-anchor="middle">3V3</text>
+    <text x="470" y="108" text-anchor="middle">3V3</text>
+    <text x="172" y="284" text-anchor="end" font-weight="bold">GPIO5</text>
+    <text x="88" y="202">C3</text>
+    <text x="88" y="224">100n</text>
+    <text x="284" y="196">R1</text>
+    <text x="284" y="218">1k</text>
+    <text x="496" y="200">Q1</text>
+    <text x="496" y="222">BC547B</text>
+    <text x="496" y="388">Q2</text>
+    <text x="496" y="410">BC557</text>
+    <text x="590" y="274" text-anchor="middle">R2  2.2k</text>
+    <text x="726" y="392">C1</text>
+    <text x="726" y="414">47n</text>
+    <text x="796" y="262" text-anchor="middle">C2  10µ</text>
+    <text x="772" y="292" text-anchor="middle" font-weight="bold">+</text>
+    <text x="990" y="194" text-anchor="middle">R3  680</text>
+    <text x="990" y="340" text-anchor="middle">R4  680</text>
+    <text x="904" y="406">R5</text>
+    <text x="904" y="428">100k</text>
+    <text x="1190" y="176" text-anchor="middle">3.5 mm jack</text>
+    <text x="1146" y="226">tip (L)</text>
+    <text x="1146" y="306">ring (R)</text>
+    <text x="1146" y="386">sleeve</text>
+  </g>
+
+  <!-- node names -->
+  <g font-size="16" fill="#1a5fb4" font-style="italic">
+    <text x="268" y="322">A</text>
+    <text x="478" y="322">E</text>
+    <text x="708" y="290">B</text>
+    <text x="888" y="322">C</text>
+  </g>
+
+  <g font-size="16" fill="#333">
+    <text x="40" y="590">BC547B / BC549B / BC557, flat side facing you, legs down: C B E.  C2 is electrolytic, + towards B (about 2.65 V idle).</text>
+    <text x="40" y="616">Pull up to 3V3 only, never 5 V.  Not for a board with a working buzzer stage: the pull-up would turn the PNP on.</text>
+    <text x="40" y="642">Volume is R3/R4: 470 for about +3 dB, 1.5k for about −6 dB.  Design on paper, not yet built.</text>
+  </g>
+</svg>

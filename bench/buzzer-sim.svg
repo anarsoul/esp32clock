@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="700" viewBox="0 0 1100 700" font-family="DejaVu Sans, Liberation Sans, Arial, sans-serif">
+  <rect width="1100" height="700" fill="#ffffff"/>
+  <text x="40" y="44" font-size="24" font-weight="bold" fill="#111">The clock's buzzer stage on a breadboard, with headphones for the buzzer</text>
+
+  <g stroke="#111" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <!-- GPIO5, R5, base -->
+    <path d="M126 220 H190 M290 220 H380"/>
+    <rect x="190" y="206" width="100" height="28"/>
+    <circle cx="120" cy="220" r="6" fill="#fff"/>
+    <!-- RBE, base to emitter -->
+    <path d="M330 220 V206 M330 150 V136 H420"/>
+    <rect x="316" y="150" width="28" height="56"/>
+    <!-- Q1 PNP, emitter up -->
+    <circle cx="398" cy="220" r="36"/>
+    <path d="M380 196 V244" stroke-width="4"/>
+    <path d="M380 208 L420 190 V120 M380 232 L420 250 V330"/>
+    <path d="M404 120 H436"/>
+    <!-- RL -->
+    <path d="M420 330 V380 M420 480 V560"/>
+    <rect x="406" y="380" width="28" height="100"/>
+    <!-- K to R to jack -->
+    <path d="M420 330 H580 M680 330 H800 M800 300 V360 M800 300 H850 M800 360 H850"/>
+    <rect x="580" y="316" width="100" height="28"/>
+    <!-- sleeve -->
+    <path d="M850 430 H800 V560"/>
+    <!-- jack -->
+    <rect x="850" y="260" width="140" height="210" rx="8"/>
+    <!-- grounds -->
+    <path d="M402 560 H438 M408 568 H432 M414 576 H426"/>
+    <path d="M782 560 H818 M788 568 H812 M794 576 H806"/>
+  </g>
+
+  <g fill="#111">
+    <polygon points="385,205.8 398,205.4 393.9,196.3"/>
+    <circle cx="420" cy="330" r="5"/>
+    <circle cx="330" cy="220" r="5"/>
+    <circle cx="420" cy="136" r="5"/>
+    <circle cx="800" cy="330" r="5"/>
+  </g>
+
+  <g font-size="18" fill="#111">
+    <text x="420" y="108" text-anchor="middle">+5 V</text>
+    <text x="106" y="204" text-anchor="end" font-weight="bold">GPIO5</text>
+    <text x="240" y="258" text-anchor="middle">R5  5.1k</text>
+    <text x="306" y="174" text-anchor="end">RBE  2.2k</text>
+    <text x="306" y="194" text-anchor="end" font-size="15" fill="#444">not on the clock</text>
+    <text x="448" y="212">Q1</text>
+    <text x="448" y="234">BC557</text>
+    <text x="446" y="424">RL  100</text>
+    <text x="446" y="446" font-size="15" fill="#444">in place of the buzzer</text>
+    <text x="630" y="304" text-anchor="middle">R  4.7k</text>
+    <text x="630" y="368" text-anchor="middle" font-size="15" fill="#444">volume; never leave it out</text>
+    <text x="920" y="246" text-anchor="middle">3.5 mm jack</text>
+    <text x="866" y="306">tip (L)</text>
+    <text x="866" y="366">ring (R)</text>
+    <text x="866" y="436">sleeve</text>
+  </g>
+
+  <g font-size="16" fill="#1a5fb4" font-style="italic">
+    <text x="396" y="322" text-anchor="end">K</text>
+  </g>
+
+  <g font-size="16" fill="#333">
+    <text x="40" y="606">No pull-up on GPIO5. +5 V is the board's USB 5 V pin; GND is common.</text>
+    <text x="40" y="630">RBE lets Q1 turn off in time for the PDM stream; without it the clips distort. It is not on the clock's board.</text>
+    <text x="40" y="654">BC557, flat side facing you, legs down: C B E.  RL carries 50 mA while on: 0.5 W, or two 220 in parallel.</text>
+    <text x="40" y="678">Headphones only, not a line-in.  The clock has an S8550 and a coil at K: an approximation. Built and heard 2026-11-13.</text>
+  </g>
+</svg>
