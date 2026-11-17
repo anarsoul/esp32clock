@@ -322,7 +322,7 @@ sox's raw `ima`; the state starts over when a looping clip goes round.
 It gives 16-bit samples in `xm::STEP`ths of PCM's step to
 `clip::Player`, as a tune does. The encoder is `scripts/adpcm.py`,
 which keeps the four best paths through the coder's states. LZ does
-nothing for PCM (PLAN.md, 2026-11-16).
+nothing for PCM (HISTORY.md, 2026-11-16).
 
 **`core/src/xm.rs`**: a tracker module as a clip, pure.
 
@@ -554,7 +554,7 @@ Covered:
   stability at every setting, the frames' timing and the loop; a
   packed record by hand against the same tune plain, sample for sample
   and round the loop, and the bad records. A tune was compared with
-  libsidplayfp's render once, by hand (PLAN.md).
+  libsidplayfp's render once, by hand (HISTORY.md).
 - The AY: `run` against a tick-by-tick model of the chip over random
   registers, pitch, the mixer, noise, each envelope shape, the levels.
 - The PT3 player, on modules built in the test: notes by table and
@@ -587,4 +587,4 @@ it on the host), `ring.rs` (descriptors and registers; its layout is
 `const`-asserted), `src/clip.rs` (the I2S transfer and the pin),
 `dhcpd.rs` and `dnsd.rs` (their pure halves use embassy-net's address
 types), `storage.rs`'s map over the flash, `mqtt.rs`'s session loop.
-`PLAN.md` records the checks of each milestone; new ones are tests.
+`HISTORY.md` records the checks of each milestone; new ones are tests.

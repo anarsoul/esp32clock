@@ -8,7 +8,7 @@
 //! this lossy one: each sample is a 4-bit code, the step from the last
 //! sample in units that grow after a large code and shrink after a
 //! small one. Half the flash of 8-bit PCM at the same rate, and heard
-//! as much nearer to it than PCM at half the rate (PLAN.md,
+//! as much nearer to it than PCM at half the rate (HISTORY.md,
 //! 2026-11-16).
 //!
 //! The clip is `MAGIC`, the rate as a `u32`, then the codes, two a

@@ -31,7 +31,7 @@
 //!
 //! The spike this grew from (2026-11-08) also counted laps by the GDMA's
 //! `out_eof` and routed the chip select to a pin for the scope; see
-//! PLAN.md.
+//! HISTORY.md.
 
 use core::cell::RefCell;
 use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering, fence};

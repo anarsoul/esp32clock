@@ -4,7 +4,8 @@ Firmware for the HU-058 / HU-058D LED clock panel driven by an ESP32-C3,
 written in Rust with esp-hal and Embassy on esp-rtos. The display's two
 AiP33628 drivers are fed by SPI2 in quad mode used as a four-wire pattern
 generator, on one DMA segmented transfer the hardware loops for ever;
-see `PLAN.md` for the full design and its history.
+see `HISTORY.md` for the full design and its history; `PLAN.md` is
+what is still to do.
 `ARCHITECTURE.md` is the brief overview (crates, tasks, data paths,
 resets).
 `README.md` is short on purpose (the user, 2026-11-16): what the
@@ -19,18 +20,25 @@ of. `CLAUDE.md` is a symlink to this file; edit this one.
 
 ## Workflow
 
-- Plan before implementing. `PLAN.md` is the design record: each milestone
-  has its design, what was measured, and what was learned. Add to it before
-  starting work and mark milestones verified when the user confirms on the
-  panel. It ends with a review backlog of known, undone findings; read it
-  before proposing work and strike items you finish.
+- Plan before implementing. `PLAN.md` is what is not done: the work
+  planned, the checks a built change still owes, and the review backlog
+  of known, undone findings. Give a piece of work its section there
+  before starting it, with its design, then what was measured and what
+  was learned; read the backlog before proposing work and strike items
+  you finish. `HISTORY.md` is the design record of every milestone so
+  far. When a section's work is built and the user has confirmed it on
+  the panel, mark it verified and move it to the end of `HISTORY.md`
+  as it stands; a section built and moved before its check leaves a
+  line under `PLAN.md`'s "Checks still owed". Nothing in `HISTORY.md`
+  is rewritten: a later finding is a new section or a dated note.
 - Update `ARCHITECTURE.md` in the same change as any major change to
   the architecture: a task or executor added, removed or moved, a new
   peripheral or DMA path, a new way tasks talk to each other, a new
   network service or page, a new persistent store or reset path, a
   module moved between `core/` and `src/`. It stays brief and names
   constants rather than their values; tuning, measurements and
-  history go in `PLAN.md`, not there.
+  history go in the work's section (`PLAN.md`, then `HISTORY.md`), not
+  there.
 - Nothing here can be verified without the hardware. Build, run clippy
   and `cargo host-test`, and put new pure logic under test in `core/`;
   then hand the user a flash command and say exactly what to look for.
@@ -70,8 +78,9 @@ touches them:
 | a buffer, a page's size, the record, a partition, a new static | `agents/sizes.md` |
 
 Keep them current in the same change as the code. A date, a
-measurement or the story of how something came to be goes in `PLAN.md`
-or one of those files, never here; this file gets a line only when
+measurement or the story of how something came to be goes in the
+work's section (`PLAN.md`, then `HISTORY.md`) or one of those files,
+never here; this file gets a line only when
 there is a new rule.
 
 ## Build and flash
@@ -257,7 +266,7 @@ Each with its measurements in `agents/hardware.md`.
   section held the done interrupt off (esp-sync's `RawMutex` masks every
   interrupt on this chip: the Wi-Fi blob's lock, the heap lock on every
   frame buffer, esp-println's lock while a monitor drains the USB FIFO),
-  which no priority could fix; the history is in PLAN.md under 2026-11-07
+  which no priority could fix; the history is in HISTORY.md under 2026-11-07
   and 2026-11-08. The scan task keeps its interrupt executor, but nothing
   time-critical runs on it now.
 - A frame must fit in one sub-frame unit (`UNIT_BYTES >= FRAME_BYTES`, a
@@ -334,7 +343,7 @@ the CI does in a second run. Not under test: `scan.rs`'s
 `src/clip.rs`, `dhcpd.rs` and `dnsd.rs`,
 `storage.rs`'s map over the flash, `mqtt.rs`'s session loop. What is
 covered, and the dump commands for comparing a player with a
-reference, are in `agents/modules.md`. `PLAN.md` records the checks of
+reference, are in `agents/modules.md`. `HISTORY.md` records the checks of
 each milestone; new ones are tests.
 
 ## Compatibility

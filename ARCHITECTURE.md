@@ -1,8 +1,8 @@
 # Architecture
 
 How the firmware is put together: the parts, who owns what, and how
-they talk. `PLAN.md` is the journal of how it got here and what was
-measured; `AGENTS.md` has the rules for changing the code, and
+they talk. `HISTORY.md` is the journal of how it got here and what
+was measured, `PLAN.md` what is still to do; `AGENTS.md` has the rules for changing the code, and
 `agents/` the references behind them: the per-file table, the
 behaviour of the pages and services, the hardware facts and the
 sizes to keep. This file names constants rather than repeating

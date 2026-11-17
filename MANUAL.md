@@ -329,5 +329,5 @@ crates, the tasks and what passes between them. `AGENTS.md` is the guide to work
 hardware facts that bite, the timing rules of the scan path and the
 sizes that must be kept. The `agents/` directory has the detail
 behind it: what each module holds, what the pages and services do,
-the clip converters, and what was measured. `PLAN.md` holds the design of each milestone
-and what was measured on the panel.
+the clip converters, and what was measured. `HISTORY.md` holds the design of each milestone
+and what was measured on the panel, `PLAN.md` what is still to do.

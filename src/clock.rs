@@ -18,7 +18,7 @@
 //! after a panic, which cannot write on the way down. The RTC timer is
 //! not used: esp-hal recalibrates its slow clock at every boot, and a
 //! time stored relative to it drifted with the whole uptime since
-//! power-up (see `PLAN.md`, 2026-10-27).
+//! power-up (see `HISTORY.md`, 2026-10-27).
 
 use core::cell::Cell;
 

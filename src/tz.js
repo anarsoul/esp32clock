@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Vasily Khoruzhick
 // The browser's IANA zone as a POSIX TZ rule for the clock, from next
 // year's two offset changes checked against the six years after; throws
-// for a zone no such rule describes. PLAN.md has the why; the Node check
+// for a zone no such rule describes. HISTORY.md has the why; the Node check
 // is scripts/tz-check.mjs.
 function posixTz(zone) {
   var y = new Date().getUTCFullYear() + 1;

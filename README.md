@@ -42,8 +42,9 @@ all of them.
 
 [`MANUAL.md`](MANUAL.md) is the manual: building the firmware from
 source, updates, the buttons, the pages, the API and Home Assistant.
-`ARCHITECTURE.md` is the overview of the firmware, `PLAN.md` the
-design record and `AGENTS.md` the maintainer's guide.
+`ARCHITECTURE.md` is the overview of the firmware, `HISTORY.md` the
+design record, `PLAN.md` what is still to do and `AGENTS.md` the
+maintainer's guide.
 
 ## How it differs from the original
 

@@ -2,7 +2,7 @@
 
 What the firmware does today, as seen from outside. Read the section
 for the area you are about to change; `AGENTS.md` has the rules,
-`PLAN.md` the history. Keep this file current in the same change as
+`HISTORY.md` the history. Keep this file current in the same change as
 the behaviour.
 
 ## Building and flashing
