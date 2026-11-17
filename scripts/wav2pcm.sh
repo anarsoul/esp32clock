@@ -7,7 +7,7 @@
 # everything below 900 Hz is cut (twice, 24 dB an octave), which leaves
 # the line's range to what the buzzer can play, and the level is then
 # pushed 20 dB into sox's limiter. Thin, but as loud as it gets.
-# Needs sox. 16 KB of flash per second; see AGENTS.md.
+# Needs sox. 16 KB of flash per second; see agents/clips.md.
 # Usage: scripts/wav2pcm.sh <in.wav> <out.pcm> [seconds] [skip] [rate]
 # keeps `seconds` of sound (all of it for "") from `skip` seconds in,
 # the last second and a half faded out when it is cut short. `rate` is

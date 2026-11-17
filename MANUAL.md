@@ -304,7 +304,9 @@ workflow does the same for a tag and publishes the images and the web
 installer (`docs/index.html`, served from the `gh-pages` branch).
 
 `ARCHITECTURE.md` describes how the firmware is put together: the two
-crates, the tasks and what passes between them. `AGENTS.md` is the detailed guide to the code: the module layout, the
+crates, the tasks and what passes between them. `AGENTS.md` is the guide to working on the code: the rules, the
 hardware facts that bite, the timing rules of the scan path and the
-sizes that must be kept. `PLAN.md` holds the design of each milestone
+sizes that must be kept. The `agents/` directory has the detail
+behind it: what each module holds, what the pages and services do,
+the clip converters, and what was measured. `PLAN.md` holds the design of each milestone
 and what was measured on the panel.

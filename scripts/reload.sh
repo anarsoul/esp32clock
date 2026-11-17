@@ -3,7 +3,8 @@
 # Copyright (c) 2026 Vasily Khoruzhick
 # Reset the clock the deliberate way and wait for it to come back.
 # POST /reload blanks the panel, carries the time and the alarm state
-# across the reset and does not count as a self-heal; see AGENTS.md.
+# across the reset and does not count as a self-heal; see
+# agents/behaviour.md.
 # Needs curl and API_TOKEN (the value the firmware was built with).
 # Usage: API_TOKEN=… scripts/reload.sh <ip-or-hostname>
 set -eu

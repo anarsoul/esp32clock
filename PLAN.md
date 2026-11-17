@@ -9715,3 +9715,35 @@ Not tested: a clock that never had a token on a build with none
 `token_cleared` flag); the access point's setup on such an image; the
 release workflow itself, which runs on a tag. Still owed from before:
 the default pack on a stock buzzer circuit.
+
+### AGENTS.md cut to the rules, the references moved to `agents/` — 2026-11-17
+
+`AGENTS.md` had grown to 90 KB, loaded into every agent session:
+rules mixed with the description of the pages and services, a
+per-file table whose rows had become module documentation, the
+converters' flags with their history, and dated measurements. It is
+now 24 KB of rules, and the rest moved into five
+files read when the work touches them: `agents/behaviour.md`
+(flashing and seeds, settings, pages and `/api`, clip packs, the
+system page and the PIN, provisioning, self-heal, Home Assistant,
+cross-site requests, firmware updates, releases), `agents/modules.md`
+(the per-file table, what the host tests cover), `agents/clips.md`
+(the converters, the pack tools, the sound path's build variables),
+`agents/hardware.md` and `agents/sizes.md` (the facts and limits with
+their figures). The move was first made with the text unchanged and
+checked by script (every non-blank line of the old file in the new
+one or in a reference); the references were then put under
+sub-headings, bullets and tables, with every backticked name kept.
+What that second pass dropped is only the account of how a thing was
+before (the PIN drawn as the system page loaded, the token's own
+page, the header size before `X-Frame-Options`), which the entries
+above have; measurements and choices by ear kept their dates. New in `AGENTS.md`: "Reference files" (which to
+read before touching what, and the rule that dates and measurements
+go there or here, not into the guide), "Behaviour rules" (the rules
+that were spread through the description: no `GET` with a side
+effect, secrets never read back, the network keys' refusal on the key
+alone, one PIN one action, the `set/` allow list, resets through
+`heal`), a one-line-per-file layout table. "Timing rules in the scan
+path", "Compatibility" and "Conventions" are as they were.
+`ARCHITECTURE.md`, `MANUAL.md` and two scripts' headers point at the
+new places.
