@@ -130,13 +130,22 @@ way.
   the transistor switches harder and the buzzer is louder.
 
 With the mod Q1 gets hot to the touch while a clip of sampled sound, a
-tracker module, a SID or a PT3 tune plays: 0.2 W at the most, inside
-the S8550's rating. Q1 stands next to the NTC, so the firmware holds
+tracker module, a SID or a PT3 tune plays. Such a clip is a stream of
+pulses 125 to 250 ns long, and the transistor cannot switch that
+fast: with under a milliamp of base current its edges are no shorter
+than the pulses. So for the length of the clip it never gets fully on
+or off and sits in its linear region, half on, with the buzzer's mean
+current through it: about 78 mA at 2.5 V at the worst, 0.2 W for the
+buzzer's 32 Ω coil on 5 V, inside the S8550's rating. It stays cold
+when idle, on the beeps and on a beeper clip, whose pulses are long
+enough to switch on. Q1 stands next to the NTC, so the firmware holds
 the temperature at what it was before such a clip, for its length and
 up to twenty minutes after.
 
 [`speaker-mod/`](speaker-mod/README.md) describes a speaker in the
-buzzer's place.
+buzzer's place. Its base resistors, 330 Ω for R5 and 100 Ω from base
+to emitter, drive Q1 hard enough to switch on every pulse, so with
+that mod the transistor stays cool while a clip plays.
 
 ### The adapter
 
