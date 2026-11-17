@@ -74,7 +74,7 @@ display and differs in these ways:
 | pin header | the one that comes with the module |
 | 2 × 10 kΩ 0603 resistors, ideally 1 % | R1 and R2 on the adapter; only needed for the temperature and light sensors |
 | 10 µF 25 V electrolytic capacitor | replaces the kit's C3, optional but recommended |
-| 1N4148 diode and a 5.1 kΩ resistor | the buzzer mod, optional |
+| 1N4148 diode, a 5.1 kΩ and a 2.2 kΩ resistor, a BAT42 diode | the buzzer mod: optional, but the clips do not sound good without it |
 | 5 V USB power supply | 1 A recommended; 500 mA works |
 
 ### The clock board
@@ -117,9 +117,11 @@ contacts and there is clearance under the adapter, fit the socket and
 the adapter is removable; if not, solder the adapter's header straight
 into the U4 footprint.
 
-**The buzzer mod, optional:** two changes that make the alarm louder
-and cleaner, the clips most of all. The firmware is the same either
-way.
+**The buzzer mod, optional:** four changes that make the alarm louder
+and cleaner. The beeps and the note melodies are fine on a stock
+board; the [clips](#clips) are not, so do the mod if you want them:
+without it they are quiet and distorted. The firmware is the same
+either way.
 
 - A flyback diode, a 1N4148 will do, across the buzzer's two pins on
   the solder side: the cathode (the end with the band) to the pin Q1's
@@ -128,6 +130,17 @@ way.
   ground every time Q1 turns off.
 - 5.1 kΩ for R5 instead of 10 kΩ, which doubles Q1's base current, so
   the transistor switches harder and the buzzer is louder.
+- RBE, a 2.2 kΩ resistor the board has no place for, from Q1's base
+  to its emitter, soldered across those two legs. It takes the charge
+  out of the base when the pin lets go, so the transistor turns off in
+  time; without it a clip with heavy bass is distorted. Of the four
+  this is the one a clip needs most.
+- A BAT42 Schottky diode (a BAT54 will do) from GPIO5 to 3.3 V, the
+  anode to the pin and the cathode, the end with the band, to 3.3 V.
+  RBE pulls the base, and through R5 the released pin, up to the 5 V
+  rail, more than the ESP32-C3's pin is rated for; the diode holds
+  the pin at about 3.5 V, and Q1 stays off. Fit it whenever you fit
+  RBE.
 
 With the mod Q1 gets hot to the touch while a clip of sampled sound, a
 tracker module, a SID or a PT3 tune plays. Such a clip is a stream of
@@ -258,7 +271,9 @@ played by the clock's own players and chip emulations. A clock's clips
 are a clip pack in a flash partition of their own, so they can be
 changed without a new firmware, from `http://<ip>/clips` or with
 `scripts/clips.sh`. The default pack is the four clips in `clips/`,
-and the web installer writes it.
+and the web installer writes it. They are made for a clock with
+[the buzzer mod](#the-clock-board); a stock board plays them, but not
+well.
 
 The clips are other people's music and not under this project's
 licence; [`clips/README.md`](clips/README.md) credits each. Making
