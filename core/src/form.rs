@@ -890,18 +890,24 @@ const SAVE: &str = "<p class=c><button>Save</button><br><b id=u hidden>Changes n
 /// unsaved-changes mark, shown while any named control of the first
 /// form differs from what the page was served with. It also takes the
 /// notice's query (`?saved=1`, `?error=…`) off the address, so a reload
-/// does not say it again. And it posts the form itself (`X` is the
+/// does not say it again. And it posts the form itself, only the
+/// names with a control that differs (`G`), each with every pair the
+/// form has under it (a checkbox with its hidden `0`, the days all
+/// that are ticked), so a tab opened a while ago puts back nothing it
+/// did not change (`X` is the
 /// notice of a refusal, in this page or in an answer): a refused
 /// form's notice is taken out of the answer and put above the form,
 /// which stays as it was typed, and a saved one goes on to the page
 /// the redirect named; a request that fails is left to the browser's
 /// own submit.
 const UNSAVED_JS: &str = "var D=document,f=D.forms[0],u=D.getElementById('u'),X='p.err:not([id])';history.replaceState(0,'',location.pathname);\
-f.onsubmit=function(e){e.preventDefault();fetch(f.action,{method:'POST',body:new URLSearchParams(new FormData(f))}).then(function(r){return r.text().then(function(h){\
+function G(){var s=new Set;for(var e of f.elements)if(e.name&&(e.type=='checkbox'?e.checked!=e.defaultChecked:\
+e.options?!e.options[e.selectedIndex].defaultSelected:e.value!=e.defaultValue))s.add(e.name);return s}\
+f.onsubmit=function(e){e.preventDefault();var s=G(),b=new URLSearchParams;new FormData(f).forEach(function(v,k){if(s.has(k))b.append(k,v)});\
+fetch(f.action,{method:'POST',body:b}).then(function(r){return r.text().then(function(h){\
 var n=new DOMParser().parseFromString(h,'text/html').querySelector(X),o=D.querySelector(X);if(!n){location.replace(r.url);return}\
 if(o)o.remove();f.before(n);n.scrollIntoView({block:'center'})})}).catch(function(){f.submit()})};\
-f.oninput=function(){var d=false;for(var e of f.elements)if(e.name&&(e.type=='checkbox'?e.checked!=e.defaultChecked:\
-e.options?!e.options[e.selectedIndex].defaultSelected:e.value!=e.defaultValue))d=true;u.hidden=!d};";
+f.oninput=function(){u.hidden=!G().size};";
 
 /// The clock page's own script, after `UNSAVED_JS`. `P` posts a body
 /// and fails on anything but a 2xx or the redirect Play and Stop answer
@@ -2139,7 +2145,9 @@ mod tests {
     fn scripts_keep_what_was_typed() {
         let out = pages(&Settings::DEFAULT, &status(true), Note::None);
         for out in &out[..3] {
-            assert!(out.contains("f.onsubmit=function(e){e.preventDefault();fetch(f.action,{method:'POST',body:new URLSearchParams(new FormData(f))})"), "{out}");
+            // Only the names that were changed are posted, each with
+            // all its pairs.
+            assert!(out.contains("f.onsubmit=function(e){e.preventDefault();var s=G(),b=new URLSearchParams;new FormData(f).forEach(function(v,k){if(s.has(k))b.append(k,v)});fetch(f.action,{method:'POST',body:b})"), "{out}");
             assert!(out.contains("X='p.err:not([id])'") && out.contains("if(!n){location.replace(r.url);return}") && out.contains(".catch(function(){f.submit()})"));
         }
         // The broker page: whether a password is stored, and the poll
@@ -2263,8 +2271,8 @@ mod tests {
             assert!(out.contains("<p class=c><button>Save</button><br><b id=u hidden>Changes not saved yet.</b></p>"), "{out}");
             assert!(out.contains("history.replaceState(0,'',location.pathname)"), "the notice's query leaves the address");
             assert_eq!(out.matches("<script>").count(), 1);
-            assert!(out.contains("f=D.forms[0]") && out.contains("f.oninput=function(){"), "{out}");
-            for check in ["e.checked!=e.defaultChecked", "e.options[e.selectedIndex].defaultSelected", "e.value!=e.defaultValue", "u.hidden=!d"] {
+            assert!(out.contains("f=D.forms[0]") && out.contains("f.oninput=function(){u.hidden=!G().size}"), "{out}");
+            for check in ["e.checked!=e.defaultChecked", "e.options[e.selectedIndex].defaultSelected", "e.value!=e.defaultValue", "s.add(e.name)"] {
                 assert!(out.contains(check), "{check}");
             }
             // Every select marks its stored option, which the comparison needs.

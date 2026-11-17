@@ -120,7 +120,11 @@ Common to all:
   says `Saved.`; a refused one with `?error=value&key=tz`, and the
   page names the field from `form::FIELDS` (the key's label, never the
   query's text). The script takes the query off the address.
-- With script a form is posted with `fetch`: a refusal's notice is
+- With script a form is posted with `fetch`, and only the fields
+  that differ from what the page was served with: a name goes with
+  every pair the form has under it (a checkbox with its hidden `0`,
+  the days all that are ticked), so a tab opened a while ago puts
+  back nothing it did not change. A refusal's notice is
   taken out of the answer and put above the form, which stays as
   typed, and a saved form goes on to the page the redirect named.
   Without script the form is posted and reloaded.
@@ -129,8 +133,7 @@ The clock page, `/`:
 
 - The alarm and the display are one form with Save under both, and
   Save posts both: colour and brightness change on the panel when the
-  form is saved, not as they are chosen. A tab opened a while ago puts
-  its colour back with its Save, as it does the alarm.
+  form is saved, not as they are chosen.
 - The script makes Play and Stop plain buttons: as the form's first
   submit buttons, Enter in the alarm time would play the tune.
 - Play or Stop that fails says so above Save.
