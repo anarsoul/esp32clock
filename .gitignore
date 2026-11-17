@@ -61,6 +61,12 @@ pt3/
 # CI, a local one holds music that may not be redistributed
 packs/
 
+# The lids as lid/Makefile renders them from lid/lid.scad; the ones that
+# were printed are kept under their own names
+lid/lid.stl
+lid/lid-speaker.stl
+lid/lid-template.stl
+
 # Photographs of the printed lids
 lid/pics/
 

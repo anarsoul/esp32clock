@@ -19,6 +19,9 @@
 //   openscad -o lid-template.stl -D 'part="template"' lid.scad
 //   openscad -o lid-speaker.stl -D speaker=true lid.scad
 //
+// `make` in this directory runs the first and the third, `make template`
+// the second.
+//
 // The dimensions marked (caliper) were measured on the original lid.
 // The template is a 0.6 mm test of the panel's outline and the post
 // positions, for checking a change without printing the whole lid.
