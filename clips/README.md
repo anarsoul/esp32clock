@@ -23,7 +23,9 @@ here grants any right to it.
 The file is what the game's own player sends to the Spectrum's
 speaker, recorded in an emulator as run lengths of the speaker bit by
 `scripts/zxbeeper.py --seconds 126.5` (one pass of the tune, to the
-point where the game starts it over; pulses as played). It is not a new arrangement or performance.
+point where the game starts it over; pulses as played), which writes
+a stretch of runs that has been played before as a reference to it:
+the file is half the size and the runs are the same. It is not a new arrangement or performance.
 
 ## `halftime.xmc` and `keygen.xmc`
 

@@ -9201,6 +9201,140 @@ again from them, the same eight clips in the same order, 700 557
 bytes each; test-clock has the speaker one. White-clock and
 martin-clock have the PAL clip until their pack is uploaded again.
 
+### Beeper clips packed: `BPR3`, repeats as references into the clip; SID tunes the same, `SID2` — DONE, on a clock with the rebuilt packs and accepted by the user 2026-11-16 ("Works nicely")
+
+The user, 2026-11-16: Trantor is 145 KB of the default pack's 183,
+store it smaller without losing anything, in a format other beeper
+tunes can use.
+
+**What was measured** (126.5 s, 112 604 runs):
+
+- The runs are already tight one by one (1.3 bytes each as LEB128).
+  gzip makes 58 KB of the file, zstd 57, xz 45; those need a window
+  in RAM and a decoder of some size.
+- The same flips in T-states and not rounded to 512 kHz ticks: 194 KB
+  plain, gzip 49, xz 41, the LZ below 70 to 73. The rounding is not
+  what keeps the runs from repeating. The tune is pulse trains whose
+  periods are no multiples of each other, so the gap from one
+  channel's pulse to the other's is new each time, and a bar played
+  again is not the same runs. A delta from the last pulse of the same
+  width (the channels told apart by their widths) did not help either
+  (xz 40 KB): there are 235 widths.
+- The player itself is some 750 bytes of Z80 and runs without the
+  ROM, so the tune as a snapshot for a Z80 on the chip would be a few
+  KB and exact. Proposed and not taken: the user chose the packed
+  runs, "it is more generic" (any recording of a 1-bit line, whatever
+  made it).
+
+**The format.** `BPR3`, the total in ticks as before, then tokens:
+
+| first byte | token |
+| --- | --- |
+| `0vvvvvvv` | a run of 0 to 127 ticks |
+| `10vvvvvv`, a byte | a run of 128 to 16 511 (the 14 bits, plus 128) |
+| `110nnnnn`, LEB128 | a reference: the next n + 2 runs are those decoded from the token that starts so many bytes before this one |
+| `0xE0`, LEB128 | a longer run |
+| `0xF0`, LEB128, LEB128 | a reference of more runs: the count, then the distance |
+
+A reference is to the packed bytes, not to the output: the clip is
+read in place from the flash, so going back costs a position and a
+count to return by, and nothing is kept of what was played. The runs
+referred to may be references themselves, to `BEEPER_DEPTH` (16)
+deep, which is 128 bytes of the stream's state. A reference that
+uses up its parent's count takes the parent's place on the stack, so
+the depth is the nesting and not the length of a chain; and so a
+reference may reach itself, which is the same few runs many times
+over (a note held on one channel) at no depth. Levels are not stored:
+off and on alternate by the count of runs put out, as in `BPR2`.
+
+What a bad file may do: a distance of nothing or past the clip's
+start, the depth passed, the bytes ending inside a token, references
+that give no run going round. Each ends the clip there, looping or
+not; the tokens read for one run are counted, so the last cannot hold
+the clip task. A clip of nothing but empty runs would spin
+`Runs::fill`, in `BPR2` as before this; a pack is uploaded with the
+token or the PIN, and that is left as it was.
+
+**The packer** (`scripts/zxbeeper.py`, `pack`): at each run the 256
+latest places where a token starts with the same two runs, the one
+that saves most bytes taken, and a run left as it is when the
+reference from the next run saves more. A reference is to a token's
+start, so a place inside what an earlier reference stands for is not
+on offer; its own source is.
+
+**Size.** Trantor 145 516 → 67 559 bytes, the default pack 183 KB →
+105. By the steps, on Trantor: references that end before
+themselves, three runs at least, a depth of 8: 75.4 KB (4 deep 84,
+16 deep 73.7, 64 no better); reaching themselves 69.4; two runs at
+least 68.5; the second look 67.6. Some 39 000 of the 112 602 runs
+repeat nowhere and stay as they are, 58 KB of the first figure. A
+Huffman code over those would take some 12 KB off and needs its
+table of 3700 values in the file, most of what it saves; not done.
+
+**Done.**
+
+- `core/src/clip.rs`: `Beeper` reads both formats (`BPR2` stays
+  playable: the user's packs and `tap/`), by an offset into the clip
+  and a stack of `(return, left)`; `is_beeper` is either magic.
+- `scripts/zxbeeper.py`: writes `BPR3`, checks its own output by
+  unpacking it as the clock does, and given a `.bpr` in place of a
+  tape packs that (or with `--plain` unpacks it) without SkoolKit;
+  `--plain` writes `BPR2`.
+- `clips/trantor.bpr` packed from the file as it was. Unpacked again
+  by the script it is that file byte for byte, and the firmware's
+  decoder gave the same nine million bytes of line for both (a pass
+  and the start of the next, looping; a test of the day, not kept).
+- Tests: each token by hand with references in references, one that
+  ends inside another and one that reaches itself, the loop, the
+  line against the same runs unpacked; a packer in the test over
+  random runs with repeats, round trip; the bad files above; with
+  `ALARM_CLIP`, a built-in beeper clip's runs against its header's
+  total. 162 host tests.
+- No released firmware reads a pack yet, so the default pack with a
+  `BPR3` clip meets no firmware that would take it for PCM; a clock
+  built from the tree before this would play it as noise, and wants
+  the firmware first.
+
+To hear on a clock: Trantor from the new pack, a preview and round
+the loop; the serial log's `clip:` line for underruns and the time
+spent filling the ring, which should be no more than it was.
+
+**The same for a SID tune: `SID2`** (the user, 2026-11-16: are PT3s
+and SID tunes packable this way, and if so add it). Built the same
+day and tested on the host; the local packs made again with it.
+
+- A PT3 module is not: the player goes about it by its pointers
+  (patterns, samples, ornaments), so it would have to be unpacked
+  into RAM, 6 to 11 KB of it to save 4 to 7 of flash (gzip makes
+  3.8 KB of Synchronization's 11.2). The same for an XM module. Left
+  as they are.
+- A SID record is a stream read from front to back, and a tune's
+  frames repeat: Donkey Kong, 62 216 bytes (4158 frames with writes,
+  1590 of them different; gzip 10.1 KB, xz 6.6). With a frame as the
+  unit of a reference 25.1 KB; with a write or a wait as the unit
+  11.7 (three at least; two 12.6, four 12.5).
+- `SID2`: the header as `SID1`'s, then the record with one more kind
+  of first byte. `0x00`–`0x3F` a register and its value, `0x80`–`0xFF`
+  the frames to wait, as before; `0x40`–`0x5F`, LEB128 a reference to
+  n + 3 items (a write or a wait each) decoded from the token so many
+  bytes back; `0x60`, LEB128, LEB128 one of more; the rest ends the
+  tune. The loop offset is a token's place outside any reference,
+  which the packer sees to by letting no reference run over it.
+- The stack and its rules are `core/src/refs.rs` (`Refs`), which
+  `clip::Beeper` now uses too; the packer is `scripts/packrefs.py`,
+  which `zxbeeper.py` and `sid2clip.py` both import. `sid2clip.py`
+  writes `SID2`, `--plain` `SID1`, and a `.sidc` in the `.sid`'s
+  place is packed again as it is. `SID1` still plays.
+- Tests: a packed tune by hand against the same tune plain, sample
+  for sample and round the loop, a reference that ends inside a
+  frame; the bad records. 164 host tests.
+- Donkey Kong: 62 216 → 11 742 bytes. Unpacked again by the script it
+  is the file it was, the loop offset with it; the player's samples
+  for one pass of each are the same 2 174 010 bytes
+  (`CLIP_PCM_DUMP`). `sid/` is not in the repository and no pack of the
+  project's has a SID tune, so nothing shipped changes.
+- Trantor packs to the same 67 559 bytes through `packrefs.py`.
+
 ### Backlog, board revision: a line output on the adapter for an amplifier — an idea of 2026-11-15, nothing built or measured; to be tried on the bench board when the amplifiers arrive
 
 The user's, of the speaker mod: with a proper amplifier in place of

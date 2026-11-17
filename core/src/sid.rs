@@ -31,10 +31,23 @@
 //! module is (`shape::Shaper`).
 
 use crate::clip::{FAST_HZ, PCM_HZ};
+use crate::refs::{self, Refs};
 use crate::shape::Shaper;
 
 /// The first bytes of a converted tune.
 pub const MAGIC: &[u8; 4] = b"SID1";
+/// The first bytes of one whose record is packed: the same header,
+/// and in the record a first byte of `0x40` to `0x5F` with a LEB128
+/// after it is a reference (`refs`) to that byte's low five bits plus
+/// `MIN_REF` items, a write or a wait each, as they are decoded from
+/// the token that starts the LEB128's bytes before this one; `0x60`
+/// with two LEB128 is a reference to more, the count and then the
+/// distance. A register is under `0x40` and a wait `0x80` and over, as
+/// they were. The offset the tune starts over from is a token's that
+/// is in no reference.
+pub const PACKED_MAGIC: &[u8; 4] = b"SID2";
+/// The fewest items a packed record's short reference stands for.
+pub const MIN_REF: u32 = 3;
 /// The header: magic; flags (bit 0: an 8580, else a 6581; `FLAT`); the
 /// limiter's drive and release (0 for the shaper's own) and how many
 /// times the high-pass is applied; the C64's clock in Hz as `u32`; the
@@ -120,7 +133,7 @@ const STATE_MAX: i32 = 1 << 24;
 
 /// Whether `data` is a converted SID tune.
 pub const fn is_tune(data: &[u8]) -> bool {
-    data.len() >= HEADER && data[0] == MAGIC[0] && data[1] == MAGIC[1] && data[2] == MAGIC[2] && data[3] == MAGIC[3]
+    data.len() >= HEADER && data[0] == MAGIC[0] && data[1] == MAGIC[1] && data[2] == MAGIC[2] && (data[3] == MAGIC[3] || data[3] == PACKED_MAGIC[3])
 }
 
 /// How long the tune plays once, as the converter worked it out.
@@ -465,6 +478,9 @@ pub struct Tune<'a> {
     loop_at: usize,
     looping: bool,
     ended: bool,
+    /// A packed record, and the references being read in it.
+    packed: bool,
+    refs: Refs,
     chip: Chip,
     shaper: Shaper,
 }
@@ -489,6 +505,8 @@ impl<'a> Tune<'a> {
             loop_at: if (HEADER..data.len()).contains(&loop_at) { loop_at } else { HEADER },
             looping: false,
             ended: data.len() <= HEADER,
+            packed: byte(data, 3) == PACKED_MAGIC[3],
+            refs: Refs::new(),
             chip: Chip::new(clock, byte(data, 4) & 1 != 0, oversample, rate),
             shaper: Shaper::new(byte(data, 5), byte(data, 6), 1 + fast as u32, core::array::from_fn(|i| word(data, 28 + 2 * i) as i16), byte(data, 7), true, if byte(data, 4) & FLAT != 0 { FLAT_KNEE } else { 0 }),
         }
@@ -534,23 +552,59 @@ impl<'a> Tune<'a> {
             self.wait -= 1;
             return;
         }
+        self.refs.leave(&mut self.cursor);
         if self.cursor >= self.d.len() {
             if !self.looping {
                 self.ended = true;
                 return;
             }
             self.cursor = self.loop_at;
+            self.refs.reset();
         }
         // Pairs of register and value, to a byte with the top bit set:
-        // the frames to the next writes, less one.
-        while let Some(&b) = self.d.get(self.cursor) {
+        // the frames to the next writes, less one. In a packed record,
+        // references to those between them.
+        let mut idle = 0;
+        loop {
+            self.refs.leave(&mut self.cursor);
+            let start = self.cursor;
+            let Some(&b) = self.d.get(start) else {
+                return;
+            };
             self.cursor += 1;
+            if self.packed && (0x40..0x80).contains(&b) {
+                idle += 1;
+                if idle > refs::IDLE_TOKENS || !self.refer(b, start) {
+                    // A broken record: the tune ends here.
+                    self.ended = true;
+                    return;
+                }
+                continue;
+            }
+            idle = 0;
+            self.refs.gave();
             if b & 0x80 != 0 {
                 self.wait = (b & 0x7F) as u32;
                 return;
             }
             self.chip.write(b, byte(self.d, self.cursor));
             self.cursor += 1;
+        }
+    }
+
+    /// Into the reference whose first byte, `first`, was at `start`;
+    /// `false` if it is not one or points nowhere.
+    fn refer(&mut self, first: u8, start: usize) -> bool {
+        let count = match first {
+            0x40..0x60 => Some((first & 0x1F) as u32 + MIN_REF),
+            0x60 => refs::leb128(self.d, &mut self.cursor),
+            _ => None,
+        };
+        let back = refs::leb128(self.d, &mut self.cursor);
+        match (count, back) {
+            // Not into the header.
+            (Some(count), Some(back)) if back as usize <= start - HEADER => self.refs.enter(&mut self.cursor, start, count, back as usize),
+            _ => false,
         }
     }
 }
@@ -970,6 +1024,85 @@ mod tests {
     /// A flat clip is the chip's output at a plain gain: one voice's
     /// pulse wave at full level is a third of full scale either way,
     /// where the limiter takes it to the top.
+    /// `plain` with this packed record in its place, starting over
+    /// from the record's byte `loop_at`.
+    fn packed(plain: &[u8], record: &[u8], loop_at: usize) -> Vec<u8> {
+        let mut out = plain[..HEADER].to_vec();
+        out[..4].copy_from_slice(PACKED_MAGIC);
+        out[24..28].copy_from_slice(&((HEADER + loop_at) as u32).to_le_bytes());
+        out.extend(record);
+        out
+    }
+
+    /// The tune's first samples, played round.
+    fn samples(data: &[u8], n: usize) -> Vec<i16> {
+        let mut t = Tune::new(data);
+        t.set_looping(true);
+        (0..n).map_while(|_| t.next_sample()).collect()
+    }
+
+    #[test]
+    fn a_packed_record_is_the_same_tune() {
+        // A note set up, then two frames that alternate, and an ending;
+        // round from the first of the two.
+        let a: &[(u8, u8)] = &[(0, 0x50), (1, 0x10), (5, 0x09), (6, 0xF0), (24, 15), (4, 0x11)];
+        let b: &[(u8, u8)] = &[(1, 0x20)];
+        let c: &[(u8, u8)] = &[(1, 0x10)];
+        let plain = clip(&[(a, 1), (b, 2), (c, 1), (b, 2), (c, 1), (b, 2), (&[(4, 0x10)], 3)], 1);
+        #[rustfmt::skip]
+        let record = [
+            0, 0x50, 1, 0x10, 5, 0x09, 6, 0xF0, 24, 15, 4, 0x11, 0x80, // 0: the first frame
+            1, 0x20, 0x81,                                             // 13: b
+            1, 0x10, 0x80,                                             // 16: c
+            0x40 | (6 - MIN_REF as u8), 6,                             // 19: six items from 13: b, c, and itself for b again
+            4, 0x10, 0x82,                                             // 21
+        ];
+        let data = packed(&plain, &record, 13);
+        assert!(is_tune(&data) && duration_ms(&data) == duration_ms(&plain));
+        // Four times round.
+        let n = (4 * 12 * FRAME as u64 * RATE as u64 / PAL as u64) as usize;
+        let (x, y) = (samples(&plain, n), samples(&data, n));
+        assert!(x.len() == n && x == y && x.iter().any(|&s| s != 0));
+        // The long form, and a reference that ends in the middle of a
+        // frame: b's write, then the wait and c from the record.
+        let record = [&record[..19], &[0x60, 5, 6, 0x81, 4, 0x10, 0x82]].concat();
+        assert_eq!(samples(&packed(&plain, &record, 13), n), x);
+        // Played once it ends where the plain one does.
+        let once = |data: &[u8]| {
+            let mut t = Tune::new(data);
+            (0..10 * n).map_while(|_| t.next_sample()).count()
+        };
+        assert!(once(&data) == once(&plain) && once(&data) < n);
+    }
+
+    #[test]
+    fn a_bad_packed_record_ends() {
+        let plain = clip(&[(&[(24, 15)], 1)], 0);
+        let ends = |record: &[u8]| {
+            let n = samples(&packed(&plain, record, 0), 100_000).len();
+            assert!(n < 100_000, "{record:02X?}: goes on");
+        };
+        ends(&[24, 15, 0x80, 0x40, 0]); // a reference to itself
+        ends(&[24, 15, 0x80, 0x40, 4]); // into the header
+        ends(&[24, 15, 0x80, 0x40, 200, 1]); // before the clip
+        ends(&[24, 15, 0x80, 0x61, 3]); // no such token
+        ends(&[24, 15, 0x80, 0x7F, 3]);
+        ends(&[24, 15, 0x80, 0x40]); // cut short
+        ends(&[24, 15, 0x80, 0x60, 0x85]);
+        // References that give nothing, round and round.
+        ends(&[24, 15, 0x80, 0x60, 0, 1, 0x45, 3]);
+        // Each one deeper than the last, past `refs::DEPTH`.
+        let mut deep = vec![24, 15, 0x80, 0x40, 3];
+        for k in 0..refs::DEPTH as u8 + 1 {
+            deep.extend([0x60, 5 + k, if k == 0 { 2 } else { 3 }]);
+        }
+        ends(&deep);
+        // The plain record takes those bytes for registers, as it did.
+        let mut data = plain[..HEADER].to_vec();
+        data.extend([24, 15, 0x80, 0x40, 0, 0x80]);
+        assert_eq!(samples(&data, 5000).len(), 5000);
+    }
+
     #[test]
     fn a_flat_clip_is_not_limited() {
         let mut data = clip(&[(&[(24, 0x0F), (5, 0x00), (6, 0xF0), (3, 0x08), (1, 0x10), (4, PULSE | GATE)], 20)], 0);

@@ -31,6 +31,7 @@ pub mod ota;
 pub mod pack;
 pub mod panel;
 pub mod pt3;
+pub mod refs;
 pub mod sensors;
 pub mod settings;
 pub mod shape;

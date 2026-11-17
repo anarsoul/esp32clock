@@ -9,6 +9,14 @@ written as the firmware's beeper clip: the line's level as run lengths
 (core/src/clip.rs, `Beeper`). No sound is synthesised or filtered; the
 clock's buzzer is driven with the pulses the Spectrum's speaker was.
 
+The runs are written packed (`BPR3`): where a stretch of them has
+been played before, a reference to it and not the runs again, which
+is about half the bytes for a tune and nothing lost. --plain writes
+them one by one (`BPR2`) as a firmware before 2026-11-16 wants them.
+A beeper clip in the tape's place is packed as it is, with no
+SkoolKit needed:
+    scripts/zxbeeper.py old.bpr new.bpr
+
 Beeper music is narrow pulses, a few percent of the time on, which is
 quiet on the clock's buzzer; --stretch widens every pulse by a factor,
 never into the next one.
@@ -29,16 +37,21 @@ import os
 import struct
 import tempfile
 
-from skoolkit import tap2sna, trace
+from packrefs import Refs, leb128, pack, read_leb128
 
 CPU_HZ = 3_500_000  # the 48K Spectrum's clock; SkoolKit counts in its T-states
 TICK_HZ = 512_000  # clip::BEEPER_TICK_HZ
-MAGIC = b"BPR2"  # clip::BEEPER_MAGIC
+PLAIN = b"BPR2"  # clip::BEEPER_MAGIC
+PACKED = b"BPR3"  # clip::BEEPER_PACKED_MAGIC
+MIN_REF = 2  # clip::BEEPER_MIN_REF
+SHORT_REFS = 32  # counts a reference's first byte has room for
 
 
 def flips(tape, tstates, settle=0, start=None):
     """T-states of every flip of the speaker bit, from the end of the load,
     or from a jump to `start` made `settle` T-states after it."""
+    from skoolkit import tap2sna, trace
+
     kept = []
 
     class Spy(trace.Tracer):
@@ -61,19 +74,82 @@ def flips(tape, tstates, settle=0, start=None):
     return [t for t, register, _ in kept[-1].audio_log if register == 0xFF]
 
 
-def leb128(value):
-    out = bytearray()
+def run_token(ticks):
+    if ticks < 128:
+        return bytes([ticks])
+    if ticks < 128 + (1 << 14):
+        return bytes([0x80 | (ticks - 128) >> 8, (ticks - 128) & 0xFF])
+    return b"\xe0" + leb128(ticks)
+
+
+def reference(count, back):
+    if count - MIN_REF < SHORT_REFS:
+        return bytes([0xC0 | (count - MIN_REF)]) + leb128(back)
+    return b"\xf0" + leb128(count) + leb128(back)
+
+
+def unpack(tokens):
+    """The runs of a packed clip, read as `clip::Beeper` reads them."""
+    runs = []
+    at = 0
+    refs = Refs()
     while True:
-        byte = value & 0x7F
-        value >>= 7
-        out.append(byte | (0x80 if value else 0))
-        if not value:
-            return bytes(out)
+        at = refs.leave(at)
+        if at == len(tokens):
+            return runs
+        start = at
+        first = tokens[at]
+        at += 1
+        if first < 0x80:
+            ticks = first
+        elif first < 0xC0:
+            ticks = ((first & 0x3F) << 8 | tokens[at]) + 128
+            at += 1
+        elif first == 0xE0:
+            ticks, at = read_leb128(tokens, at)
+        elif first < 0xE0 or first == 0xF0:
+            if first == 0xF0:
+                count, at = read_leb128(tokens, at)
+            else:
+                count = (first & 0x1F) + MIN_REF
+            back, at = read_leb128(tokens, at)
+            at = refs.enter(at, start, count, back)
+            continue
+        else:
+            raise SystemExit("packed clip: an unknown token")
+        runs.append(ticks)
+        refs.gave()
+
+
+def read_clip(data):
+    """The runs of a beeper clip of either format."""
+    if data[:4] == PACKED:
+        return unpack(data[8:])
+    if data[:4] != PLAIN:
+        raise SystemExit("a beeper clip of a format this script does not read")
+    runs = []
+    at = 8
+    while at < len(data):
+        run, at = read_leb128(data, at)
+        runs.append(run)
+    return runs
+
+
+def write_clip(path, runs, plain):
+    if plain:
+        body = b"".join(leb128(run) for run in runs)
+    else:
+        body, _ = pack(runs, run_token, reference, MIN_REF)
+        if unpack(body) != runs:
+            raise SystemExit("the packed clip does not unpack to the runs: a bug in this script")
+    with open(path, "wb") as f:
+        f.write((PLAIN if plain else PACKED) + struct.pack("<I", sum(runs)) + body)
+    return len(body) + 8
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("tape", help="TAP, TZX or PZX file, or a zip of one")
+    parser.add_argument("tape", help="TAP, TZX or PZX file, or a zip of one; or a beeper clip to pack again")
     parser.add_argument("out", help="the clip to write")
     parser.add_argument("--seconds", type=float, default=60, help="how much to keep, from the first sound (default 60)")
     parser.add_argument("--skip", type=float, default=0, help="seconds of sound to drop first")
@@ -81,7 +157,16 @@ def main():
     parser.add_argument("--boot", type=float, default=60, help="seconds to allow before the first sound (default 60)")
     parser.add_argument("--settle", type=float, default=20, help="with --start: seconds to run the loaded tape first (default 20)")
     parser.add_argument("--start", type=int, help="jump to this address after --settle, for a loader that waits for a key")
+    parser.add_argument("--plain", action="store_true", help="write the runs unpacked (BPR2), for a firmware before 2026-11-16")
     args = parser.parse_args()
+
+    with open(args.tape, "rb") as f:
+        head = f.read()
+    if head[:3] == b"BPR":
+        runs = read_clip(head)
+        size = write_clip(args.out, runs, args.plain)
+        print(f"{args.out}: {len(runs)} runs, {sum(runs) / TICK_HZ:.1f} s, {len(head)} bytes in, {size} bytes")
+        return
 
     limit = int((args.boot + args.skip + args.seconds) * CPU_HZ)
     times = flips(args.tape, limit, int(args.settle * CPU_HZ), args.start)
@@ -110,13 +195,8 @@ def main():
         on_ticks += b - a
         at = b
 
-    body = b"".join(leb128(run) for run in runs)
-    with open(args.out, "wb") as f:
-        f.write(MAGIC + struct.pack("<I", at) + body)
-    print(
-        f"{args.out}: {len(pulses)} pulses, {at / TICK_HZ:.1f} s, on {100 * on_ticks / at:.1f} % of the time, "
-        f"{len(body) + 8} bytes"
-    )
+    size = write_clip(args.out, runs, args.plain)
+    print(f"{args.out}: {len(pulses)} pulses, {at / TICK_HZ:.1f} s, on {100 * on_ticks / at:.1f} % of the time, {size} bytes")
 
 
 if __name__ == "__main__":

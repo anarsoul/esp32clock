@@ -39,6 +39,7 @@ use core::ops::Range;
 
 use crate::config;
 use crate::pt3;
+use crate::refs::{self, Refs};
 use crate::sid;
 use crate::xm;
 
@@ -473,10 +474,18 @@ pub const fn pcm_samples(data: &[u8]) -> &[u8] {
     if has_magic(data, PCM_MAGIC, PCM_HEADER) { data.split_at(PCM_HEADER).1 } else { data }
 }
 
-/// The first bytes of a beeper clip; a clip with no magic is PCM.
+/// The first bytes of a beeper clip of plain runs; a clip with no
+/// magic is PCM.
 pub const BEEPER_MAGIC: &[u8; 4] = b"BPR2";
+/// The first bytes of a packed beeper clip: runs and references to
+/// earlier runs (`Beeper`).
+pub const BEEPER_PACKED_MAGIC: &[u8; 4] = b"BPR3";
 /// Bytes before a beeper clip's runs: the magic and the length in ticks.
 const BEEPER_HEADER: usize = 8;
+/// How deep a packed beeper clip's references may nest.
+pub const BEEPER_DEPTH: usize = refs::DEPTH;
+/// The fewest runs a packed clip's short reference stands for.
+pub const BEEPER_MIN_REF: u32 = 2;
 /// Ticks per second of a beeper clip's run lengths.
 ///
 /// 512 kHz, 1.95 µs, since 2026-11-12. The first format (`BPR1`) had
@@ -501,7 +510,7 @@ const fn has_magic(data: &[u8], magic: &[u8; 4], header: usize) -> bool {
 
 /// Whether `data` is a beeper clip.
 pub const fn is_beeper(data: &[u8]) -> bool {
-    has_magic(data, BEEPER_MAGIC, BEEPER_HEADER)
+    has_magic(data, BEEPER_MAGIC, BEEPER_HEADER) || has_magic(data, BEEPER_PACKED_MAGIC, BEEPER_HEADER)
 }
 
 /// How long a clip of any kind plays, in milliseconds.
@@ -577,26 +586,51 @@ impl<S: RunSource> Runs<S> {
 
 /// A beeper clip: what a 1-bit speaker was driven with, as it was, with
 /// no modulator between. The clip is the line's level as run lengths,
-/// off then on then off and so on, each a LEB128 count of ticks of
-/// `1 / BEEPER_TICK_HZ`, after `BEEPER_MAGIC` and the total in ticks as
-/// a little-endian `u32` (`scripts/zxbeeper.py` writes it from a ZX
+/// off then on then off and so on, each a count of ticks of
+/// `1 / BEEPER_TICK_HZ`, after the magic and the total in ticks as a
+/// little-endian `u32` (`scripts/zxbeeper.py` writes it from a ZX
 /// Spectrum program's port writes). A run of nothing is allowed, for a
-/// clip that starts on or a run too long for one count.
+/// clip that starts on.
+///
+/// After `BEEPER_MAGIC` the runs are LEB128 counts and nothing else.
+/// After `BEEPER_PACKED_MAGIC` they are tokens, by the first byte:
+///
+/// | first byte | token |
+/// | --- | --- |
+/// | `0vvvvvvv` | a run of 0 to 127 ticks |
+/// | `10vvvvvv`, a byte | a run of 128 to 16 511: the 14 bits, plus 128 |
+/// | `110nnnnn`, LEB128 | a reference to n + `BEEPER_MIN_REF` runs, and how far back |
+/// | `0xE0`, LEB128 | a run of any length |
+/// | `0xF0`, LEB128, LEB128 | a reference: the count of runs, and how far back |
+///
+/// A reference stands for the next so many runs as they are decoded
+/// from the token that starts that many bytes before the reference.
+/// It is to the clip's bytes and not to what was played, and the
+/// runs referred to may be references themselves: see `refs`, which
+/// a packed SID tune shares. Levels are not stored: they alternate by
+/// the runs put out, so a reference may start on a run that was of
+/// the other level.
+///
+/// A clip that breaks the rules (a reference to nowhere, too deep, cut
+/// short, references that give no run) ends where it does.
 pub struct Beeper<'a> {
-    /// The clip's runs, and those still to play.
+    /// The clip's runs or tokens, and how far they are read.
     all: &'a [u8],
-    runs: &'a [u8],
+    at: usize,
     on: bool,
     /// Whether the clip starts over when it ends.
     looping: bool,
+    packed: bool,
+    refs: Refs,
 }
 
 impl<'a> Beeper<'a> {
     /// `data` must be a beeper clip (`is_beeper`).
     pub fn new(data: &'a [u8]) -> Self {
         let all = &data[BEEPER_HEADER.min(data.len())..];
+        let packed = has_magic(data, BEEPER_PACKED_MAGIC, BEEPER_HEADER);
         // The first run read is an off one.
-        Self { all, runs: all, on: true, looping: false }
+        Self { all, at: 0, on: true, looping: false, packed, refs: Refs::new() }
     }
 
     /// Play the clip round and round, or once.
@@ -604,28 +638,55 @@ impl<'a> Beeper<'a> {
         self.looping = looping;
         self
     }
+
+    fn byte(&mut self) -> Option<u8> {
+        let byte = *self.all.get(self.at)?;
+        self.at += 1;
+        Some(byte)
+    }
+
+    /// The next run's ticks from a packed clip; `None` at its end or
+    /// where it is broken.
+    fn token(&mut self) -> Option<u32> {
+        for _ in 0..refs::IDLE_TOKENS {
+            self.refs.leave(&mut self.at);
+            let start = self.at;
+            let first = self.byte()?;
+            let ticks = match first {
+                0..0x80 => first as u32,
+                0x80..0xC0 => ((first as u32 & 0x3F) << 8 | self.byte()? as u32) + 128,
+                0xE0 => refs::leb128(self.all, &mut self.at)?,
+                0xC0..0xE0 | 0xF0 => {
+                    let count = if first == 0xF0 { refs::leb128(self.all, &mut self.at)? } else { (first as u32 & 0x1F) + BEEPER_MIN_REF };
+                    let back = refs::leb128(self.all, &mut self.at)? as usize;
+                    if !self.refs.enter(&mut self.at, start, count, back) {
+                        return None;
+                    }
+                    continue;
+                }
+                _ => return None,
+            };
+            self.refs.gave();
+            return Some(ticks);
+        }
+        None
+    }
 }
 
 impl RunSource for Beeper<'_> {
     fn next_run(&mut self) -> Option<(bool, u32)> {
-        if self.runs.is_empty() && self.looping && !self.all.is_empty() {
+        self.refs.leave(&mut self.at);
+        if self.at >= self.all.len() && self.refs.idle() && self.looping && !self.all.is_empty() {
             // Round again: the first run is an off one once more.
-            self.runs = self.all;
-            self.on = true;
+            (self.at, self.on) = (0, true);
         }
-        let mut ticks = 0u32;
-        let mut shift = 0;
-        loop {
-            let (&byte, rest) = self.runs.split_first()?;
-            self.runs = rest;
-            if shift < 32 {
-                ticks |= ((byte & 0x7F) as u32) << shift;
-            }
-            shift += 7;
-            if byte & 0x80 == 0 {
-                break;
-            }
-        }
+        let ticks = if self.packed { self.token() } else { refs::leb128(self.all, &mut self.at) };
+        let Some(ticks) = ticks else {
+            // The end, or a broken clip, which is not played again.
+            (self.at, self.looping) = (self.all.len(), false);
+            self.refs.reset();
+            return None;
+        };
         self.on = !self.on;
         Some((self.on, ticks))
     }
@@ -1048,6 +1109,209 @@ mod tests {
         assert!(matches!(Stream::new(&[128; 100], false), Stream::Pcm(_)));
         assert_eq!((Stream::new(&data, false).bit_rate(), Stream::new(&[128; 100], false).bit_rate()), (BEEPER_BIT_RATE, ring_rate(PCM_HZ)));
         assert!(is_old_beeper(b"BPR1\0\0\0\0") && !is_old_beeper(&data));
+    }
+
+    /// A packed beeper clip of these tokens, its total as given.
+    fn packed_clip(tokens: &[u8], total: u32) -> Vec<u8> {
+        let mut data = BEEPER_PACKED_MAGIC.to_vec();
+        data.extend(total.to_le_bytes());
+        data.extend(tokens);
+        data
+    }
+
+    /// The runs a beeper clip gives, `limit` at most.
+    fn runs_of(data: &[u8], looping: bool, limit: usize) -> Vec<u32> {
+        let mut beeper = Beeper::new(data).looped(looping);
+        let mut runs = Vec::new();
+        while runs.len() < limit {
+            match beeper.next_run() {
+                Some((on, ticks)) => {
+                    // Off first, and so on; a clip going round starts
+                    // each time as it likes.
+                    assert!(looping || on == (runs.len() % 2 == 1), "run {}", runs.len());
+                    runs.push(ticks);
+                }
+                None => break,
+            }
+        }
+        runs
+    }
+
+    /// `runs` as a packed clip's tokens: at each run the longest stretch
+    /// that some earlier token starts, as `scripts/zxbeeper.py` packs,
+    /// without its second look.
+    fn pack(runs: &[u32]) -> Vec<u8> {
+        fn leb(out: &mut Vec<u8>, mut v: u32) {
+            loop {
+                out.push((v & 0x7F) as u8 | if v > 0x7F { 0x80 } else { 0 });
+                v >>= 7;
+                if v == 0 {
+                    break;
+                }
+            }
+        }
+        let min = BEEPER_MIN_REF as usize;
+        let mut out = Vec::new();
+        // The run each token starts at, with its place in `out`.
+        let mut starts: Vec<(usize, usize)> = Vec::new();
+        let mut depth = vec![0usize; runs.len()];
+        let mut i = 0;
+        while i < runs.len() {
+            let mut best = (0, 0);
+            for &(j, at) in &starts {
+                let mut n = 0;
+                while i + n < runs.len() && runs[j + n] == runs[i + n] && (j + n >= i || depth[j + n] < BEEPER_DEPTH) {
+                    n += 1;
+                }
+                if n >= best.0 {
+                    best = (n, at);
+                }
+            }
+            starts.push((i, out.len()));
+            let (n, at) = best;
+            if n >= min.max(3) {
+                let back = (out.len() - at) as u32;
+                let from = starts.iter().find(|s| s.1 == at).unwrap().0;
+                let deepest = 1 + depth[from..(from + n).min(i)].iter().max().unwrap();
+                depth[i..i + n].fill(deepest);
+                if n - min < 32 {
+                    out.push(0xC0 | (n - min) as u8);
+                } else {
+                    out.push(0xF0);
+                    leb(&mut out, n as u32);
+                }
+                leb(&mut out, back);
+                i += n;
+            } else {
+                match runs[i] {
+                    v @ 0..128 => out.push(v as u8),
+                    v @ 128..16_512 => out.extend([0x80 | ((v - 128) >> 8) as u8, (v - 128) as u8]),
+                    v => {
+                        out.push(0xE0);
+                        leb(&mut out, v);
+                    }
+                }
+                i += 1;
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn a_packed_beeper_clip_gives_its_runs() {
+        assert_eq!(BEEPER_MIN_REF, 2, "the tokens below are written for it");
+        #[rustfmt::skip]
+        let tokens = [
+            0x05,                   // 0: a run of 5
+            0x80, 0x00,             // 1: 128, the least of two bytes
+            0xBF, 0xFF,             // 3: 16 511, the most
+            0xE0, 0x80, 0x81, 0x01, // 5: 16 512
+            0xC1, 0x09,             // 9: three runs from 0
+            0xF0, 0x05, 0x02,       // 11: five from 9: a reference, then itself, which ends inside it
+            0x07,                   // 14
+            0xC0, 0x01,             // 15: two from 14: the 7 and itself, the 7 again
+            0x00,                   // 17: a run of nothing
+        ];
+        let runs = [5, 128, 16_511, 16_512, 5, 128, 16_511, 5, 128, 16_511, 5, 128, 7, 7, 7, 0];
+        let data = packed_clip(&tokens, runs.iter().sum());
+        assert!(is_beeper(&data) && !is_old_beeper(&data));
+        assert_eq!(duration_ms(&data), runs.iter().sum::<u32>() * 1000 / BEEPER_TICK_HZ);
+        assert_eq!(runs_of(&data, false, 100), runs);
+        // Round and round: the same runs, off first each time.
+        let twice = runs_of(&data, true, 2 * runs.len() + 3);
+        assert_eq!(twice[..runs.len()], runs);
+        assert_eq!(twice[runs.len()..2 * runs.len()], runs);
+        assert_eq!(twice[2 * runs.len()..], runs[..3]);
+        // And the line is what the same runs give unpacked.
+        let plain = beeper_clip(&runs);
+        let mut bits = [vec![0u8; 5000], vec![0u8; 5000]];
+        Stream::new(&data, false).fill(&mut bits[0]);
+        Stream::new(&plain, false).fill(&mut bits[1]);
+        assert!(bits[0] == bits[1] && bits[0].iter().any(|&b| b != 0));
+        // A clip that ends with a reference ends, and goes round.
+        let ending = packed_clip(&[9, 8, 7, 0xC1, 0x03], 48);
+        assert_eq!(runs_of(&ending, false, 100), [9, 8, 7, 9, 8, 7]);
+        assert_eq!(runs_of(&ending, true, 14), [9, 8, 7, 9, 8, 7, 9, 8, 7, 9, 8, 7, 9, 8]);
+    }
+
+    #[test]
+    fn packed_runs_come_back() {
+        // Runs from a few values, so stretches repeat; long ones too,
+        // and the same run many times over.
+        let mut seed = 12345u32;
+        let mut next = move || {
+            seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12345);
+            seed >> 16
+        };
+        for round in 0..40 {
+            let values: Vec<u32> = (0..2 + round % 7).map(|_| [next() % 100, 128 + next() % 2000, 16_000 + next() % 40_000][(next() % 3) as usize]).collect();
+            let mut runs: Vec<u32> = Vec::new();
+            while runs.len() < 600 {
+                match next() % 4 {
+                    0 if runs.len() > 8 => {
+                        // A stretch again.
+                        let from = (next() as usize) % (runs.len() - 4);
+                        let n = 2 + (next() as usize) % 60;
+                        for k in 0..n {
+                            runs.push(runs[from + k % (runs.len() - from)]);
+                        }
+                    }
+                    1 => runs.extend(core::iter::repeat_n(values[0], 1 + (next() % 50) as usize)),
+                    _ => runs.push(values[(next() as usize) % values.len()]),
+                }
+            }
+            let tokens = pack(&runs);
+            assert!(tokens.len() < runs.len(), "round {round}: {} bytes for {} runs", tokens.len(), runs.len());
+            let data = packed_clip(&tokens, 0);
+            assert_eq!(runs_of(&data, false, runs.len() + 1), runs, "round {round}");
+        }
+    }
+
+    #[test]
+    fn a_bad_packed_clip_ends() {
+        let ends = |tokens: &[u8], runs: &[u32]| {
+            let data = packed_clip(tokens, 512_000);
+            assert_eq!(runs_of(&data, false, 1000), runs, "{tokens:02X?}");
+            // Not played again, either.
+            assert_eq!(runs_of(&data, true, 1000), runs, "{tokens:02X?}, looping");
+        };
+        ends(&[5, 0xC0, 0x00, 6], &[5]); // a reference to itself
+        ends(&[5, 0xC0, 0x02, 6], &[5]); // to before the clip
+        ends(&[5, 0xE1, 6], &[5]); // no such token
+        ends(&[5, 0xFF, 6], &[5]);
+        ends(&[5, 0x80], &[5]); // cut short
+        ends(&[5, 0xE0, 0x80], &[5]);
+        ends(&[5, 0xC0], &[5]);
+        ends(&[5, 0xF0, 0x80], &[5]);
+        // References that give no run, round and round.
+        ends(&[5, 0xF0, 0x00, 0x01, 0xC5, 0x03, 6], &[5]);
+        // Each reference one deeper than the last: `BEEPER_DEPTH` of
+        // them play, one more ends the clip.
+        let nested = |levels: u32| {
+            let mut tokens = vec![5, 0xC0, 0x01];
+            for k in 2..=levels {
+                tokens.extend([0xF0, k as u8 + 1, if k == 2 { 2 } else { 3 }]);
+            }
+            tokens.push(9);
+            runs_of(&packed_clip(&tokens, 512_000), false, 1000)
+        };
+        let full = nested(BEEPER_DEPTH as u32);
+        assert_eq!(full.len() as u32, 1 + (1..=BEEPER_DEPTH as u32).map(|k| k + 1).sum::<u32>() + 1);
+        assert_eq!(full.last(), Some(&9));
+        let over = nested(BEEPER_DEPTH as u32 + 1);
+        assert_eq!(over[..], full[..full.len() - 1]);
+    }
+
+    #[test]
+    fn the_beeper_clips_built_in_add_up() {
+        // Only with `ALARM_CLIP` naming a beeper clip: its runs are its
+        // header's total, to the tick.
+        for data in crate::melody::CLIP_DATA.iter().filter(|data| is_beeper(data)) {
+            let total = u32::from_le_bytes([data[4], data[5], data[6], data[7]]) as u64;
+            let runs = runs_of(data, false, usize::MAX);
+            assert_eq!(runs.iter().map(|&r| r as u64).sum::<u64>(), total, "{} runs", runs.len());
+            println!("a beeper clip of {} bytes: {} runs, {} ms", data.len(), runs.len(), duration_ms(data));
+        }
     }
 
     /// The rate a PCM stream's bytes are read at: the line's bits, or

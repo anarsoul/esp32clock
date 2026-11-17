@@ -36,6 +36,13 @@ two thirds of a semitone higher.
 Some routines sound a short burst as they start, before the music;
 --mute keeps every voice's gate closed for that many frames.
 
+The record is written packed (`SID2`): writes and waits that the tune
+has had before are a reference to them (scripts/packrefs.py), a fifth
+of the bytes for a long tune and the same writes. --plain writes them
+all out (`SID1`), as a firmware before 2026-11-16 wants them. A clip
+in the .sid's place is packed as it is, or with --plain unpacked:
+    scripts/sid2clip.py old.sidc new.sidc
+
 Says what the tune does that the clock will not play.
 Then: ALARM_CLIP=tune.sidc ALARM_CLIP_LABEL='…' cargo build --release
 """
@@ -46,7 +53,11 @@ import struct
 import sys
 from collections import Counter
 
+from packrefs import Refs, leb128, pack, read_leb128
+
 MAGIC = b"SID1"  # sid::MAGIC
+PACKED = b"SID2"  # sid::PACKED_MAGIC
+MIN_REF = 3  # sid::MIN_REF
 HEADER = 40
 REGISTERS = 25  # sid::REGISTERS
 RATE = 16000  # sid::RATE
@@ -468,6 +479,78 @@ def text(raw):
     return raw.split(b"\0")[0].decode("latin1").strip()
 
 
+def items_of(record, mark):
+    """A plain record as its items, a write (two bytes) or a wait (one)
+    each, and which of them is at the offset `mark`."""
+    items = []
+    marked = 0
+    at = 0
+    while at < len(record):
+        if at == mark:
+            marked = len(items)
+        size = 1 if record[at] & 0x80 else 2
+        items.append(bytes(record[at : at + size]))
+        at += size
+    return items, marked
+
+
+def reference(count, back):
+    if count - MIN_REF < 32:
+        return bytes([0x40 | (count - MIN_REF)]) + leb128(back)
+    return b"\x60" + leb128(count) + leb128(back)
+
+
+def unpack(tokens, mark):
+    """A packed record plain, read as `sid::Tune` reads it, and where the
+    token at `mark` came to be."""
+    out = bytearray()
+    marked = 0
+    at = 0
+    refs = Refs()
+    while True:
+        at = refs.leave(at)
+        if at == mark and not refs.frames:
+            marked = len(out)
+        if at >= len(tokens):
+            return bytes(out), marked
+        start = at
+        first = tokens[at]
+        at += 1
+        if 0x40 <= first < 0x80:
+            if first < 0x60:
+                count = (first & 0x1F) + MIN_REF
+            elif first == 0x60:
+                count, at = read_leb128(tokens, at)
+            else:
+                raise SystemExit("packed tune: an unknown token")
+            back, at = read_leb128(tokens, at)
+            at = refs.enter(at, start, count, back)
+            continue
+        size = 1 if first & 0x80 else 2
+        out += tokens[start : start + size]
+        at = start + size
+        refs.gave()
+
+
+def write_clip(path, header, record, loop_at, plain):
+    """Write the tune: the header's 36 bytes after the magic (its loop
+    offset is set here), and the plain `record`, which starts over from
+    its offset `loop_at`. Its size."""
+    body = record
+    if not plain:
+        items, marked = items_of(record, loop_at)
+        body, where = pack(items, lambda item: item, reference, MIN_REF, apart=[marked])
+        loop_at = where.get(marked, 0)
+        if unpack(body, loop_at) != (bytes(record), sum(len(item) for item in items[:marked])):
+            raise SystemExit("the packed tune does not unpack to the record: a bug in this script")
+    header = bytearray(header)
+    header[20:24] = struct.pack("<I", HEADER + loop_at)
+    assert len(header) == HEADER - 4
+    with open(path, "wb") as f:
+        f.write((MAGIC if plain else PACKED) + header + body)
+    return HEADER + len(body)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("sid", help="the .sid file")
@@ -484,7 +567,17 @@ def main():
     parser.add_argument("--rate", type=int, default=FAST, choices=(RATE, FAST), help="samples a second the player makes of it (default 31250, 8 Mbit/s through the chip's converter; or 16000)")
     parser.add_argument("--passes", type=int, default=1, choices=(0, 1, 2), help="how many times it is applied, 12 dB an octave each (default 1)")
     parser.add_argument("--flat", action="store_true", help="no limiter, for a speaker: --drive is then a plain gain, 127 (the default) for the three voices at their top level as full scale, and what passes that is clipped (a firmware older than the flag plays the clip limited)")
+    parser.add_argument("--plain", action="store_true", help="write the record unpacked (SID1), for a firmware before 2026-11-16")
     args = parser.parse_args()
+    d = open(args.sid, "rb").read()
+    if d[:4] in (MAGIC, PACKED):
+        # A clip: packed again, or unpacked, as it is.
+        record, loop_at = d[HEADER:], struct.unpack_from("<I", d, 24)[0] - HEADER
+        if d[:4] == PACKED:
+            record, loop_at = unpack(record, loop_at)
+        size = write_clip(args.out, d[4:HEADER], record, loop_at, args.plain)
+        print(f"{args.out}: {len(d)} bytes in, {size} bytes")
+        return
     if not (0 <= args.drive <= 255 and 0 <= args.release <= 15):
         sys.exit("--drive is 1 to 255, --release 1 to 15")
     # The high-pass as a second-order Butterworth section at the
@@ -593,15 +686,12 @@ def main():
         rest = len(body)
         body.append(0x80)
     ms = round(len(frames) * cycles * 1000 / clock)
-    out = bytearray(MAGIC)
-    out += struct.pack("<BBBBIIIII5hBB", int(model == "8580") | (2 if args.flat else 0), args.drive, args.release, args.passes, clock, ms, cycles, len(frames), loop_at, *section, steps, int(args.rate == FAST))
-    assert len(out) == HEADER
-    out += body
-    open(args.out, "wb").write(out)
+    header = struct.pack("<BBBBIIIII5hBB", int(model == "8580") | (2 if args.flat else 0), args.drive, args.release, args.passes, clock, ms, cycles, len(frames), loop_at, *section, steps, int(args.rate == FAST))
+    size = write_clip(args.out, header, body, loop_at - HEADER, args.plain)
 
     print(f'{args.out}: "{name}" by {author} ({released}), song {song} of {songs}, {model}, {"NTSC" if system == NTSC else "PAL"}, {clock / cycles:.2f} frames a second')
     looped = f"goes round from {loop * cycles / clock:.1f} s" if loop or not args.seconds else "cut, starts over from the top"
-    print(f"  {ms / 1000:.1f} s, {looped}; {len(out)} bytes, {len(body) * 1000 // max(ms, 1)} a second (the file is {len(d)})")
+    print(f"  {ms / 1000:.1f} s, {looped}; {size} bytes, {(size - HEADER) * 1000 // max(ms, 1)} a second{"" if args.plain else f", {HEADER + len(body)} unpacked"} (the file is {len(d)})")
     if args.mute:
         print(f"  the gates closed for the first {args.mute} frames")
     if args.passes:

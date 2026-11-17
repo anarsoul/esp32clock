@@ -58,6 +58,13 @@ from `http://<ip>/update`; its settings survive the update.
   one), and are in the random draw, and a ringing alarm plays them round and
   round with no gap, as they are written to loop. The music is its
   authors'; see `clips/README.md`.
+- A beeper clip is packed (`BPR3`): runs that were played before are
+  a reference to them, read in place from the flash. Trantor is 68 KB
+  for 146 and the default pack 105 KB for 183, with the same pulses on
+  the line. `scripts/zxbeeper.py` writes it, and packs an older clip
+  given in a tape's place; the older format still plays.
+- A SID tune's record is packed the same way (`SID2`,
+  `scripts/sid2clip.py`): a tune of 62 KB is 12.
 - `ALARM_CLIP` at build time chooses other clips, or none: raw PCM
   (`scripts/wav2pcm.sh`), a ZX Spectrum beeper recording
   (`scripts/zxbeeper.py`), a FastTracker 2 module
