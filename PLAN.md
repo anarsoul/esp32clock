@@ -44,61 +44,6 @@ The user's, and what the readiness check of the same day left open.
 
 ## Planned, not built
 
-### A form posts only what was changed — built 2026-11-17, checked on test-clock from the session, the panel not seen
-
-The user, 2026-11-17, after the display went under Save ("а можно
-реализовать отправку только изменённых полей?"). It takes away what
-that cost: a tab opened a while ago put its colour, and its alarm,
-back with its Save.
-
-**Design.** In `UNSAVED_JS`, which `/`, `/settings` and `/ha` share,
-`G` collects the names of the controls that differ from what the page
-was served with; the unsaved mark is `G().size`, and the submit posts
-the pairs of `FormData` whose name is in the set. A name goes with
-every pair under it: a checkbox with its hidden `0` before it, so an
-unticked one still says so, and the days all that are ticked, since
-`form::apply` reads them as a union. Nothing changed posts an empty
-body, which saves nothing and answers `Saved`. The server is as it
-was (a form is a partial update); without script, and when `fetch`
-fails, the whole form is posted. The setup form has no such script.
-
-**Built.** `cargo host-test`, both clippy runs and the release build
-pass; `G` and the body were run under Node against a stub form.
-
-**Measured** on test-clock, 2026-11-17, flashed over USB
-(`v0.4-77-g3b9ba65-dirty`), with headless Chromium, real clicks on
-Save and the posts read from the browser:
-
-| what was done | body posted | `/api` after |
-| --- | --- | --- |
-| colour chosen, no Save | none; the mark shows | colour unchanged |
-| Save | `color=blue` | blue, the rest as it was; the page says `Saved.` |
-| a second tab, opened before that, alarm time changed, Save | `alarm=02%3A30` | 02:30, still blue |
-| `Alarm armed` ticked alone | `armed=0&armed=on` | armed |
-| unticked alone | `armed=0` | disarmed |
-| Wednesday unticked | `days=` six times | `mon,tue,thu,fri,sat,sun` |
-| Save with nothing changed, `/` and `/ha` | empty | nothing changed, `Saved`, MQTT stayed connected |
-| `/settings`: 12 hour ticked, offset −0.5 | `twelve_hour=0&twelve_hour=on&temp_offset=-0.5` | both set, the rest as it was |
-
-**A finding, 2026-11-17, after the commit** (a review the user
-passed on, reproduced under Node): when `fetch` failed the script
-fell back to `f.submit()`, which posts the whole form, so a stale tab
-whose answer was lost put its colour back after all. The fallback is
-gone: the line above Save, which was the clock page's for Play and
-Stop, is part of `SAVE` on all three pages (`The clock did not answer;
-try again.`), the submit hides it and a failure shows it, and the
-form stays as typed, so Save again posts the same fields. Checked on
-test-clock with the browser taken offline: a stale tab (lime, the
-clock since set to blue) with the alarm time changed posted
-`alarm=02%3A30` once and nothing else, showed the line and kept the
-field and the mark; back online, Save posted `alarm=02%3A30` again and
-the clock had 02:30 and was still blue. Play offline shows the same
-line.
-
-The settings were put back as found. Not seen: the panel itself, and
-`/ha` with a field changed (it would have moved the bench clock's
-broker session).
-
 ### Dim in the dark (M11b, second half) — planned 2026-11-01, not built
 
 The rest of M11 in `HISTORY.md`: the sensors are read and the
