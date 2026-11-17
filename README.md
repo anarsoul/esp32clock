@@ -191,6 +191,23 @@ The HU-058D has driver 1's clock on socket pin 14 and not 16, so on a
 D board a short wire from pin 14 to pin 16 should be needed. That
 follows from the schematics; the HU-058D is untested.
 
+### The lid
+
+If the case needs more room, as for an adapter standing on its pin
+header that no longer clears the original back lid, `lid/lid.scad` is
+a parametric OpenSCAD model of a raised lid, for 3D printing. It has
+the original's outline and takes the original screws; `raise` is how
+much higher than the original it stands, 10 mm by default.
+
+```sh
+openscad -o lid.stl lid/lid.scad                    # raised by 10 mm
+openscad -o lid.stl -D raise=6 lid/lid.scad         # or by another height
+openscad -o lid.stl -D speaker=true lid/lid.scad    # with a socket for the speaker mod's speaker
+```
+
+`lid/lid-v2-printed.stl` is the 10 mm one as printed, which fits the
+case.
+
 ### Power
 
 Feed 5 V through the clock's own micro USB (USB1). A 1 A supply is
