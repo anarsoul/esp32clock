@@ -194,9 +194,17 @@ read and what checked out, and the items closed, are under the same
 headings in `HISTORY.md`. Strike an item when it is done or decided
 against, with the date.
 
+Every item was read against the code on 2026-11-17 (commit c08b6cd).
+Four were found done and are struck; an item with a "Checked" note
+has changed in part; the rest hold as written, in the functions they
+name, at other line numbers.
+
 ### Review backlog (2026-10-21)
 
-- **Spaced day lists.** `parse_days` trims each name, but the 32-byte
+- ~~**Spaced day lists.**~~ Found done 2026-11-17: `form::apply` decodes a
+  value into `VALUE_MAX` (64) bytes, so the 33-byte list reaches
+  `parse_days`; no test puts the full spaced list through `apply`.
+  `parse_days` trims each name, but the 32-byte
   value buffer in `form::apply` is one byte short of
   `mon, tue, wed, thu, fri, sat, sun`, so the API answers "bad value"
   before the trim runs. Raise the buffer to 40 or so.
@@ -271,6 +279,9 @@ Nits:
   `read_request` returns `None` for a head over `REQUEST_BUF`, a body
   over `BODY_MAX` or a bad request line, and the socket is closed with
   bytes pending. Answer 413/400 after a bounded drain, as `/ota` does.
+  Checked 2026-11-17: a `Transfer-Encoding` now gets a 400 and a
+  `POST` with no length a 411; the three cases above are still a
+  silent close (`NoRequest::Close`).
 - **First change on an empty flash writes the default record.** With
   `stored == None` the compare in `persist_task` is skipped, so ticking
   "skip the next alarm" on a fresh board costs a flash write for a field
@@ -285,9 +296,13 @@ Nits:
 - **Silent fallbacks in the panel tables.** `com_index` returns slot 0
   for a value not in `COM_SEQ`, and nothing ties `GAMMA[255]` to
   `MAX_LEVEL`. Two `const` asserts lock in what is verbatim today.
+  Checked 2026-11-17: `GAMMA` went with the colours in levels; the
+  `com_index` half holds.
 - **In the ringing off-phase the degree mark stays lit.** `set_degree`
   runs before the match, so the flash is digits-off, mark-on. Cosmetic.
-- **Stale names.** `ota.rs:12` and `carry.rs:49` refer to
+- ~~**Stale names.**~~ Found done 2026-11-17: `check_rollback` is named
+  nowhere, and the image has grown to nearly 900 KB, so the 800 KB in
+  `http.rs` is no longer too much. `ota.rs:12` and `carry.rs:49` refer to
   `ota::check_rollback`, which is `ota::init`; `http.rs:29` says an
   upload is 800 KB where the image is about 680 KB; the M10 text said
   two `RECEIVERS` where there are three (fixed in place).
@@ -309,8 +324,11 @@ Bugs, in rough order of value:
 
 Gaps:
 
-- **A record the map scratch cannot hold wipes every setting on
-  rollback.** `Store::load` erases the whole map on any `Err` from
+- ~~**A record the map scratch cannot hold wipes every setting on
+  rollback.**~~ Found done 2026-11-17 (the forward-compatibility work of
+  that day): the scratch is 1024 with `ITEM_MAX` under it, and
+  `BufferTooSmall` runs on the defaults without erasing; by design
+  the first save after that does erase the map. `Store::load` erases the whole map on any `Err` from
   `fetch_item`, but sequential-storage returns `BufferTooSmall` before
   anything is corrupt when an item does not fit (`Corrupted` is already
   repaired inside `fetch_item`). The scratch is 256 bytes and a
@@ -324,8 +342,10 @@ Gaps:
   built to prevent. Fix: erase only on `Corrupted`, treat
   `BufferTooSmall` as "not understood, using defaults" without erasing,
   and size the scratch to a page.
-- **A string-rule change in a newer image throws the record away on
-  rollback.** `from_record` clamps `color`, `melody` and `brightness`
+- ~~**A string-rule change in a newer image throws the record away on
+  rollback.**~~ Found done 2026-11-17 (the same work): a network or a
+  token `from_record` does not accept is that field's default and the
+  rest is kept. `from_record` clamps `color`, `melody` and `brightness`
   for exactly this case, but the version-6 strings go through
   `is_valid`, so a password of 1 to 7 bytes or a token outside
   `valid_token`, both legal in a later image that relaxed the rule,
@@ -358,6 +378,8 @@ Gaps:
   when there is no store. The same shape as the open "failed save is
   never retried": on the access point a failed save shows the saved
   page and stays an access point until the next change.
+  Checked 2026-11-17: a failed save is retried now (`persist_task`'s
+  backoff), so only the no-store case is left.
 - **The access point's transmit ceiling is set before the driver is
   restarted.** `ap_task` calls `set_max_tx_power` and then
   `set_config(AccessPointStation)`; `WifiController::new` has already
@@ -405,6 +427,12 @@ Nits:
   cookie another gadget at 192.168.4.1 may have set. Over the limit is
   the silent close of the open "oversized requests" item, on the one
   page whose user cannot see the log.
+  Checked 2026-11-17: the form also posts the timezone, the hostname
+  and the transmit power now, and a body is refused over `BODY_MAX`
+  (512) whatever the head leaves: every field full and every byte of
+  the names, the password and the rule escaped is over that by an
+  estimate (not computed in a test), a network picked from the list
+  with an ordinary password well under.
 - **No error from `ap_task` is ever healed.** A failed `set_config`
   logs once and sleeps for ever; the panel shows `AP` with no network
   and only a power cycle or a hold helps. Unlikely with the
@@ -414,3 +442,5 @@ Nits:
   AP+STA, which `ap_task` does for the scan; `http.rs` still says an
   upload is 800 KB where the image is about 650 KB (the second pass's
   `check_rollback` half is fixed).
+  Checked 2026-11-17: the `net::Mode` half holds; the image is nearly
+  900 KB now, so the 800 KB one does not.
