@@ -125,9 +125,10 @@ buffer the ring is not reading, the descriptors are repointed, and the
 old buffer is left alone for two laps. Brightness is the drivers'
 current setting; colour is duty per LED.
 
-The scan stops in three cases, always on the blanking frame: a
-firmware upload (flash writes hold interrupts off), a deliberate reset
-(`scan::halt`, latched), and a panic, which cannot be graceful.
+The scan stops in three cases, always on the blanking frame: an
+upload, of the firmware or of a clip pack (flash writes hold
+interrupts off), a deliberate reset (`scan::halt`, latched), and a
+panic, which cannot be graceful.
 
 ## Sound path
 
@@ -146,9 +147,13 @@ level, so the pin is open drain throughout and released means silent.
   ADPCM at four bits a sample (`adpcm`), a ZX Spectrum beeper
   bitstream, a FastTracker module (`xm`), a Commodore 64 register log
   played through a software SID (`sid`), a Pro Tracker 3 module played
-  through a software AY-3-8910 (`pt3`, `ay`). The players are pure and
+  through a software AY-3-8910 (`pt3`, `ay`). A beeper clip or a
+  register log may be packed, with references back into its own bytes
+  that the reader follows in place (`refs`). The players are pure and
   produce samples; `shape::Shaper` is the high-pass and limiter they
-  end in.
+  end in, and its settings (the filter, the drive, where the limiter
+  starts or that it is off) are the clip's own, read from its header,
+  so one firmware plays a pack made for the buzzer or for a speaker.
 
 For a clip the buzzer task lends the pin to `clip_task`, which runs
 I2S0 over a sixteen-slot DMA ring: by default 16-bit samples into the
@@ -174,8 +179,9 @@ executor.
   browser access to the guarded actions by a four-digit PIN shown on
   the panel, one PIN per action, issued by a `POST` (the system page's
   script asks when an action's button is pressed), never by a `GET`. Ordinary settings need neither on the
-  LAN; network credentials, the broker over `/api`, OTA, reboot and
-  the token itself do.
+  LAN; network credentials, the broker over `/api`, OTA, a clip pack
+  upload, reboot, the switch to the access point and the token itself
+  do.
 - **MQTT** (`src/mqtt.rs` over `core::mqtt`): Home Assistant discovery
   for one device, a retained state topic carrying the `/api` JSON, and
   `set/<key>` and `cmd` topics restricted to an allow list. Reconnects
@@ -219,7 +225,8 @@ A reset is a normal event here, not a failure path. Every deliberate
 one goes through `src/heal.rs`, which says the MQTT goodbye, halts the
 scan on a dark frame and writes the time to the carry record first:
 
-- `heal::reboot`: `/reload`, after an OTA.
+- `heal::reboot`: `/reload`, MQTT's `reload` command, after an OTA or
+  a clip pack upload.
 - `heal::reset`: the self-heal, when the gateway stops answering or
   connects keep failing; waits out a ringing alarm.
 - `heal::switch_mode`: between station and access point; starts the

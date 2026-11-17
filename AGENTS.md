@@ -103,10 +103,11 @@ CI's prebuilt settings, tests, and attaches `esp32clock-ota-<tag>.bin`
 erased bytes and clears the settings; `write-bin` then needs an
 `espflash reset`) to the GitHub release, then deploys `docs/` to the
 `gh-pages` branch with the release under `<tag>/` (a manifest for ESP
-Web Tools with four parts, the bootloader and partition table cut
-from the merged image, an erased `otadata` and the OTA image at
-0x20000, so `nvs` is left alone and the settings survive unless the
-erase is chosen) and `latest/`, keeping earlier tags. `docs/index.html` is the
+Web Tools with five parts, the bootloader and partition table cut
+from the merged image, an erased `otadata`, the OTA image at
+0x20000 and the default clip pack at 0x2E0000, which replaces a pack
+the clock had, so `nvs` is left alone and the settings survive unless
+the erase is chosen) and `latest/`, keeping earlier tags. `docs/index.html` is the
 web installer at `https://anarsoul.github.io/esp32clock/`: it lists
 the releases from the GitHub API, newest first, and points the install
 button at the chosen tag's manifest; without the API it uses `latest/`.
@@ -485,7 +486,7 @@ answered or an HTTP request served bumps it, and the third such boot
 
 The pure modules live in `core/src/` and the firmware re-exports them
 from `src/lib.rs`, so firmware code says `crate::settings`; inside
-`core` the same `crate::` paths point at its own modules. Seven modules
+`core` the same `crate::` paths point at its own modules. Nine modules
 are split, the pure half in `core/src/` under the same name and the
 hardware half in `src/`: `buttons` (event types / GPIO task), `clock`
 (calendar arithmetic / the offset and the carry), `carry` (record
@@ -495,7 +496,9 @@ codec / RTC static and reset gate), `http` (head parser and
 clip pack's layout and checks / the partition, its mapping and the
 upload), `clip` (the
 pulse-width `Player` and the ring's `Pacer` / I2S0, its DMA ring and
-the pin). Each `core`
+the pin), `mqtt` (topics, routes and the discovery payload / the
+session task), `sensors` (the NTC and LDR tables and the thermometer's
+hold / the ADC task). Each `core`
 module ends with its `#[cfg(test)] mod tests`.
 
 | file | role |
