@@ -9483,3 +9483,30 @@ alone, one PIN one action, the `set/` allow list, resets through
 path", "Compatibility" and "Conventions" are as they were.
 `ARCHITECTURE.md`, `MANUAL.md` and two scripts' headers point at the
 new places.
+
+## The display saved with Save — built and verified 2026-11-17
+
+The user, 2026-11-17: colour and brightness applied as they are
+chosen, on a page where everything else waits for Save, is not obvious
+and hurts the page ("давай сделаем сохранение цвета и яркости через
+главную страницу по save"). This takes back "The display is applied as
+chosen" of the page split (`HISTORY.md`).
+
+**Design.** `CLOCK_JS` no longer takes the names off the display's two
+selects nor posts a changed one to `/api`; they are fields of the one
+form like the alarm's, Save posts them, and the unsaved mark counts
+them. The fieldset's `id=d` goes with the script that used it. The
+line above Save (`id=e`) stays for Play and Stop. `form::apply`, `/api`
+and the buttons on the clock are untouched.
+
+**What it costs.** A tab opened a while ago puts its colour and
+brightness back with its Save if they were stepped on the clock since,
+which is what the names were taken away for. The alarm's fields have
+always done so (armed by a long press, then a stale Save), so the page
+is at least of one mind.
+
+**Built.** `cargo host-test`, both clippy runs and the release build
+pass; the clock page is shorter by the script removed.
+
+**Verified** on white-clock, 2026-11-17, by OTA: the user chose a
+colour, saw it wait for Save and change with it ("работает").

@@ -127,15 +127,13 @@ Common to all:
 
 The clock page, `/`:
 
-- The alarm and the display are one form with Save under both. Colour
-  and brightness are posted to `/api` by script as they are chosen,
-  and the script takes their names off the selects, so Save posts the
-  alarm only and a tab opened a while ago cannot put an old colour
-  back. Without script Save posts both.
+- The alarm and the display are one form with Save under both, and
+  Save posts both: colour and brightness change on the panel when the
+  form is saved, not as they are chosen. A tab opened a while ago puts
+  its colour back with its Save, as it does the alarm.
 - The script makes Play and Stop plain buttons: as the form's first
   submit buttons, Enter in the alarm time would play the tune.
-- A post by script that fails says so above Save, and a colour that
-  did not reach the clock goes back in its select.
+- Play or Stop that fails says so above Save.
 - The alarm's days are seven checkboxes all named `days`.
   `form::apply` reads a `days` key repeated in one body as a union:
   the first replaces, the rest add; none ticked sends no key and

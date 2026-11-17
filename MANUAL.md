@@ -239,7 +239,7 @@ in the browser's light or dark:
 
 - `http://<ip>/`: the alarm (armed, time, days, skip the next one,
   the melody with Play and Stop) and the display (colour and
-  brightness, applied as they are chosen), then the status: the
+  brightness), saved together with Save, then the status: the
   firmware version and slot, the network and its signal, the broker,
   the room reading, the local time and the uptime.
 - `/settings`: the timezone (a POSIX TZ rule; the button beside it

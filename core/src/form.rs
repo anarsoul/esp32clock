@@ -909,12 +909,7 @@ e.options?!e.options[e.selectedIndex].defaultSelected:e.value!=e.defaultValue))d
 /// Stop become plain buttons, so that Enter in the alarm form is Save
 /// (a form's default button is its first submit button, which Play
 /// is), and post the chosen tune to the button's own address without
-/// leaving the page. The display fieldset's (`d`) selects lose their
-/// names, kept as `k`, so the form's Save does not post them and a tab
-/// opened a while ago cannot put an old colour back, nor does the
-/// unsaved mark count them; a change in one is posted to `/api` at
-/// once, one key, and becomes the select's default, and one that
-/// failed puts the select back. The days' presets (`y`) tick the
+/// leaving the page. The days' presets (`y`) tick the
 /// seven boxes (`C`) when one is chosen, before the form's own input
 /// handler looks for unsaved changes, and say `Custom` when the boxes
 /// are ticked into none of them.
@@ -922,21 +917,16 @@ const CLOCK_JS: &str = "var m=D.getElementById('m'),g=D.getElementById('e');func
 function P(a,b){return fetch(a,{method:'POST',redirect:'manual',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:b})\
 .then(function(r){if(!r.ok&&r.type!='opaqueredirect')throw 0;E(1)})}\
 for(let i of'pq'){let b=D.getElementById(i);b.type='button';b.onclick=function(){P(b.formAction,'melody='+m.value).catch(function(){E(0)})}}\
-for(var c of D.querySelectorAll('#d select')){c.k=c.name;c.name=''}\
 var y=D.getElementById('y'),C=D.querySelectorAll('[name=days][type=checkbox]');y.hidden=false;\
 y.oninput=function(){if(y.value)C.forEach(function(c,i){c.checked=y.value>>i&1})};\
-f.addEventListener('input',function(e){if(e.target!=y){var k=0;C.forEach(function(c,i){if(c.checked)k|=1<<i});y.value=k;if(y.selectedIndex<0)y.value=''}});\
-D.getElementById('d').onchange=function(e){var t=e.target;P('/api',t.k+'='+t.value)\
-.then(function(){for(var o of t.options)o.defaultSelected=o.selected},function(){for(var o of t.options)o.selected=o.defaultSelected;E(0)})}";
+f.addEventListener('input',function(e){if(e.target!=y){var k=0;C.forEach(function(c,i){if(c.checked)k|=1<<i});y.value=k;if(y.selectedIndex<0)y.value=''}});";
 
 /// The clock page, `GET /`: one form of the alarm and the display with
-/// Save under both, as on the other pages, and the status lines. The
-/// display's two selects are applied as they are chosen (by script, to
-/// `/api`) and the script keeps them out of the form's post, so Save
-/// is for the alarm, and for the display without script. The alarm's
+/// Save under both, as on the other pages, and the status lines. Save
+/// posts the display's two selects with the alarm. The alarm's
 /// days are seven checkboxes under one name, and under them is when it
 /// rings next (`NextAlarm`). Above Save is
-/// the line the script shows when a post of its own failed. `note` is what became of the last post of
+/// the line the script shows when Play or Stop failed. `note` is what became of the last post of
 /// a form; the page says so above them.
 pub fn write_page(
     out: &mut impl core::fmt::Write,
@@ -967,7 +957,7 @@ pub fn write_page(
         out,
         "<option value={}{}>Random tune</option></select></label>\
 <p style=display:flex;gap:1em><button formaction=/play id=p style=flex:1>Play</button><button formaction=/stop id=q style=flex:1>Stop</button></p></fieldset>\
-<fieldset id=d><legend>Display</legend><label>Colour <select name=color>",
+<fieldset><legend>Display</legend><label>Colour <select name=color>",
         melody::RANDOM_NAME,
         if s.melody == melody::RANDOM { " selected" } else { "" }
     )?;
@@ -2188,18 +2178,16 @@ mod tests {
         assert_eq!(field_names(&out[1]), ["tz", "twelve_hour", "temp_show", "temp_offset", "hostname", "tx_power"]);
         assert_eq!(field_names(&out[2]), ["mqtt_host", "mqtt_port", "mqtt_user", "mqtt_password"]);
         assert!(field_names(&out[3]).is_empty() && field_names(&out[4]).is_empty(), "the clips and system pages post by script");
-        // One form with Save under both fieldsets; the display is
-        // posted to `/api` as it is chosen, and the script takes its
-        // selects' names away, so Save posts the alarm only and a
-        // stale tab's colour goes nowhere.
+        // One form with Save under both fieldsets; the display's
+        // selects keep their names, so Save posts them with the alarm
+        // and nothing is applied before it.
         assert_eq!(out[0].matches("<form").count(), 1);
         assert!(out[0].contains("</select></label></fieldset><p class=err id=e role=alert hidden>The clock did not answer; nothing was changed.</p><p class=c><button>Save</button>"), "{}", out[0]);
         assert!(out[0].ends_with("</small></p></div></body></html>") && !out[0].contains("Scriptable"), "the page ends with the status lines");
         assert!(out[0].contains("<option value=orange selected>Orange</option>"));
-        assert!(out[0].contains("for(var c of D.querySelectorAll('#d select')){c.k=c.name;c.name=''}"));
-        assert!(out[0].contains("D.getElementById('d').onchange=function(e){var t=e.target;P('/api',t.k+'='+t.value)"));
-        // A post that failed says so, and the select goes back.
-        assert!(out[0].contains("o.defaultSelected=o.selected") && out[0].contains("o.selected=o.defaultSelected;E(0)"));
+        assert!(out[0].contains("<fieldset><legend>Display</legend><label>Colour <select name=color>"));
+        assert!(!out[0].contains("c.name=''") && !out[0].contains("P('/api'"), "the display waits for Save");
+        // Play or Stop that failed says so.
         assert!(out[0].contains("if(!r.ok&&r.type!='opaqueredirect')throw 0"));
         // Each form posts to its own page, where a refusal is shown.
         assert!(out[1].contains("<form method=post action=/settings>") && out[2].contains("<form method=post action=/ha>"));
