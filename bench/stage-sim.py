@@ -9,7 +9,7 @@ it runs four bit patterns at each bit rate into each load and prints
 how far the collector's pulses are from the pin's, in bits, and how
 long Q1 spends between the rails.
 
-    bench/stage-sim.py                       # the table in speaker-mod/README.md
+    bench/stage-sim.py                       # the table in speaker-mod/LOG.md
     bench/stage-sim.py 5100:2200 330:100     # these pairs of R5:RBE (0 for no RBE)
     bench/stage-sim.py --rate 8e6 270:82     # at 8 Mbit/s and not the default 4.096
     bench/stage-sim.py --clamp 330:100       # also with a BAT54 from collector to base
@@ -20,7 +20,7 @@ long Q1 spends between the rails.
     bench/stage-sim.py --no-flyback --load "buzzer 32R, lossy" 10000:0   # the kit's stage: no D1
 
 The BAT54 is off unless asked for: it made the result independent of
-the transistor and no better (2026-11-16), see speaker-mod/README.md.
+the transistor and no better (2026-11-16), see speaker-mod/LOG.md.
 
 With --sine it plays a sine through a sigma-delta modulator of its
 own and through the stage, and prints what the stage adds in the
