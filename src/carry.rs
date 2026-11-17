@@ -19,8 +19,8 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use esp_hal::rtc_cntl::SocResetReason;
 use portable_atomic::AtomicU32;
 
-pub use esp32clock_core::carry::Carried;
-use esp32clock_core::carry::{MARK, WORDS, decode, encode};
+pub use onebitdawn_core::carry::Carried;
+use onebitdawn_core::carry::{MARK, WORDS, decode, encode};
 
 /// Atomics so the record is a plain `static`: a persistent static must be
 /// valid in any bit pattern, which esp-hal asserts, and these are. One

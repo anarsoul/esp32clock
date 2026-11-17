@@ -9572,3 +9572,30 @@ To try on the bench board, in this order: the pull-up and the filter
 on a breadboard with the firmware as it is, the level at the
 amplifier's input, the hiss with a silent clip and with Wi-Fi busy;
 then the setting and the new pin, and the two side by side.
+
+### The project renamed: onebitdawn — 2026-11-17, built and tested on the host; the pages and Home Assistant not yet seen on a clock
+
+The user's: `esp32clock` "sounds too generic". The name is the 1-bit
+buzzer line and the morning, and reads as "one bit down". This file
+keeps the old name wherever it is history.
+
+- The crates are `onebitdawn` and `onebitdawn-core`; the alias
+  `cargo host-test` is unchanged.
+- `mqtt::PREFIX` is `onebitdawn`, so the topics move; the device id
+  and the entities' unique ids do not, and discovery tells Home
+  Assistant the new topics. The manufacturer and the origin's name in
+  the discovery payload are `onebitdawn`. The old retained `status`
+  and `state` are left on the broker, the firmware does not clear
+  them. To check on the bench: the entities keep their history and
+  none is doubled.
+- `config::AP_PASSWORD` defaults to `onebitdawn`, and the CI's and
+  the release's `API_TOKEN` is `onebitdawn` (a seed: a clock with a
+  stored token keeps it).
+- The release's files are `onebitdawn-*.bin`; the links are
+  `github.com/anarsoul/onebitdawn` and
+  `anarsoul.github.io/onebitdawn/`, which work once the user has
+  renamed the repository (GitHub redirects the old repository's
+  address, not the old Pages address).
+- The pages: heading `onebitdawn: <hostname>`, title `<hostname>:
+  <page> - onebitdawn` (the hostname first, for a narrow tab), the
+  setup form `onebitdawn setup`. 18 bytes a page more.

@@ -850,7 +850,7 @@ fn write_top(out: &mut impl core::fmt::Write, hostname: &str, here: Page, ap: bo
     out.write_str(HEAD)?;
     // The hostname is letters, digits and dashes, so no escaping here.
     let title = if ap && here == Page::Clock { "Setup" } else { here.title() };
-    write!(out, "<title>{hostname}: {title}</title></head><body><h1>Clock: {hostname}</h1><nav>")?;
+    write!(out, "<title>{hostname}: {title} - onebitdawn</title></head><body><h1>onebitdawn: {hostname}</h1><nav>")?;
     let mut first = true;
     for page in Page::ALL {
         if ap && matches!(page, Page::Settings | Page::HomeAssistant) {
@@ -1155,7 +1155,7 @@ pub fn write_system_page(
     write_firmware_line(out, st, false)?;
     write!(
         out,
-        "<label>Image file (<code>esp32clock-ota-*.bin</code> from the <a href=https://github.com/anarsoul/esp32clock/releases target=_blank rel=noopener>releases</a>)<input type=file id=f></label>\
+        "<label>Image file (<code>onebitdawn-ota-*.bin</code> from the <a href=https://github.com/anarsoul/onebitdawn/releases target=_blank rel=noopener>releases</a>)<input type=file id=f></label>\
 <p><button id=b>Upload</button></p><progress id=p value=0 max=1 hidden></progress>\
 <p><small>Uploading asks for a PIN, which the clock then shows on its panel. The panel goes dark while the image is written. Do not unplug.</small></p></fieldset>\
 <fieldset><legend>API token</legend>\
@@ -1208,7 +1208,7 @@ A pack needs the clock flashed once over USB or from the web installer.",
         return out.write_str("</fieldset></body></html>");
     }
     out.write_str(
-        "<label>Pack file (<code>esp32clock-clips-*.bin</code> from the <a href=https://github.com/anarsoul/esp32clock/releases target=_blank rel=noopener>releases</a>, or <code>scripts/mkpack.py</code> makes one)<input type=file id=f></label>\
+        "<label>Pack file (<code>onebitdawn-clips-*.bin</code> from the <a href=https://github.com/anarsoul/onebitdawn/releases target=_blank rel=noopener>releases</a>, or <code>scripts/mkpack.py</code> makes one)<input type=file id=f></label>\
 <p><button id=b>Upload</button></p><progress id=p value=0 max=1 hidden></progress>\
 <p><b>A new pack replaces all the clips of the one in flash; it does not add to them.</b></p>\
 <p><small>Uploading asks for a PIN, which the clock then shows on its panel. The panel goes dark while the pack is written, and the clock restarts. Do not unplug.</small></p></fieldset>",
@@ -1272,7 +1272,7 @@ pub fn write_provision_page(
     note: Note,
 ) -> core::fmt::Result {
     out.write_str(HEAD)?;
-    out.write_str("<title>Clock setup</title></head><body><h1>Clock setup</h1>")?;
+    out.write_str("<title>onebitdawn setup</title></head><body><h1>onebitdawn setup</h1>")?;
     match note {
         Note::None | Note::Saved => out.write_str("<p>The clock has no network to join, or was asked to wait for one. Give it yours and it restarts into it.</p>")?,
         Note::Refused(FormError::BadValue, None) => out.write_str("<p class=err>Nothing was saved: no network was named, or a secured network was given no password.</p>")?,
@@ -1352,7 +1352,7 @@ pub fn write_saved_page(out: &mut impl core::fmt::Write, s: &Settings) -> core::
     out.write_str(HEAD)?;
     write!(
         out,
-        "<title>Clock setup</title></head><body><h1>Saved</h1>\
+        "<title>onebitdawn setup</title></head><body><h1>Saved</h1>\
 <p>The clock restarts now and joins <b>{}</b>. Join that network yourself and open \
 <a href=\"http://{}/\">http://{}/</a>, or the address the clock shows when both buttons are held.</p>\
 <p><small>If it does not appear within a minute the password was wrong: the panel stays blank, and holding both buttons for ten seconds brings this page back.</small></p>\
@@ -2133,7 +2133,7 @@ mod tests {
             assert!(out.contains(&format!("<b>{}</b>", here.label())), "{here:?}");
             let host = Settings::DEFAULT.hostname.as_str();
             // The heading is the clock's; the title also says which page.
-            assert!(out.contains(&format!("<title>{host}: {}</title>", here.title())) && out.contains(&format!("<h1>Clock: {host}</h1>")), "{out}");
+            assert!(out.contains(&format!("<title>{host}: {} - onebitdawn</title>", here.title())) && out.contains(&format!("<h1>onebitdawn: {host}</h1>")), "{out}");
         }
         let mut ap = status(false);
         ap.mode = "ap";
@@ -2189,7 +2189,7 @@ mod tests {
             assert!(out.contains(route), "{route}");
         }
         assert!(out.contains("x.setRequestHeader('Authorization','PIN '+pin)"));
-        assert!(out.contains("from the <a href=https://github.com/anarsoul/esp32clock/releases target=_blank rel=noopener>releases</a>)<input type=file id=f>"));
+        assert!(out.contains("from the <a href=https://github.com/anarsoul/onebitdawn/releases target=_blank rel=noopener>releases</a>)<input type=file id=f>"));
         assert!(out.contains("<p><small>Uploading asks for a PIN, which the clock then shows on its panel. The panel goes dark while the image is written. Do not unplug.</small></p>"));
         assert!(out.contains("(one is set)") && out.contains("<p>Each action here asks for a PIN, which the clock then shows on its panel.</p>"));
         // The PIN's form is hidden, after the last fieldset (so its

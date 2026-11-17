@@ -27,7 +27,7 @@ use embassy_time::{Duration, Instant};
 
 use crate::{carry, settings, tz};
 
-pub use esp32clock_core::clock::LocalTime;
+pub use onebitdawn_core::clock::LocalTime;
 
 /// Microseconds to add to the uptime to get Unix time. `None` until synced.
 static OFFSET_US: Mutex<Cell<Option<i64>>> = Mutex::new(Cell::new(None));
@@ -95,7 +95,7 @@ pub fn period_at(unix_s: i64) -> (i32, bool) {
 /// Local time of day for a Unix time in seconds, in the timezone from the
 /// settings.
 pub fn local_time(unix_s: i64) -> LocalTime {
-    esp32clock_core::clock::local_time(unix_s, period_at(unix_s).0)
+    onebitdawn_core::clock::local_time(unix_s, period_at(unix_s).0)
 }
 
 /// Local time of day, if synced, in the timezone from the settings.

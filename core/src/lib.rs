@@ -8,7 +8,7 @@
 //! Home Assistant discovery payload and topics.
 //!
 //! Nothing here touches a peripheral, so the crate builds for the host
-//! and `cargo test -p esp32clock-core --target host-tuple` (aliased
+//! and `cargo test -p onebitdawn-core --target host-tuple` (aliased
 //! `cargo host-test`) runs the tests at the end of each module. The
 //! firmware depends on this crate and re-exports its modules, so its
 //! own code says `crate::settings` as before.

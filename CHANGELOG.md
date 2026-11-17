@@ -4,14 +4,30 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Releases are annotated `v*` tags; each one has its images on the
-[GitHub release](https://github.com/anarsoul/esp32clock/releases) and
-in the [web installer](https://anarsoul.github.io/esp32clock/).
-A running clock takes the `esp32clock-ota-<tag>.bin` of a release
+[GitHub release](https://github.com/anarsoul/onebitdawn/releases) and
+in the [web installer](https://anarsoul.github.io/onebitdawn/).
+A running clock takes the `onebitdawn-ota-<tag>.bin` of a release
 from `http://<ip>/update`; its settings survive the update.
 
 ## [Unreleased]
 
 ### Changed
+
+- **The project is now called onebitdawn** (it was esp32clock; the
+  releases up to v0.4 and their files keep that name). What changes
+  for a clock that is updated:
+  - the MQTT topics are `onebitdawn/<id>/…`, not `esp32clock/<id>/…`.
+    Home Assistant follows through discovery, the device and its
+    entities being the same ids; a broker's ACLs and anything that
+    subscribes or publishes by topic need the new prefix, and the
+    retained `esp32clock/<id>/status` and `state` stay on the broker
+    until cleared (`mosquitto_pub -r -n -t esp32clock/<id>/status`);
+  - the access point's default password is `onebitdawn`;
+  - the prebuilt images' API token is `onebitdawn`, for a clock that
+    has not stored one;
+  - the release's files are `onebitdawn-<tag>.bin`,
+    `onebitdawn-ota-<tag>.bin` and `onebitdawn-clips-<tag>.bin`;
+  - the pages are headed `onebitdawn: <hostname>`.
 
 - The README is condensed to what the project is, how it differs from
   the original, how to build the clock and what the clips are. The
@@ -24,7 +40,7 @@ from `http://<ip>/update`; its settings survive the update.
   slots and the 128 KB at the end of the flash that nothing used. A pack is made with `scripts/mkpack.py` (up to
   16 clips), checked by a SHA-256 at upload and at every boot, and
   played in place from the flash. The default pack, the four clips
-  below, is `esp32clock-clips-<tag>.bin` on a release, and the web
+  below, is `onebitdawn-clips-<tag>.bin` on a release, and the web
   installer writes it.
 - **A clock flashed before this release has the old partition table,
   which an update over the LAN does not change.** It runs this
@@ -276,8 +292,8 @@ The first release, for the HU-058 LED clock kit on an ESP32-C3.
   the alarm state across the reset.
 - A web installer on GitHub Pages and a release workflow.
 
-[Unreleased]: https://github.com/anarsoul/esp32clock/compare/v0.4...HEAD
-[0.4]: https://github.com/anarsoul/esp32clock/compare/v0.3...v0.4
-[0.3]: https://github.com/anarsoul/esp32clock/compare/v0.2...v0.3
-[0.2]: https://github.com/anarsoul/esp32clock/compare/v0.1...v0.2
-[0.1]: https://github.com/anarsoul/esp32clock/releases/tag/v0.1
+[Unreleased]: https://github.com/anarsoul/onebitdawn/compare/v0.4...HEAD
+[0.4]: https://github.com/anarsoul/onebitdawn/compare/v0.3...v0.4
+[0.3]: https://github.com/anarsoul/onebitdawn/compare/v0.2...v0.3
+[0.2]: https://github.com/anarsoul/onebitdawn/compare/v0.1...v0.2
+[0.1]: https://github.com/anarsoul/onebitdawn/releases/tag/v0.1

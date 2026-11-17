@@ -30,8 +30,8 @@ shape everything else:
 
 | crate | what it holds |
 | --- | --- |
-| `core/` (`esp32clock-core`) | hardware-independent logic: the driver's wire format, panel map and font, UI state machine, settings and their flash record, form parser and HTML pages, HTTP head parser, auth rules, timezone rules, MQTT topics and discovery payload, the sound players (PCM, ADPCM, beeper, XM, SID, AY/PT3), sensor tables. Builds for the host; each module ends with its tests |
-| root (`esp32clock`) | the tasks and drivers around it: `src/*.rs` and `src/bin/main.rs`. Re-exports `core`'s modules from `src/lib.rs`, so both halves are `crate::…` |
+| `core/` (`onebitdawn-core`) | hardware-independent logic: the driver's wire format, panel map and font, UI state machine, settings and their flash record, form parser and HTML pages, HTTP head parser, auth rules, timezone rules, MQTT topics and discovery payload, the sound players (PCM, ADPCM, beeper, XM, SID, AY/PT3), sensor tables. Builds for the host; each module ends with its tests |
+| root (`onebitdawn`) | the tasks and drivers around it: `src/*.rs` and `src/bin/main.rs`. Re-exports `core`'s modules from `src/lib.rs`, so both halves are `crate::…` |
 
 A module with both halves has the same name in each crate (`clock`,
 `carry`, `http`, `ota`, `pack`, `buttons`, `clip`, `mqtt`, `sensors`): types

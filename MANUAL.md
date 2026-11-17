@@ -1,4 +1,4 @@
-# esp32clock manual
+# onebitdawn manual
 
 Building the firmware from source, installing and updating it, clip
 packs, the buttons, the web pages, the API and Home Assistant. What
@@ -7,7 +7,7 @@ the project is and how to build the hardware is in `README.md`.
 ## Firmware
 
 No toolchain is needed to run the clock: the
-[web installer](https://anarsoul.github.io/esp32clock/) flashes the
+[web installer](https://anarsoul.github.io/onebitdawn/) flashes the
 latest release from Chrome or Edge with the clock on USB, and later
 updates come over the LAN; see [Prebuilt images](#prebuilt-images).
 The rest of this section is for building from source.
@@ -43,7 +43,7 @@ firmware version, the network and the address the clock got.
 | `API_TOKEN` | bearer token for the scripts and the API's protected keys | none |
 | `MAX_CURRENT_STEP` | LED current ceiling, 1 to 15; 5 is the 50 % step | 5 |
 | `WIFI_TX_POWER_QDBM` | the default Wi-Fi transmit power in quarter dBm, for a clock with no stored setting: 8, 20, 28, 34, 44, 52, 56, 60 or 68 | 68 (16 dBm) |
-| `AP_PASSWORD` | the clock's own access point's password | `esp32clock` |
+| `AP_PASSWORD` | the clock's own access point's password | `onebitdawn` |
 | `MQTT_HOST`, `MQTT_PORT`, `MQTT_USER`, `MQTT_PASSWORD` | the Home Assistant broker; empty host for no MQTT, see below | empty, 1883 |
 
 ### First boot without a network
@@ -60,23 +60,23 @@ to the access point if the password was wrong.
 ### Updates over the LAN
 
 A running clock takes a new firmware over Wi-Fi, no USB. First get the
-update image, `esp32clock-ota-*.bin`, from one of three places:
+update image, `onebitdawn-ota-*.bin`, from one of three places:
 
-- a [release](https://github.com/anarsoul/esp32clock/releases):
-  `esp32clock-ota-<tag>.bin`, under Assets;
+- a [release](https://github.com/anarsoul/onebitdawn/releases):
+  `onebitdawn-ota-<tag>.bin`, under Assets;
 - the latest build of `master`: open the
-  [Actions](https://github.com/anarsoul/esp32clock/actions) tab, pick
+  [Actions](https://github.com/anarsoul/onebitdawn/actions) tab, pick
   the newest run of the CI workflow on `master`, scroll to Artifacts
-  and download `esp32clock-ota-<commit>`. GitHub hands artifacts out
+  and download `onebitdawn-ota-<commit>`. GitHub hands artifacts out
   as a ZIP (and asks you to be logged in); unzip it to get
-  `esp32clock-ota.bin`:
+  `onebitdawn-ota.bin`:
 
   ```sh
-  unzip esp32clock-ota-<commit>.zip     # leaves esp32clock-ota.bin next to it
+  unzip onebitdawn-ota-<commit>.zip     # leaves onebitdawn-ota.bin next to it
   ```
 
 - your own build: `scripts/ota.sh` with no arguments builds it and
-  prints the path (`target/esp32clock-ota.bin`).
+  prints the path (`target/onebitdawn-ota.bin`).
 
 Then install it, either way:
 
@@ -85,11 +85,11 @@ Then install it, either way:
   clock then shows a four-digit PIN on its panel for a minute, and
   the page asks for it. The panel is dark for the write,
   and the page waits for the clock to come back.
-- **From the shell**, with the clock's API token (`esp32clock` on the
+- **From the shell**, with the clock's API token (`onebitdawn` on the
   prebuilt images, or what you built with):
 
   ```sh
-  API_TOKEN='…' scripts/ota.sh <ip> esp32clock-ota-<tag>.bin   # send this file
+  API_TOKEN='…' scripts/ota.sh <ip> onebitdawn-ota-<tag>.bin   # send this file
   API_TOKEN='…' scripts/ota.sh <ip>                             # build, then send
   ```
 
@@ -107,7 +107,7 @@ beeper tune, tracker modules, Commodore 64 and AY tunes) are clips,
 and a clock's clips are a *clip pack* in a flash partition of their
 own, `clips`, 1152 KB, so they can be changed without a new
 firmware. The default pack is the four clips in `clips/`; a release
-has it as `esp32clock-clips-<tag>.bin` and the web installer writes
+has it as `onebitdawn-clips-<tag>.bin` and the web installer writes
 it.
 
 ```
@@ -137,17 +137,17 @@ a clock; a pack, where there is one, takes their place.
 ### Prebuilt images
 
 The easiest first flash needs no toolchain: open
-<https://anarsoul.github.io/esp32clock/> in Chrome or Edge with the
+<https://anarsoul.github.io/onebitdawn/> in Chrome or Edge with the
 clock on USB, pick a release and press Install. The page is ESP Web
 Tools over Web Serial; it writes the bootloader, the partition table,
 an erased `otadata`, the firmware and the default clip pack, leaving
 the settings partition alone, so a reflash keeps the settings unless you take the erase it
-offers first. The [releases page](https://github.com/anarsoul/esp32clock/releases)
-has `esp32clock-<tag>.bin`, the whole flash from offset 0 for
-`espflash write-bin 0x0 esp32clock-<tag>.bin` (then `espflash reset`;
+offers first. The [releases page](https://github.com/anarsoul/onebitdawn/releases)
+has `onebitdawn-<tag>.bin`, the whole flash from offset 0 for
+`espflash write-bin 0x0 onebitdawn-<tag>.bin` (then `espflash reset`;
 this one covers the settings partition too and clears it), next to
-`esp32clock-ota-<tag>.bin`, the update image for `/system` and
-`scripts/ota.sh`, and `esp32clock-clips-<tag>.bin`, the default clip
+`onebitdawn-ota-<tag>.bin`, the update image for `/system` and
+`scripts/ota.sh`, and `onebitdawn-clips-<tag>.bin`, the default clip
 pack (see above; the whole-flash image does not include it). A release is made by pushing an annotated tag `v*`
 (`.github/workflows/release.yml`).
 
@@ -160,12 +160,12 @@ fetch and install it. The images are built with:
 | --- | --- |
 | network | none: the clock boots as an access point, see above |
 | timezone | `<-07>7`, Vancouver (UTC-7, permanent since BC stopped changing clocks), no daylight saving. For another zone open `/settings` and press "Use this browser's zone", or type a POSIX TZ rule |
-| API token | `esp32clock` |
-| everything else | the defaults: brightness cap 50 %, access point password `esp32clock` |
+| API token | `onebitdawn` |
+| everything else | the defaults: brightness cap 50 %, access point password `onebitdawn` |
 
 The OTA image is an update image, for a clock that has been flashed
 once over USB (the web installer or `cargo run` above); install it as
-"Updates over the LAN" says, with `API_TOKEN=esp32clock` on the
+"Updates over the LAN" says, with `API_TOKEN=onebitdawn` on the
 shell path.
 
 The token is printed here, so change it once the clock is on your
@@ -174,7 +174,7 @@ characters without spaces) with the PIN the clock shows, or post it
 with the old token:
 
 ```sh
-curl -X POST -H 'Authorization: Bearer esp32clock' -d 'token=<new token>' http://<ip>/token
+curl -X POST -H 'Authorization: Bearer onebitdawn' -d 'token=<new token>' http://<ip>/token
 ```
 
 A token stored this way survives later updates with the prebuilt
@@ -258,13 +258,13 @@ buttons to play the melody, silence a ring and reload the clock. The
 broker must speak MQTT 5 (Mosquitto 1.6 and later, which includes the
 Home Assistant add-on, does); the connection is plain, not TLS, so
 give the clock a broker user of its own. Everything is under
-`esp32clock/clock-xxxxxx/` (the last three bytes of the MAC):
+`onebitdawn/clock-xxxxxx/` (the last three bytes of the MAC):
 `state` is the `/api` JSON, `set/<key>` takes a value as `/api` does,
 and `cmd` takes `play`, `silence` or `reload`:
 
 ```
-mosquitto_sub -v -t 'esp32clock/#'
-mosquitto_pub -t esp32clock/clock-a1b2c3/set/color -m cyan
+mosquitto_sub -v -t 'onebitdawn/#'
+mosquitto_pub -t onebitdawn/clock-a1b2c3/set/color -m cyan
 ```
 
 Only the clock's own settings can be set this way; the network, the
@@ -282,7 +282,7 @@ run on the host:
 cargo build --release
 cargo clippy --release
 cargo host-test                                            # the core crate's tests, on the host
-cargo clippy -p esp32clock-core --target host-tuple --tests
+cargo clippy -p onebitdawn-core --target host-tuple --tests
 ```
 
 Plain `cargo test` does not work: `.cargo/config.toml` aims every

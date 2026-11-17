@@ -29,8 +29,8 @@ use log::{error, info, warn};
 use sha2::{Digest, Sha256};
 use static_cell::StaticCell;
 
-pub use esp32clock_core::ota::Slot;
-use esp32clock_core::ota::{DESC_MAGIC, DESC_OFFSET, DESC_VERSION, HASH_APPENDED, HASH_LEN, IMAGE_MAGIC, hash_chunk, version_from};
+pub use onebitdawn_core::ota::Slot;
+use onebitdawn_core::ota::{DESC_MAGIC, DESC_OFFSET, DESC_VERSION, HASH_APPENDED, HASH_LEN, IMAGE_MAGIC, hash_chunk, version_from};
 
 use crate::auth::{self, Refusal, refuse};
 use crate::config::OTA_BOOT_LIMIT;

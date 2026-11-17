@@ -5,7 +5,7 @@
 //! broker in the settings, announces the clock with a discovery payload,
 //! publishes the `/api` JSON as the state and takes commands on
 //! `set/<key>` and `cmd`. The topics, the payload and the command rules
-//! are the pure half in `esp32clock_core::mqtt`, re-exported here.
+//! are the pure half in `onebitdawn_core::mqtt`, re-exported here.
 //!
 //! `rust-mqtt` does the protocol and nothing else; this task is the
 //! connection management: resolve, connect, keep alive, reconnect with
@@ -44,8 +44,8 @@ use rust_mqtt::client::{Client, MqttError};
 use rust_mqtt::config::KeepAlive;
 use rust_mqtt::types::{MqttBinary, MqttString, PacketIdentifier, ReasonCode, TopicFilter, TopicName};
 
-pub use esp32clock_core::mqtt::{Command, DeviceId, Link, Route};
-use esp32clock_core::mqtt::{self as core_mqtt, DISCOVERY_MAX, Device, HA_ONLINE, OFFLINE, ONLINE};
+pub use onebitdawn_core::mqtt::{Command, DeviceId, Link, Route};
+use onebitdawn_core::mqtt::{self as core_mqtt, DISCOVERY_MAX, Device, HA_ONLINE, OFFLINE, ONLINE};
 
 use crate::form::{self, FormError};
 use crate::settings::{self, Broker};

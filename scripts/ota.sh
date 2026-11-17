@@ -19,10 +19,10 @@ image=${2:-}
 cd "$(dirname "$0")/.."
 
 if [ -z "$image" ]; then
-    image=target/esp32clock-ota.bin
+    image=target/onebitdawn-ota.bin
     cargo build --release
     espflash save-image --chip esp32c3 --partition-table partitions.csv \
-        target/riscv32imc-unknown-none-elf/release/esp32clock "$image"
+        target/riscv32imc-unknown-none-elf/release/onebitdawn "$image"
 fi
 if [ "$host" = - ]; then
     printf '%s (%s bytes)\n' "$image" "$(stat -c %s "$image")"

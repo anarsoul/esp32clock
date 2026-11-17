@@ -15,7 +15,7 @@ ESP_RADIO_CONFIG_WIFI_MTU="540"
 
 [alias]
 # The host-testable half; `build.target` above would otherwise aim the tests at the chip.
-host-test = "test -p esp32clock-core --target host-tuple"
+host-test = "test -p onebitdawn-core --target host-tuple"
 
 [build]
 rustflags = [

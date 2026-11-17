@@ -1,11 +1,11 @@
 [package]
 edition      = "2024"
-name         = "esp32clock-core"
+name         = "onebitdawn-core"
 rust-version = "1.95"
 license      = "MIT OR Apache-2.0"
 version      = "0.1.0"
 publish      = false
-description  = "The hardware-independent half of esp32clock: settings, form, UI, panel map, codecs. Tested on the host."
+description  = "The hardware-independent half of onebitdawn: settings, form, UI, panel map, codecs. Tested on the host."
 
 [lib]
 path = "src/lib.rs"

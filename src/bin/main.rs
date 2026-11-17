@@ -29,11 +29,11 @@ use esp_storage::FlashStorage;
 use log::info;
 use static_cell::StaticCell;
 
-use esp32clock::buzzer;
-use esp32clock::clip;
-use esp32clock::settings::Settings;
-use esp32clock::net::Mode;
-use esp32clock::{buttons, carry, clock, dhcpd, display, dnsd, heal, http, mqtt, net, ota, pack, scan, sensors, settings, storage};
+use onebitdawn::buzzer;
+use onebitdawn::clip;
+use onebitdawn::settings::Settings;
+use onebitdawn::net::Mode;
+use onebitdawn::{buttons, carry, clock, dhcpd, display, dnsd, heal, http, mqtt, net, ota, pack, scan, sensors, settings, storage};
 
 // The app descriptor the esp-idf bootloader requires, with the git
 // version in it so an image file says what it is before it is flashed.
@@ -200,7 +200,7 @@ async fn main(spawner: Spawner) -> ! {
 
     // The Wi-Fi driver and the network stack on top of it. Built before
     // the display task, which asks the stack for the IP to show.
-    let wifi_config = ControllerConfig::default().with_rx_queue_size(esp32clock::config::WIFI_RX_QUEUE_FRAMES);
+    let wifi_config = ControllerConfig::default().with_rx_queue_size(onebitdawn::config::WIFI_RX_QUEUE_FRAMES);
     let controller = WifiController::new(peripherals.WIFI, wifi_config).expect("wifi init");
     let interface = if mode == Mode::AccessPoint { Interface::access_point() } else { Interface::station() };
     let mac = interface.mac_address();

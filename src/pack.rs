@@ -31,7 +31,7 @@ use esp_bootloader_esp_idf::partitions::{self, PARTITION_TABLE_MAX_LEN};
 use esp_hal::peripherals::MMU_TABLE;
 use log::{error, info, warn};
 
-use esp32clock_core::pack::{HASH_LEN, HEADER_LEN, Pack, PackError, declared_len};
+use onebitdawn_core::pack::{HASH_LEN, HEADER_LEN, Pack, PackError, declared_len};
 
 use crate::auth::{Refusal, refuse};
 use crate::ota::{self, Buffers, SECTOR};

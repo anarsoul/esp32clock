@@ -42,7 +42,7 @@ use embassy_time::{Duration, with_timeout};
 use embedded_io_async::{Read, Write};
 use log::{info, warn};
 
-use esp32clock_core::http::{HEADERS_MAX, Method, Own, PAGE_MAX, RESPONSE_BUF, Refused, admit, parse_head};
+use onebitdawn_core::http::{HEADERS_MAX, Method, Own, PAGE_MAX, RESPONSE_BUF, Refused, admit, parse_head};
 
 use crate::buzzer;
 use crate::config::HTTP_PORT;

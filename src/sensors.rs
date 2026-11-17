@@ -35,7 +35,7 @@ use log::info;
 
 use crate::{clip, settings};
 
-pub use esp32clock_core::sensors::{Hold, Tenths, face, fahrenheit_tenths, light_pct, temperature_dc};
+pub use onebitdawn_core::sensors::{Hold, Tenths, face, fahrenheit_tenths, light_pct, temperature_dc};
 
 /// Conversions averaged into one reading.
 const SAMPLES: u32 = 8;

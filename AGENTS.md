@@ -1,4 +1,4 @@
-# esp32clock — guide for agents
+# onebitdawn — guide for agents
 
 Firmware for the HU-058 / HU-058D LED clock panel driven by an ESP32-C3,
 written in Rust with esp-hal and Embassy on esp-rtos. The display's two
@@ -13,7 +13,7 @@ what the clips are. Everything else a user needs (building from
 source, updates, clip packs, the buttons, the pages, `/api`, Home
 Assistant) is `MANUAL.md`; document a user-visible change there.
 The repo is a two-member workspace: the firmware is the root package,
-and `core/` (`esp32clock-core`) is the hardware-independent half, a
+and `core/` (`onebitdawn-core`) is the hardware-independent half, a
 `no_std` library the firmware re-exports and the host runs the tests
 of. `CLAUDE.md` is a symlink to this file; edit this one.
 
@@ -61,7 +61,7 @@ of. `CLAUDE.md` is a symlink to this file; edit this one.
 cargo build --release
 cargo clippy --release
 cargo host-test                          # the core crate's tests on the host (alias in .cargo/config.toml)
-cargo clippy -p esp32clock-core --target host-tuple --tests
+cargo clippy -p onebitdawn-core --target host-tuple --tests
 WIFI_SSID='…' WIFI_PASSWORD='…' TZ_RULE='<-07>7' API_TOKEN='…' cargo run --release
 TZ_OFFSET_MINUTES=-420 cargo build --release   # the older variable: minutes east of UTC, stored as the fixed rule <-07>7
 node scripts/tz-check.mjs                 # the page's browser-zone script (src/tz.js) against zones with known rules
@@ -73,7 +73,7 @@ scripts/ota.sh                          # just the image file, for http://<ip>/s
 API_TOKEN='…' scripts/reload.sh <ip>   # software reset with the carry record, waits for the clock to come back
 scripts/pin.sh <ip> <serial-log>        # POST /pin, then the four digits read back from the monitor's log
 scripts/verify-csrf.sh <ip>             # a foreign Origin or Host is refused, the clock's own pages and a script are not
-AP_PASSWORD='…' cargo build --release   # optional: the clock's own access point's password (default esp32clock)
+AP_PASSWORD='…' cargo build --release   # optional: the clock's own access point's password (default onebitdawn)
 scripts/wav2pcm.sh in.wav wav/tune.pcm [seconds] [skip] [rate]   # a sound file as the clip's raw PCM (sox): mono, 8 bits unsigned, 16 kHz behind a PCM1 header, or bare at 8 kHz for half the flash, or 31250 (see --rate 31250 below) for twice it
 scripts/wav2pcm.sh in.wav wav/tune.adp [seconds] [skip] [rate]   # the same clip as IMA ADPCM (`ADP1`), four bits a sample: half the flash, 8 KB a second at 16 kHz, encoded from sox's 16-bit samples by scripts/adpcm.py; the user's ear on white-clock, 2026-11-16, of a round trip stored as PCM: "not bad", a difference heard, "way better than PCM 8k", which is the same flash, and of the clock's own decoder on a speaker: "audible, but acceptable"
 scripts/adpcm.py wav/tune.pcm wav/tune.adp [--search 4]   # a PCM clip there is already as ADPCM; --decode for the samples back as raw 16-bit; the body after the 8-byte header is sox's raw `ima`
@@ -97,8 +97,8 @@ CLIP_PDM_BITS=128 cargo build --release   # the PDM converter at 128 bits a samp
 Releases: `CHANGELOG.md` gets the version's section first (the release body points at it), then an annotated tag `v*` (`git tag -a`; `build.rs` runs `git
 describe` without `--tags`, so a lightweight tag would not reach the
 version) runs `.github/workflows/release.yml`, which builds with the
-CI's prebuilt settings, tests, and attaches `esp32clock-ota-<tag>.bin`
-(the `/update` image) and `esp32clock-<tag>.bin` (`save-image
+CI's prebuilt settings, tests, and attaches `onebitdawn-ota-<tag>.bin`
+(the `/update` image) and `onebitdawn-<tag>.bin` (`save-image
 --merge`: the whole flash from 0, contiguous, so it covers `nvs` with
 erased bytes and clears the settings; `write-bin` then needs an
 `espflash reset`) to the GitHub release, then deploys `docs/` to the
@@ -108,7 +108,7 @@ from the merged image, an erased `otadata`, the OTA image at
 0x20000 and the default clip pack at 0x2E0000, which replaces a pack
 the clock had, so `nvs` is left alone and the settings survive unless
 the erase is chosen) and `latest/`, keeping earlier tags. `docs/index.html` is the
-web installer at `https://anarsoul.github.io/esp32clock/`: it lists
+web installer at `https://anarsoul.github.io/onebitdawn/`: it lists
 the releases from the GitHub API, newest first, and points the install
 button at the chosen tag's manifest; without the API it uses `latest/`.
 Nothing in `docs/` but the page is in the repository.
@@ -200,7 +200,7 @@ nothing while disarmed or unsynced. `/ha`'s script asks `/api` every
 what it was served with, unless the form has unsaved changes. The
 pages follow the browser's light or dark (`color-scheme`), a link is
 one colour whether visited or not (`a{color:LinkText}`), a page's
-title is `<hostname>: <page>` under the common heading, and the pages
+title is `<hostname>: <page> - onebitdawn` under the common heading, `onebitdawn: <hostname>`, and the pages
 say nothing of `/api`: that is the manual's, `MANUAL.md` (the user, 2026-11-15:
 "it should be in the documentation, not in the interface"). The
 network keys `ssid` and `password` are taken on `/api` only with the
@@ -286,7 +286,7 @@ in), or one whose buttons were held 10 s, boots as an access point
 instead of a station for that whole boot, since the driver does not do
 both at once. The panel shows `AP`; the network is `clock-xxxx` (the
 last two bytes of the MAC), WPA2 with `AP_PASSWORD` from the build
-(default `esp32clock`), channel 1, the clock at `http://192.168.4.1/`
+(default `onebitdawn`), channel 1, the clock at `http://192.168.4.1/`
 with its own DHCP server (`src/dhcpd.rs`, eight leases, replies
 broadcast) and no time, so no alarm. `GET /` there is the setup form
 (network, password, timezone, hostname, the station's transmit power); saving answers a page and the
@@ -390,7 +390,7 @@ the task `src/mqtt.rs`, spawned on the station only.
 
 The id is `clock-` and the last three bytes of the MAC in hex
 (`mqtt::DeviceId`), stable across hostname changes. Topics under
-`esp32clock/<id>/`: `status` (`online`/`offline`, retained; `offline`
+`onebitdawn/<id>/`: `status` (`online`/`offline`, retained; `offline`
 is also the will), `state` (the `/api` JSON byte for byte, retained,
 published after connect, on every settings change debounced 300 ms,
 on the ringing edges and every 60 s), `set/<key>` (the value as `/api`
@@ -435,7 +435,7 @@ Assistant shows the clock unavailable at once rather than after the
 broker's 90 s keepalive timeout; a panic cannot, and the will covers
 it late. `cmd` `reload` says goodbye on its own connection and then
 reboots. The heartbeat carries an `mqtt:` line (state, connects,
-publishes, commands). Verify with `mosquitto_sub -v -t 'esp32clock/#'
+publishes, commands). Verify with `mosquitto_sub -v -t 'onebitdawn/#'
 -t 'homeassistant/#'` on the host.
 
 Cross-site requests (2026-11-14): every request is held to
@@ -518,7 +518,7 @@ module ends with its `#[cfg(test)] mod tests`.
 | `core/src/http.rs` | `Method`, `Head` (`content_length` is `None` when the header is absent, and `transfer_encoding` says one was sent), `parse_head`; `RESPONSE_BUF` and `PAGE_MAX`, which the page tests assert against |
 | `core/src/mqtt.rs` | Home Assistant over MQTT, pure: `DeviceId` and its topics, `Link` (the state for the page), `Route` and `Command`, `SET_KEYS` and `apply_set` over `form::apply_one`, `write_discovery` (the device payload with every entity) and `DISCOVERY_MAX` |
 | `src/mqtt.rs` | the MQTT task: resolve, connect with the will, subscribe, discovery and state publishes, keepalive pings, the select loop over `poll_header`, the back-off, `goodbye` for the reset paths, `link()` and `Report` for the page and the heartbeat |
-| `src/http.rs` | HTTP/1.0 server, `LISTENERS` sockets each in its own task: every request goes through `http::admit` first and one it refuses is answered by `turn_away` (a `302` to the address for a `GET` under another `Host`, else `403`; not counted as served) and `status_line` sends `X-Frame-Options: DENY`; a `POST` without `Content-Length` to a route that reads a body (`/`, `/settings`, `/ha`, `/api`, `/play`, `/token`, `/ota`; `reads_body`) is answered `411` and any `Transfer-Encoding` `400` before a route is looked at (`NoRequest`), since a bodiless post is not an empty form, while the command posts (`/reload`, `/ap`, `/pin`, `/scan`, `/stop`) take a bare `curl -X POST`; `GET /clips` (the clips page) and `POST /clips` (a pack streamed to `pack::install`, read as `/ota`'s body is; `411` without a length); `GET`/`POST` on `/`, `/settings` and `/ha` (the three forms, on the station; `/` is the setup form on the access point) and `/api`, `POST /play`, `POST /stop`, `GET /system` (issues no PIN; its script posts `/pin`), `GET /update` and `GET /token` (redirects to it), `POST /ota` with the body streamed to `ota::install`, `POST /reload`, `POST /ap` and `POST /token` with the token or the PIN, `POST /pin`, `POST /scan` on the access point, `GET /favicon.ico` and `GET /tz.js` (`src/favicon.ico` and `src/tz.js` embedded, the two cacheable responses; the page loads the script as `/tz.js?v=<version>` so an update is not served the cached one); the pages are headed `Clock: <hostname>` and titled `<hostname>: <page>`; a saved form redirects to its own page with `?saved=1` and a refused one with `?error=…` and the bad field's `key`; per-listener state and counters for the heartbeat |
+| `src/http.rs` | HTTP/1.0 server, `LISTENERS` sockets each in its own task: every request goes through `http::admit` first and one it refuses is answered by `turn_away` (a `302` to the address for a `GET` under another `Host`, else `403`; not counted as served) and `status_line` sends `X-Frame-Options: DENY`; a `POST` without `Content-Length` to a route that reads a body (`/`, `/settings`, `/ha`, `/api`, `/play`, `/token`, `/ota`; `reads_body`) is answered `411` and any `Transfer-Encoding` `400` before a route is looked at (`NoRequest`), since a bodiless post is not an empty form, while the command posts (`/reload`, `/ap`, `/pin`, `/scan`, `/stop`) take a bare `curl -X POST`; `GET /clips` (the clips page) and `POST /clips` (a pack streamed to `pack::install`, read as `/ota`'s body is; `411` without a length); `GET`/`POST` on `/`, `/settings` and `/ha` (the three forms, on the station; `/` is the setup form on the access point) and `/api`, `POST /play`, `POST /stop`, `GET /system` (issues no PIN; its script posts `/pin`), `GET /update` and `GET /token` (redirects to it), `POST /ota` with the body streamed to `ota::install`, `POST /reload`, `POST /ap` and `POST /token` with the token or the PIN, `POST /pin`, `POST /scan` on the access point, `GET /favicon.ico` and `GET /tz.js` (`src/favicon.ico` and `src/tz.js` embedded, the two cacheable responses; the page loads the script as `/tz.js?v=<version>` so an update is not served the cached one); the pages are headed `onebitdawn: <hostname>` and titled `<hostname>: <page> - onebitdawn`; a saved form redirects to its own page with `?saved=1` and a refused one with `?error=…` and the bad field's `key`; per-listener state and counters for the heartbeat |
 | `core/src/buttons.rs` | `Button`, `Kind`, `Event` |
 | `src/buttons.rs` | debounced short/long press events, the two-button long press, and the 10 s two-button `Hold` |
 | `core/src/melody.rs` | alarm tunes as pitch and length data with tempo; `RANDOM` and the pure `pick` that turns it into a tune; `CLIP_COUNT`, `CLIP_NAMES` and `CLIP_DATA` (included from `clips.rs`, which `core/build.rs` writes from `ALARM_CLIP`; none by default); the table at run time, the nine note melodies and then the clips of the pack `install` was given, else the built-in ones: `count`, `get` (a `Melody` by value, the beeps past the end), `all`, `clip_data`, `clip_loops`, `LIMIT` (what a settings index is held under), `RANDOM` (`usize::MAX`); the pack in force sits in a `critical_section` cell, a thread-local in the tests; pure |
@@ -824,7 +824,7 @@ appended-hash split, the carry codec, the clip pack's layout with every refusal 
 header rules, the NTC and LDR tables against their equations, the thermometer's hold, and the
 MQTT topics, routes and discovery payload (parsed with `serde_json`, a
 host-only dev-dependency, and checked key by key against the `/api`
-JSON and the form parser). `cargo clippy -p esp32clock-core --target host-tuple
+JSON and the form parser). `cargo clippy -p onebitdawn-core --target host-tuple
 --tests` lints the tests. `node scripts/tz-check.mjs` checks the browser half of the timezone field, `src/tz.js`, against zones with known rules under Node, whose `Intl` is a browser's, and against Casablanca, which must throw. `.cargo/config.toml` aims every cargo command at the chip, which is why the alias passes `--target host-tuple`; the `[unstable] build-std` line there is ignored by
 stable cargo. Not under test: `scan.rs`'s
 `build_cycle` (the M1 lit-time check needs it on the host), `ring.rs`

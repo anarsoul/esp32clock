@@ -20,8 +20,8 @@ use crate::melody;
 use crate::sensors::Tenths;
 use crate::settings::{BRIGHTNESS_STEPS, PALETTE_NAMES, Settings, TEMP_OFFSET_LIMIT_DC, TempShow};
 
-/// Where the clock publishes: `esp32clock/<id>/…`.
-pub const PREFIX: &str = "esp32clock";
+/// Where the clock publishes: `onebitdawn/<id>/…`.
+pub const PREFIX: &str = "onebitdawn";
 
 /// Home Assistant's own status topic and its birth payload: when it
 /// comes up it says `online` here, and the clock resends discovery.
@@ -34,7 +34,7 @@ pub const ONLINE: &str = "online";
 pub const OFFLINE: &str = "offline";
 
 /// The repository, for the origin block.
-const REPO_URL: &str = "https://github.com/anarsoul/esp32clock";
+const REPO_URL: &str = "https://github.com/anarsoul/onebitdawn";
 
 /// Longest topic the clock uses: the discovery topic is 40 bytes, a
 /// `set/` command with the longest key 39.
@@ -87,7 +87,7 @@ impl DeviceId {
         core::str::from_utf8(&self.0).unwrap_or("clock-")
     }
 
-    /// `esp32clock/<id>/<suffix>`. The suffixes are this module's
+    /// `onebitdawn/<id>/<suffix>`. The suffixes are this module's
     /// constants and fit by construction.
     pub fn topic(&self, suffix: &str) -> TopicBuf {
         let mut t = TopicBuf::new();
@@ -297,7 +297,7 @@ pub fn write_discovery(out: &mut impl core::fmt::Write, d: &Device<'_>) -> core:
     let id = d.id.as_str();
     write!(
         out,
-        "{{\"dev\":{{\"ids\":[\"{id}\"],\"name\":\"{}\",\"mf\":\"esp32clock\",\"mdl\":\"HU-058 on ESP32-C3\",\"sw\":\"{}\"",
+        "{{\"dev\":{{\"ids\":[\"{id}\"],\"name\":\"{}\",\"mf\":\"onebitdawn\",\"mdl\":\"HU-058 on ESP32-C3\",\"sw\":\"{}\"",
         JsonStr(d.name),
         JsonStr(d.version)
     )?;
@@ -306,7 +306,7 @@ pub fn write_discovery(out: &mut impl core::fmt::Write, d: &Device<'_>) -> core:
     }
     write!(
         out,
-        "}},\"o\":{{\"name\":\"esp32clock\",\"sw\":\"{}\",\"url\":\"{REPO_URL}\"}},\
+        "}},\"o\":{{\"name\":\"onebitdawn\",\"sw\":\"{}\",\"url\":\"{REPO_URL}\"}},\
 \"stat_t\":\"{PREFIX}/{id}/state\",\"avty_t\":\"{PREFIX}/{id}/status\",\"qos\":0,\"cmps\":{{",
         JsonStr(d.version)
     )?;
@@ -467,21 +467,21 @@ mod tests {
     fn id_topics_and_routes() {
         let id = DeviceId::from_mac([0x10, 0x20, 0x30, 0xa1, 0xb2, 0xc3]);
         assert_eq!(id.as_str(), "clock-a1b2c3");
-        assert_eq!(id.status_topic().as_str(), "esp32clock/clock-a1b2c3/status");
-        assert_eq!(id.state_topic().as_str(), "esp32clock/clock-a1b2c3/state");
-        assert_eq!(id.set_filter().as_str(), "esp32clock/clock-a1b2c3/set/+");
-        assert_eq!(id.cmd_topic().as_str(), "esp32clock/clock-a1b2c3/cmd");
+        assert_eq!(id.status_topic().as_str(), "onebitdawn/clock-a1b2c3/status");
+        assert_eq!(id.state_topic().as_str(), "onebitdawn/clock-a1b2c3/state");
+        assert_eq!(id.set_filter().as_str(), "onebitdawn/clock-a1b2c3/set/+");
+        assert_eq!(id.cmd_topic().as_str(), "onebitdawn/clock-a1b2c3/cmd");
         assert_eq!(id.discovery_topic().as_str(), "homeassistant/device/clock-a1b2c3/config");
-        assert_eq!(id.route("esp32clock/clock-a1b2c3/set/color"), Route::Set("color"));
-        assert_eq!(id.route("esp32clock/clock-a1b2c3/set/temp_offset"), Route::Set("temp_offset"));
-        assert_eq!(id.route("esp32clock/clock-a1b2c3/cmd"), Route::Command);
+        assert_eq!(id.route("onebitdawn/clock-a1b2c3/set/color"), Route::Set("color"));
+        assert_eq!(id.route("onebitdawn/clock-a1b2c3/set/temp_offset"), Route::Set("temp_offset"));
+        assert_eq!(id.route("onebitdawn/clock-a1b2c3/cmd"), Route::Command);
         assert_eq!(id.route(HA_STATUS_TOPIC), Route::HaStatus);
         for t in [
-            "esp32clock/clock-a1b2c3/set/",
-            "esp32clock/clock-a1b2c3/set/a/b",
-            "esp32clock/clock-ffffff/set/color",
-            "esp32clock/clock-a1b2c3/state",
-            "esp32clock/clock-a1b2c3",
+            "onebitdawn/clock-a1b2c3/set/",
+            "onebitdawn/clock-a1b2c3/set/a/b",
+            "onebitdawn/clock-ffffff/set/color",
+            "onebitdawn/clock-a1b2c3/state",
+            "onebitdawn/clock-a1b2c3",
             "homeassistant/device/clock-a1b2c3/config",
             "",
         ] {
@@ -532,9 +532,9 @@ mod tests {
         assert_eq!(v["dev"]["name"], name.as_str());
         assert_eq!(v["dev"]["sw"], version);
         assert_eq!(v["dev"]["cu"], "http://255.255.255.255/");
-        assert_eq!(v["o"]["name"], "esp32clock");
-        assert_eq!(v["stat_t"], "esp32clock/clock-ffffff/state");
-        assert_eq!(v["avty_t"], "esp32clock/clock-ffffff/status");
+        assert_eq!(v["o"]["name"], "onebitdawn");
+        assert_eq!(v["stat_t"], "onebitdawn/clock-ffffff/state");
+        assert_eq!(v["avty_t"], "onebitdawn/clock-ffffff/status");
         let cmps = v["cmps"].as_object().unwrap();
         assert_eq!(cmps.len(), 19);
 
@@ -557,13 +557,13 @@ mod tests {
                 None => assert_eq!(c["p"], "button", "{key}: only a button has no template"),
             }
             if let Some(cmd) = c["cmd_t"].as_str() {
-                match cmd.strip_prefix("esp32clock/clock-ffffff/set/") {
+                match cmd.strip_prefix("onebitdawn/clock-ffffff/set/") {
                     Some(k) => {
                         assert!(SET_KEYS.contains(&k), "{key}: commands {k}, not a key the bus takes");
                         commanded.insert(k);
                     }
                     None => {
-                        assert_eq!(cmd, "esp32clock/clock-ffffff/cmd", "{key}");
+                        assert_eq!(cmd, "onebitdawn/clock-ffffff/cmd", "{key}");
                         assert!(Command::parse(c["pl_prs"].as_str().unwrap()).is_some(), "{key}: unknown press");
                     }
                 }

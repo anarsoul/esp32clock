@@ -1,4 +1,4 @@
-# esp32clock
+# onebitdawn
 
 Open firmware for the HU-058 family of LED clock kits (HU-058 and
 HU-058SE; the HU-058D should work too but is untested), with the kit's
@@ -246,7 +246,7 @@ from USB1 and the module from its own USB at the same time.
 ### Firmware
 
 No toolchain is needed: open the
-[web installer](https://anarsoul.github.io/esp32clock/) in Chrome or
+[web installer](https://anarsoul.github.io/onebitdawn/) in Chrome or
 Edge with the module on USB, pick a release and press Install. Or
 build from source, with Rust 1.95 or newer and
 [espflash](https://github.com/esp-rs/espflash) 4:
@@ -257,7 +257,7 @@ WIFI_SSID='home' WIFI_PASSWORD='…' TZ_RULE='PST8PDT,M3.2.0,M11.1.0' cargo run 
 
 A clock with no network stored starts as an access point: the panel
 shows `AP`, the network is `clock-xxxx` with the password
-`esp32clock`, and the setup form is at `http://192.168.4.1/`. Holding
+`onebitdawn`, and the setup form is at `http://192.168.4.1/`. Holding
 both buttons for 10 s gets there too. Everything after that, the
 build's other variables and updates over the LAN included, is in
 [`MANUAL.md`](MANUAL.md).

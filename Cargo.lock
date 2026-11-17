@@ -1088,53 +1088,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "esp32clock"
-version = "0.1.0"
-dependencies = [
- "critical-section",
- "embassy-executor",
- "embassy-futures",
- "embassy-net",
- "embassy-sync 0.7.2",
- "embassy-time",
- "embedded-io-async 0.7.0",
- "embedded-storage",
- "embedded-storage-async",
- "esp-alloc",
- "esp-backtrace",
- "esp-bootloader-esp-idf",
- "esp-hal",
- "esp-println",
- "esp-radio",
- "esp-rtos",
- "esp-storage",
- "esp32clock-core",
- "heapless 0.9.3",
- "log",
- "portable-atomic",
- "rust-mqtt",
- "sequential-storage",
- "sha2 0.10.9",
- "sntpc",
- "sntpc-net-embassy",
- "sntpc-time-embassy",
- "static_cell",
-]
-
-[[package]]
-name = "esp32clock-core"
-version = "0.1.0"
-dependencies = [
- "critical-section",
- "embassy-sync 0.7.2",
- "embassy-time",
- "heapless 0.9.3",
- "log",
- "serde_json",
- "sha2 0.10.9",
-]
-
-[[package]]
 name = "esp32h2"
 version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1506,6 +1459,53 @@ name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
+
+[[package]]
+name = "onebitdawn"
+version = "0.1.0"
+dependencies = [
+ "critical-section",
+ "embassy-executor",
+ "embassy-futures",
+ "embassy-net",
+ "embassy-sync 0.7.2",
+ "embassy-time",
+ "embedded-io-async 0.7.0",
+ "embedded-storage",
+ "embedded-storage-async",
+ "esp-alloc",
+ "esp-backtrace",
+ "esp-bootloader-esp-idf",
+ "esp-hal",
+ "esp-println",
+ "esp-radio",
+ "esp-rtos",
+ "esp-storage",
+ "heapless 0.9.3",
+ "log",
+ "onebitdawn-core",
+ "portable-atomic",
+ "rust-mqtt",
+ "sequential-storage",
+ "sha2 0.10.9",
+ "sntpc",
+ "sntpc-net-embassy",
+ "sntpc-time-embassy",
+ "static_cell",
+]
+
+[[package]]
+name = "onebitdawn-core"
+version = "0.1.0"
+dependencies = [
+ "critical-section",
+ "embassy-sync 0.7.2",
+ "embassy-time",
+ "heapless 0.9.3",
+ "log",
+ "serde_json",
+ "sha2 0.10.9",
+]
 
 [[package]]
 name = "paste"

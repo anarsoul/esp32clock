@@ -9,7 +9,7 @@ use embassy_sync::channel::Channel;
 use embassy_time::{Duration, Instant, Timer};
 use esp_hal::gpio::Input;
 
-pub use esp32clock_core::buttons::{Button, Event, Kind};
+pub use onebitdawn_core::buttons::{Button, Event, Kind};
 
 const POLL: Duration = Duration::from_millis(10);
 const DEBOUNCE: Duration = Duration::from_millis(30);

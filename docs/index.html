@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>esp32clock web installer</title>
+  <title>onebitdawn web installer</title>
   <script type="module" src="https://unpkg.com/esp-web-tools/dist/web/install-button.js?module"></script>
   <style>
     body { font-family: sans-serif; max-width: 640px; margin: 3em auto; padding: 0 1.5em; color: #222; line-height: 1.5; }
@@ -20,12 +20,12 @@
   </style>
 </head>
 <body>
-  <h1>esp32clock web installer</h1>
+  <h1>onebitdawn web installer</h1>
   <p class="subtitle">
     Open firmware for the HU-058 LED clock kits with an ESP32-C3 in the 8051's socket:
     NTP time, alarms, colours, a settings page, Home Assistant over MQTT.
-    &mdash; <a href="https://github.com/anarsoul/esp32clock">GitHub</a>
-    &middot; <a href="https://github.com/anarsoul/esp32clock/releases">Releases</a>
+    &mdash; <a href="https://github.com/anarsoul/onebitdawn">GitHub</a>
+    &middot; <a href="https://github.com/anarsoul/onebitdawn/releases">Releases</a>
   </p>
 
   <h2>Install</h2>
@@ -44,7 +44,7 @@
     network; without it they survive, since the installer writes the bootloader, the partition table,
     the firmware and the default clip pack (the alarm's sampled sounds; it replaces a pack uploaded from
     <code>/clips</code>) and leaves the settings partition alone. A clock already on your network can be updated from
-    <code>http://&lt;ip&gt;/system</code> with the release's <code>esp32clock-ota-*.bin</code> instead,
+    <code>http://&lt;ip&gt;/system</code> with the release's <code>onebitdawn-ota-*.bin</code> instead,
     with no USB.
   </p>
 
@@ -53,13 +53,13 @@
     <tr><th>setting</th><th>in the image</th></tr>
     <tr><td>network</td><td>none: the clock boots as an access point, see below</td></tr>
     <tr><td>timezone</td><td>UTC&minus;7 (Vancouver). Set yours on the settings page</td></tr>
-    <tr><td>API token</td><td><code>esp32clock</code>; change it on <code>http://&lt;ip&gt;/token</code> once the clock is on your network</td></tr>
-    <tr><td>everything else</td><td>the defaults: brightness cap 50 %, access point password <code>esp32clock</code></td></tr>
+    <tr><td>API token</td><td><code>onebitdawn</code>; change it on <code>http://&lt;ip&gt;/token</code> once the clock is on your network</td></tr>
+    <tr><td>everything else</td><td>the defaults: brightness cap 50 %, access point password <code>onebitdawn</code></td></tr>
   </table>
 
   <h2>First boot</h2>
   <ol>
-    <li>The panel shows <code>AP</code>: the clock is a Wi-Fi access point named <code>clock-xxxx</code>, password <code>esp32clock</code>.</li>
+    <li>The panel shows <code>AP</code>: the clock is a Wi-Fi access point named <code>clock-xxxx</code>, password <code>onebitdawn</code>.</li>
     <li>Join it from a phone; the setup form opens by itself, or at <code>http://192.168.4.1/</code>.</li>
     <li>Pick your network, type its password, set the timezone and a hostname, save. The clock joins the network and shows the time.</li>
     <li>Both buttons held 10 s put the clock back into its access point.</li>
@@ -72,7 +72,7 @@
     });
     // The releases, newest first; the page falls back to "latest" when
     // GitHub cannot be asked (offline, or past the API's rate limit).
-    fetch('https://api.github.com/repos/anarsoul/esp32clock/releases')
+    fetch('https://api.github.com/repos/anarsoul/onebitdawn/releases')
       .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
       .then(function (releases) {
         var tags = releases.filter(function (r) { return !r.draft && !r.prerelease; }).map(function (r) { return r.tag_name; });

@@ -1,7 +1,7 @@
 # Build, lint and test on every push and pull request, and publish the
 # OTA image and the default clip pack as workflow artifacts. The image is built with no network
 # (the clock boots as an access point), Vancouver time and the
-# API token `esp32clock`; "Prebuilt images" in MANUAL.md says how
+# API token `onebitdawn`; "Prebuilt images" in MANUAL.md says how
 # to use it and what to change after the first boot.
 name: CI
 
@@ -19,7 +19,7 @@ env:
   WIFI_SSID: ""
   WIFI_PASSWORD: ""
   TZ_RULE: "<-07>7" # Vancouver, UTC-7 all year
-  API_TOKEN: esp32clock
+  API_TOKEN: onebitdawn
   ESPFLASH_VERSION: v4.7.0
 
 jobs:
@@ -46,11 +46,11 @@ jobs:
         run: ALARM_CLIP=clips/trantor.bpr,clips/halftime.xmc,clips/keygen.xmc,clips/synchronization.pt3c cargo host-test
       - uses: actions/upload-artifact@v6
         with:
-          name: esp32clock-clips-${{ github.sha }}
+          name: onebitdawn-clips-${{ github.sha }}
           path: packs/clips-default.bin
           if-no-files-found: error
       - name: Clippy on the core crate and its tests
-        run: cargo clippy -p esp32clock-core --target host-tuple --tests -- -D warnings
+        run: cargo clippy -p onebitdawn-core --target host-tuple --tests -- -D warnings
 
   firmware:
     name: Firmware and OTA image
@@ -80,10 +80,10 @@ jobs:
       - name: Make the OTA image
         run: |
           espflash save-image --chip esp32c3 --partition-table partitions.csv \
-            target/riscv32imc-unknown-none-elf/release/esp32clock esp32clock-ota.bin
-          ls -l esp32clock-ota.bin
+            target/riscv32imc-unknown-none-elf/release/onebitdawn onebitdawn-ota.bin
+          ls -l onebitdawn-ota.bin
       - uses: actions/upload-artifact@v6
         with:
-          name: esp32clock-ota-${{ github.sha }}
-          path: esp32clock-ota.bin
+          name: onebitdawn-ota-${{ github.sha }}
+          path: onebitdawn-ota.bin
           if-no-files-found: error

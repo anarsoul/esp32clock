@@ -20,7 +20,7 @@ env:
   WIFI_SSID: ""
   WIFI_PASSWORD: ""
   TZ_RULE: "<-07>7" # Vancouver, UTC-7 all year
-  API_TOKEN: esp32clock
+  API_TOKEN: onebitdawn
   ESPFLASH_VERSION: v4.7.0
 
 jobs:
@@ -57,32 +57,32 @@ jobs:
       - name: Make the images
         run: |
           mkdir -p images
-          ELF=target/riscv32imc-unknown-none-elf/release/esp32clock
+          ELF=target/riscv32imc-unknown-none-elf/release/onebitdawn
           # The application image, for /update and scripts/ota.sh.
           espflash save-image --chip esp32c3 --partition-table partitions.csv \
-            "$ELF" "images/esp32clock-ota-${GITHUB_REF_NAME}.bin"
+            "$ELF" "images/onebitdawn-ota-${GITHUB_REF_NAME}.bin"
           # Everything from offset 0 for `espflash write-bin 0x0`: the
           # bootloader, the partition table, erased otadata (so ota_0
           # boots) and the app. It is contiguous, so it also covers nvs
           # with erased bytes and clears the saved settings.
           espflash save-image --chip esp32c3 --partition-table partitions.csv \
             --merge --skip-padding --flash-size 4mb \
-            "$ELF" "images/esp32clock-${GITHUB_REF_NAME}.bin"
+            "$ELF" "images/onebitdawn-${GITHUB_REF_NAME}.bin"
           # The web installer writes four parts and leaves nvs alone, so
           # the settings survive unless the erase is chosen: the bootloader
           # and the partition table cut out of the merged image, an erased
           # otadata, and the application image above.
-          dd if="images/esp32clock-${GITHUB_REF_NAME}.bin" of=images/bootloader.bin bs=4096 count=8 status=none
-          dd if="images/esp32clock-${GITHUB_REF_NAME}.bin" of=images/partition-table.bin bs=4096 skip=8 count=1 status=none
+          dd if="images/onebitdawn-${GITHUB_REF_NAME}.bin" of=images/bootloader.bin bs=4096 count=8 status=none
+          dd if="images/onebitdawn-${GITHUB_REF_NAME}.bin" of=images/partition-table.bin bs=4096 skip=8 count=1 status=none
           head -c 8192 /dev/zero | tr '\0' '\377' > images/otadata.bin
           # The default clip pack, for the `clips` partition: the Clips
           # page, scripts/clips.sh or `espflash write-bin 0x2e0000`. The
           # firmware has no clips built in, so the web installer writes
           # it too. Checked by the parser the clock reads it with.
-          scripts/mkpack.py "images/esp32clock-clips-${GITHUB_REF_NAME}.bin" \
+          scripts/mkpack.py "images/onebitdawn-clips-${GITHUB_REF_NAME}.bin" \
             clips/trantor.bpr clips/halftime.xmc clips/keygen.xmc \
             clips/synchronization.pt3c
-          CLIP_PACK_FILE="images/esp32clock-clips-${GITHUB_REF_NAME}.bin" \
+          CLIP_PACK_FILE="images/onebitdawn-clips-${GITHUB_REF_NAME}.bin" \
             cargo host-test the_pack_file_parses -- --nocapture
           ls -l images
       - uses: actions/upload-artifact@v6
@@ -102,25 +102,25 @@ jobs:
           path: images
       - uses: softprops/action-gh-release@v3
         with:
-          files: images/esp32clock-*.bin
+          files: images/onebitdawn-*.bin
           body: |
-            Flash a clock from the browser at https://anarsoul.github.io/esp32clock/
+            Flash a clock from the browser at https://anarsoul.github.io/onebitdawn/
             (Chrome or Edge, the clock on USB), or with espflash, which also
             clears the saved settings, since the file covers the whole flash:
 
-                espflash write-bin 0x0 esp32clock-${{ github.ref_name }}.bin
+                espflash write-bin 0x0 onebitdawn-${{ github.ref_name }}.bin
                 espflash reset
 
             Update a running clock from `http://<ip>/system` with
-            `esp32clock-ota-${{ github.ref_name }}.bin`, or with
-            `API_TOKEN=… scripts/ota.sh <ip> esp32clock-ota-${{ github.ref_name }}.bin`.
+            `onebitdawn-ota-${{ github.ref_name }}.bin`, or with
+            `API_TOKEN=… scripts/ota.sh <ip> onebitdawn-ota-${{ github.ref_name }}.bin`.
 
             The sampled alarm sounds are a clip pack in a partition of
-            their own, `esp32clock-clips-${{ github.ref_name }}.bin`:
+            their own, `onebitdawn-clips-${{ github.ref_name }}.bin`:
             the web installer writes it; after espflash, upload it from
             `http://<ip>/clips` or write it with
 
-                espflash write-bin 0x2e0000 esp32clock-clips-${{ github.ref_name }}.bin
+                espflash write-bin 0x2e0000 onebitdawn-clips-${{ github.ref_name }}.bin
                 espflash reset
 
             A clock flashed before this release has no such partition
@@ -128,9 +128,9 @@ jobs:
             updated over the air it has the note melodies only.
 
             The images carry no network (the clock boots as its own access
-            point, `clock-xxxx`, password `esp32clock`, setup form at
+            point, `clock-xxxx`, password `onebitdawn`, setup form at
             http://192.168.4.1/), Vancouver time without daylight saving (`<-07>7`) and the API token
-            `esp32clock`; see "Prebuilt images" in MANUAL.md. What changed
+            `onebitdawn`; see "Prebuilt images" in MANUAL.md. What changed
             is in CHANGELOG.md.
 
   pages:
@@ -151,7 +151,7 @@ jobs:
           # (0x2E0000), which replaces a pack the clock had.
           manifest() {
             jq -n --arg version "${TAG#v}" --arg app "$1" --arg clips "$2" '{
-              name: "esp32clock",
+              name: "onebitdawn",
               version: $version,
               new_install_prompt_erase: true,
               new_install_improv_wait_time: 0,
@@ -166,16 +166,16 @@ jobs:
           }
           # The release under its tag, as the page's list offers it.
           mkdir -p "docs/$TAG"
-          cp images/bootloader.bin images/partition-table.bin images/otadata.bin "images/esp32clock-ota-$TAG.bin" "images/esp32clock-clips-$TAG.bin" "docs/$TAG/"
-          manifest "esp32clock-ota-$TAG.bin" "esp32clock-clips-$TAG.bin" > "docs/$TAG/manifest.json"
+          cp images/bootloader.bin images/partition-table.bin images/otadata.bin "images/onebitdawn-ota-$TAG.bin" "images/onebitdawn-clips-$TAG.bin" "docs/$TAG/"
+          manifest "onebitdawn-ota-$TAG.bin" "onebitdawn-clips-$TAG.bin" > "docs/$TAG/manifest.json"
           # The same under fixed names as the fallback when the page
           # cannot ask GitHub for the list; keep_files below leaves earlier
           # tags in place, and these names are overwritten each release.
           mkdir -p docs/latest
           cp images/bootloader.bin images/partition-table.bin images/otadata.bin docs/latest/
-          cp "images/esp32clock-ota-$TAG.bin" docs/latest/esp32clock-ota.bin
-          cp "images/esp32clock-clips-$TAG.bin" docs/latest/esp32clock-clips.bin
-          manifest "esp32clock-ota.bin" "esp32clock-clips.bin" > docs/latest/manifest.json
+          cp "images/onebitdawn-ota-$TAG.bin" docs/latest/onebitdawn-ota.bin
+          cp "images/onebitdawn-clips-$TAG.bin" docs/latest/onebitdawn-clips.bin
+          manifest "onebitdawn-ota.bin" "onebitdawn-clips.bin" > docs/latest/manifest.json
           cat "docs/$TAG/manifest.json"
       - uses: peaceiris/actions-gh-pages@v4
         with:

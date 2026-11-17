@@ -66,7 +66,7 @@ use esp_hal::gpio::{DriveMode, Level, Output, OutputConfig, OutputSignal};
 use esp_hal::i2s::master::{Channels, DataFormat, I2s, PdmConfig, PdmSlotMode, PdmTxConfig, TdmConfig};
 use esp_hal::peripherals::{DMA, DMA_CH1, GPIO5, I2S0};
 use esp_hal::time::Rate;
-use esp32clock_core::clip::{CHUNK, Pacer, SLOTS, Stream, chunk_us, chunks_in, converter_clock};
+use onebitdawn_core::clip::{CHUNK, Pacer, SLOTS, Stream, chunk_us, chunks_in, converter_clock};
 use log::{info, warn};
 use static_cell::ConstStaticCell;
 

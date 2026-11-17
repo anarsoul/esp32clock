@@ -93,7 +93,7 @@ pub const MQTT_PASSWORD: &str = match option_env!("MQTT_PASSWORD") {
 /// which is the point.
 pub const AP_PASSWORD: &str = match option_env!("AP_PASSWORD") {
     Some(s) => s,
-    None => "esp32clock",
+    None => "onebitdawn",
 };
 const _: () = assert!(AP_PASSWORD.len() >= 8 && AP_PASSWORD.len() <= 64, "AP_PASSWORD must be 8 to 64 bytes");
 
