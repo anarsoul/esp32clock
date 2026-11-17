@@ -524,7 +524,7 @@ module ends with its `#[cfg(test)] mod tests`.
 | `core/src/melody.rs` | alarm tunes as pitch and length data with tempo; `RANDOM` and the pure `pick` that turns it into a tune; `CLIP_COUNT`, `CLIP_NAMES` and `CLIP_DATA` (included from `clips.rs`, which `core/build.rs` writes from `ALARM_CLIP`; none by default); the table at run time, the nine note melodies and then the clips of the pack `install` was given, else the built-in ones: `count`, `get` (a `Melody` by value, the beeps past the end), `all`, `clip_data`, `clip_loops`, `LIMIT` (what a settings index is held under), `RANDOM` (`usize::MAX`); the pack in force sits in a `critical_section` cell, a thread-local in the tests; pure |
 | `core/src/pack.rs` | the clip pack: `CLPK`, a version, up to `MAX_CLIPS` (16) entries of offset, length, loop flag, API name (20 bytes) and label (32), the clips' data, a SHA-256 at the end; `declared_len` from a header, `Pack::parse` with every check (`PackError`; a clip whose magic is one of the kinds' with a version digit no player reads, older or newer, is refused, `clip::is_unsupported`, as the `ALARM_CLIP` assert and `scripts/mkpack.py` do), `clip(k)`; the test `the_pack_file_parses` reads the file `CLIP_PACK_FILE` names |
 | `src/pack.rs` | the `clips` partition: found by its label in the table (absent on a clock flashed before 2026-11-14, which is not an error), its pages written into the flash MMU's entries below the last (`map`; refused if any is in use), the pack parsed through the mapping and installed, all in `init` before the settings load; `install`, the upload of `POST /clips`: header checked, pack out of the table, a clip playing from it stopped (`clip::playing_in`), scan stopped, `ota::write_hashed`, the cache invalidated, the pack parsed in place (its first sector erased if refused), then the caller reboots; `room` for the page |
-| `core/src/carry.rs` | `Carried`, `MARK` with its layout version, `encode`/`decode` |
+| `core/src/carry.rs` | `Carried`, `MARK` with its layout version, `readable` (this layout or a later one, which only appends words), `encode`/`decode` |
 | `src/carry.rs` | RTC-RAM record used only after a software reset (`CoreSw`/`Cpu0Sw`; anything else zeroes it at boot): self-heal count and time, the skip flag, the local second the alarm last rang, the Unix time last written, boots of an unconfirmed OTA image, the access-point flag for the next boot; the mark carries a layout version; `freeze` for a mode switch |
 | `src/buzzer.rs` | LEDC PWM on an open-drain pin; plays a melody on command, looped or once, stops within a note; a clip goes to `clip::play`, which hands it to the clip task on the same pin, and for a ringing alarm is asked to loop with no gap if `melody::CLIP_LOOPS` says the clip is made to (`Stream::new(data, looping)`: a beeper clip starts over, a module follows its own jump back, PCM wraps) where the note melodies repeat after `repeat_gap_ms` |
 | `core/src/clip.rs` | sampled sound for the 1-bit buzzer line, pure: `Player`, which in the default build (`CONVERTER`, from `config::CLIP_PDM`) writes a PCM clip's or a module's levels as 16-bit samples for the chip's PCM-to-PDM converter (`fill_samples`: the ramps, the clip with full scale at 0.85 of the rail, `CONVERTER_LEVEL`, the loudest that did not overload by ear, `SAMPLE_REST` for the released line) and `converter_clock`, the bit-clock divider and the true ring rate under the converter's whole dividers; in a `CLIP_MODULATOR=sd` or `pwm` build a software modulator, sigma-delta a bit at a time or pulse-width (one pulse per carrier period, centred, its length the level at mid-period with the rounding error fed back as far as the carrier leaves room: `ORDER`; integer, linear interpolation between the 8 kHz samples, a sample of 255 at 0.95 of the rail) that writes a clip's bitstream a buffer at a time, wrapped in 30 ms ramps from and to the released line; `Beeper`, a clip that is the line's level as run lengths (counts of 1/512 000 s, off and on alternately; `scripts/zxbeeper.py`): LEB128 counts in `BPR2`, and in `BPR3`, the packed one, tokens that are a run or a reference to the runs decoded from a token so many bytes back, read in place with a stack of returns (`refs::Refs`) and nothing kept of what was played; a broken clip ends where it breaks, written out as it is, with the line at its own `BEEPER_BIT_RATE`, 512 kbit/s (`Stream::bit_rate`); `Runs`, which writes a `RunSource` (the beeper clip) out as bytes; `Stream`, either kind by its first bytes (PCM as ADPCM, `adpcm.rs`, is a `Player`'s body as a tune is) (`Stream::new` is never inlined and builds a tune's player in place through `Player::take_*`: inlined, with a slot a kind, it was 6 KB of the clip task's frame, on whatever stack the interrupt found), with `converter`, `sample_rate`, `rest` and `bit_rate` (the rate the ring is read at: the line's bits, or 16 a sample) for the firmware half; `Pacer`, which says which chunks of the ring to write from the time since the start alone (one crystal clocks the line and the timer), counts underruns, and counts as strays the reads of the DMA's descriptor register that are not two slots on from that; `BIT_RATE` and `CARRIER_HZ` from `config::CLIP_KBPS` and `CLIP_CARRIER_KHZ`, `CHUNK` 1024, `SLOTS` 16 |
@@ -771,7 +771,7 @@ module ends with its `#[cfg(test)] mod tests`.
   27.6 s test clip is 442 KB of `.rodata`, held once: `melody::CLIP_DATA` is a `static`; a beeper clip is half a KB to 1.5 KB a second packed, twice that as plain runs, a tracker module some 10 KB whatever its length)
   and must leave the pack inside its partition, or the image inside its slot; the ring is 16 KB of
   static RAM in every build, since any build may meet a pack (2026-11-14: the main
-  stack is 49.9 KB, and 43.7 KB since `RESPONSE_BUF` is 8 KB, 2026-11-15). A chunk is 16 ms at
+  stack is 49.9 KB, and 43.7 KB since `RESPONSE_BUF` is 8 KB, 2026-11-15; 42.2 KB with the settings map's scratch at 1 KB, 2026-11-17). A chunk is 16 ms at
   512 kbit/s (a beeper clip) and the ring holds fourteen ahead of the
   DMA, so the clip task not running for about 220 ms (twice that for
   the 16-bit samples of a 16 kHz clip under the PDM converter) is an
@@ -781,7 +781,7 @@ module ends with its `#[cfg(test)] mod tests`.
   or two, runs there above the Wi-Fi driver.
 - `form::apply` decodes each key into 16 bytes and each value into 64
   (`form::VALUE_MAX`, the password); longer input is reported as a bad
-  key or value before parsing. The record is `settings::RECORD_LEN` (386) bytes and the map scratch in `storage.rs` 512, which must hold
+  key or value before parsing. The record is `settings::RECORD_LEN` (386) bytes and the map scratch in `storage.rs` 1024 (`storage::ITEM_MAX`, 1000, is the longest item any firmware may write, see "Compatibility"), which must hold
   the item (record plus 9 bytes, padded to a word).
 - The MQTT task's future holds its socket buffers (1 KB receive, 2 KB
   send), the 1 KB `BumpBuffer`, the state JSON (1 KB) and the
@@ -815,7 +815,7 @@ module ends with its `#[cfg(test)] mod tests`.
 
 ## Verifying without a board
 
-`cargo host-test` runs the tests of `core/` on the host (169 on 2026-11-17, and the players' tests over real clips only with `ALARM_CLIP` naming some, which the CI does in a second run): the AiP33628 encoder against a behavioural model of the
+`cargo host-test` runs the tests of `core/` on the host (170 on 2026-11-17, and the players' tests over real clips only with `ALARM_CLIP` naming some, which the CI does in a second run): the AiP33628 encoder against a behavioural model of the
 chip (shift on CLK rise, latch on DIN rise while CLK high), the panel
 map, the palette and brightness tables, the hostname, password and
 token rules, the record round trip and every older version, the form
@@ -833,6 +833,51 @@ and `dnsd.rs` (their pure halves
 use embassy-net's address types), `storage.rs`'s map over the flash,
 `mqtt.rs`'s session loop.
 `PLAN.md` records the checks of each milestone; new ones are tests.
+
+## Compatibility
+
+The first public release (the one after v0.4) fixes what every later
+firmware must go on doing, since a clock is updated over the air and
+may be rolled back (by hand, or by the third unconfirmed boot) to any
+release from that one on, with the newer one's data in flash:
+
+- **The partition table and the bootloader** are what the clock was
+  flashed with over USB; an update never changes them. A later image
+  fits `ota_0` (0x160000) and a pack `clips`.
+- **The settings record** is append-only, and an older image reads a
+  newer record by its prefix: a new field goes at the end with a new
+  `RECORD_VERSION`. `Settings::from_record` gives up only on a record
+  shorter than its version says; a value it does not know in a field
+  it has (a new enum value, a level, a rule its parser refuses) is
+  that field's default, with the rest kept, the network above all.
+  Widening a field's values is therefore allowed, and costs a
+  rolled-back clock that setting.
+- **No item in the settings map is longer than `storage::ITEM_MAX`**
+  (1000 bytes, key included; the record is 387). `sequential-storage`
+  reads every item it passes into the scratch, so one item too long
+  for an older image fails its read of all of them: it then runs on
+  the defaults and erases the map at its first save (seen on
+  test-clock, 2026-11-17). A record that outgrows the limit goes on
+  under a second key. A new major version of `sequential-storage`
+  must read the map as 8.0 wrote it.
+- **The carry record** is append-only from layout 4: a later layout
+  adds words after the nine and bumps the low byte of `MARK`;
+  `carry::readable` takes this layout or any later one and reads the
+  words it knows, `ota_boots` among them, so an update or a rollback
+  across a layout change still counts its boots. An image writes the
+  mark back with its own version.
+- **A clip pack** of version 1 and every clip format in it today are
+  read by every later firmware. A firmware refuses a pack of another
+  version or with a reserved byte or flag bit set, and a known kind's
+  clip of a version it does not play; a clip of a *new* kind it would
+  play as PCM with no header, so a pack that holds one must set a
+  reserved bit or the version (`core/src/pack.rs`'s header).
+- **`/api`** keys, the `set/` keys and the MQTT topics, the device id
+  and the entities' unique ids stay; additions only.
+- **The prebuilt images have no API token** (since the same release:
+  a token printed in the manual would be every clock's, and `seed`
+  stores it at the first save, for good). `API_TOKEN` stays empty in
+  `ci.yml` and `release.yml`.
 
 ## Conventions
 

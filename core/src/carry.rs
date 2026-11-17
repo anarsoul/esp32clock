@@ -5,16 +5,31 @@
 //! The RTC-RAM static it lives in, and the reset-reason gate, are in the
 //! firmware's `carry`.
 
-/// Marks a record written by this firmware with this layout; a second
-/// guard behind the reset reason, against a reset that skipped the
-/// persistent-RAM zeroing. The low byte is the layout version: an
-/// `ota::reboot` from a firmware with another layout leaves a record
-/// this one must not read, and the mismatch discards it, one time.
-/// Version 1 ("CARR") held an RTC-timer offset in words 6 and 7; version
-/// 2 held the handled alarm as a Unix time and a minute in words 4 and 5;
-/// version 3 had no `boot_ap` word.
-pub const MARK: u32 = 0x4341_5200 | LAYOUT; // "CAR" + version
+/// Marks a record written by this firmware; a second guard behind the
+/// reset reason, against a reset that skipped the persistent-RAM
+/// zeroing. The low byte is the layout version. Version 1 ("CARR") held
+/// an RTC-timer offset in words 6 and 7; version 2 held the handled
+/// alarm as a Unix time and a minute in words 4 and 5; version 3 had no
+/// `boot_ap` word: a record of those is discarded.
+///
+/// From version 4, the first public release's, the layout is
+/// append-only, as the settings record is: a later version adds words
+/// after these and never moves or redefines one, and bumps the version.
+/// So an `ota::reboot` from a later firmware, or a rollback to this one,
+/// hands over a record whose first `WORDS` words are read here
+/// (`readable`), `ota_boots` among them, without which an update that
+/// changed the layout would never be rolled back. This firmware writes
+/// the mark back with its own version, which tells a later one that the
+/// words past these are stale.
+pub const MARK: u32 = TAG | LAYOUT; // "CAR" + version
+const TAG: u32 = 0x4341_5200;
 const LAYOUT: u32 = 4;
+
+/// Whether a record under this mark is one `decode` reads: this layout
+/// or a later one.
+pub const fn readable(mark: u32) -> bool {
+    mark & !0xFF == TAG && mark & 0xFF >= LAYOUT
+}
 
 /// `[mark, heals, last heal unix, skip, last alarm unix, unix us low,
 /// unix us high, ota boots, boot ap]`. A zero time means none.
@@ -48,7 +63,7 @@ pub struct Carried {
 }
 
 pub fn decode(v: [u32; WORDS]) -> Carried {
-    if v[0] != MARK {
+    if !readable(v[0]) {
         return Carried::default();
     }
     Carried {
@@ -114,10 +129,25 @@ mod tests {
     #[test]
     fn a_wrong_mark_is_an_empty_record() {
         let mut words = encode(&Carried { heals: 3, ..Carried::default() });
-        words[0] = MARK ^ 1; // another layout version
+        words[0] = MARK - 1; // an earlier layout
+        assert_eq!(decode(words), Carried::default());
+        words[0] = MARK ^ 0x100;
         assert_eq!(decode(words), Carried::default());
         assert_eq!(decode([0; WORDS]), Carried::default());
         assert_eq!(MARK & 0xFF, LAYOUT);
         assert_eq!(MARK >> 8, 0x43_41_52, "\"CAR\"");
+    }
+
+    #[test]
+    fn a_later_layout_is_read_by_its_first_words() {
+        let c = Carried { heals: 3, ota_boots: 1, skip_next: true, unix_us: Some(1_761_000_123_456_789), ..Carried::default() };
+        let mut words = encode(&c);
+        for later in [MARK + 1, MARK | 0xFF] {
+            words[0] = later;
+            assert!(readable(later));
+            assert_eq!(decode(words), c);
+        }
+        // Written back, it is this layout's again.
+        assert_eq!(encode(&decode(words))[0], MARK);
     }
 }

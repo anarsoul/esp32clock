@@ -20,7 +20,7 @@ use esp_hal::rtc_cntl::SocResetReason;
 use portable_atomic::AtomicU32;
 
 pub use onebitdawn_core::carry::Carried;
-use onebitdawn_core::carry::{MARK, WORDS, decode, encode};
+use onebitdawn_core::carry::{WORDS, decode, encode, readable};
 
 /// Atomics so the record is a plain `static`: a persistent static must be
 /// valid in any bit pattern, which esp-hal asserts, and these are. One
@@ -50,7 +50,7 @@ fn write_raw(v: [u32; WORDS]) {
 pub fn init() -> (Option<SocResetReason>, bool) {
     let reason = esp_hal::system::reset_reason();
     let soft = matches!(reason, Some(SocResetReason::CoreSw | SocResetReason::Cpu0Sw));
-    let keep = soft && read_raw()[0] == MARK;
+    let keep = soft && readable(read_raw()[0]);
     if !keep {
         write_raw(encode(&Carried::default()));
     }

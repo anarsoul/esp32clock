@@ -23,12 +23,21 @@ from `http://<ip>/update`; its settings survive the update.
     retained `esp32clock/<id>/status` and `state` stay on the broker
     until cleared (`mosquitto_pub -r -n -t esp32clock/<id>/status`);
   - the access point's default password is `onebitdawn`;
-  - the prebuilt images' API token is `onebitdawn`, for a clock that
-    has not stored one;
   - the release's files are `onebitdawn-<tag>.bin`,
     `onebitdawn-ota-<tag>.bin` and `onebitdawn-clips-<tag>.bin`;
   - the pages are headed `onebitdawn: <hostname>`.
 
+- **The prebuilt images have no API token** (it was `esp32clock`,
+  printed in the manual, so anything on the network could update a
+  clock that kept it). A clock flashed with one updates from its
+  pages with the PIN on its panel, and the scripts work once a token
+  is set on `/system`. A clock that already stores a token keeps it.
+- A clock keeps its settings, the network above all, when it is
+  rolled back from a later firmware to this one or after it: a value
+  in the stored record that the older firmware does not know costs
+  that one setting, which goes to its default, and no longer the
+  whole record, and the count that rolls a bad update back survives a
+  change of the record it is carried in.
 - The README is condensed to what the project is, how it differs from
   the original, how to build the clock and what the clips are. The
   rest (building from source, updates over the LAN, clip packs, the
@@ -112,10 +121,6 @@ from `http://<ip>/update`; its settings survive the update.
   firmware older than this plays such a clip limited), and
   `CLIP_HIGHPASS` and `CLIP_DRIVE` set `scripts/wav2pcm.sh`'s bass
   cut and drive.
-
-### Changed
-
-- The firmware image is about 1040 KB, from 850 KB.
 
 ## [0.4] - 2026-11-10
 

@@ -9629,3 +9629,89 @@ noise. No format changed, so every clip and pack there is stays good.
 - Not done: a `PCM1` clip at a rate the player does not know is still
   played at 8 kHz, and unknown flag bits in a tune's header are
   ignored.
+
+### Forward compatibility before the first public release — 2026-11-17, built, tested on the host and on test-clock; not committed, not tagged
+
+The user's question before the release after v0.4, which may be the
+first one anybody else flashes: will later releases be compatible
+with it. The other way round is the one that cannot be fixed later:
+what *this* firmware does with a later one's data, after a rollback
+by hand or by the third unconfirmed boot. An audit of what crosses
+releases (the partition table, the settings record and its map, the
+carry record, the clip pack, the OTA checks, `/api`, MQTT, the web
+installer) found three faults and one decision.
+
+- **A value the image does not know cost the whole record.**
+  `Settings::from_record` answered `None` for any field out of range:
+  a later image with one more `temp_show`, one more transmit power
+  level or a rule this parser refuses would leave a rolled-back clock
+  on the defaults, with no network, as an access point. Now each
+  field falls back by itself (the default; a network or broker that
+  does not read is none; an alarm at no time of day is the default
+  time, disarmed; the offset is clamped; day bits past the week are
+  dropped; brightness past the list is the brightest) and `None` is
+  only a record shorter than its version says. The test that listed
+  the refusals lists the fallbacks, and a record of 0xFF bytes is
+  still a valid one.
+- **A longer record erased the settings.** `storage::load` erased the
+  map on any error, and an item longer than the 512-byte scratch is
+  one (`BufferTooSmall`). The scratch is 1024 bytes now and
+  `storage::ITEM_MAX` (1000) is the promise: no later firmware writes
+  a longer item, under any key. The first version of the fix only
+  left such an item alone, and the bench showed why that is not
+  enough: `sequential-storage` reads every item it passes, so with a
+  1086-byte item in the page a record saved beside it was `saved`
+  and then not read at the next boot, the same warning again. So an
+  image that meets one runs on the defaults (with the build's seeds)
+  and leaves it for the newer firmware, until it has something to
+  save, and then erases the map first.
+- **A carry layout change dropped the boot count.** A mark of
+  another layout discarded the record, `ota_boots` with it, so an
+  update that changed the layout could never be rolled back. From
+  layout 4 the record is append-only and `carry::readable` takes a
+  later layout by the words it knows. v0.4 is layout 4 too, so the
+  update to this release was never affected.
+- **The prebuilt token.** The CI's and the release's images had
+  `API_TOKEN=onebitdawn` (and `esp32clock` before), printed in the
+  manual: every installed clock would take a firmware from anything
+  on its LAN, and `seed` stores the build's token at the first save,
+  so no later release could take it back. The user: "let's ship
+  without a token". The images have none; the PIN on the panel does
+  everything from the pages, and the scripts work once a token is set
+  on `/system`. The manual, the installer page, the release's text
+  and the changelog say so.
+- The pack's header comment says what a later pack must do for a clip
+  of a new kind (a reserved bit or the version: this firmware would
+  play it as PCM), and `AGENTS.md` has a "Compatibility" section with
+  the rules. The changelog lost a stale line (the image is 886 KB,
+  not 1040) and a second `### Changed`.
+- Not changed: the partition table (520 KB of slot to grow into),
+  the pack format, the OTA checks (magics and the appended hash, no
+  version or name compared).
+
+On the host: 170 tests with the CI's settings (no token), with the
+clips built in and with the session's; clippy on both crates; the
+release workflow's image steps run by hand (bootloader and table cut
+from the merged image, the app at 0x20000 identical to the OTA image,
+the pack through the parser). The main stack is 42.2 KB.
+
+On test-clock (10.1.1.30, serial log read), with two throwaway builds
+standing in for a later firmware (record version 13 with `temp_show`
+3 and a transmit power of 72 in it, carry layout 5 with a tenth word;
+one with 40 bytes appended to the record, one with 700):
+
+| step | seen |
+| --- | --- |
+| OTA from `55eac74` to this build | `settings: loaded`, all settings as before, `boot 1 of 2`, `confirmed good` |
+| three settings changed, 6 s, `scripts/reload.sh` | back in 3 s with them, time carried |
+| the 426-byte version 13 record, then this build again | `loaded`; network, hostname, broker, token, alarm, melody kept; `temp_show` back at `c` and `tx_power` at the build's default, as meant; `carried over … ota_boots: 1` from the layout 5 record, `boot 1 of 2` |
+| the 1086-byte record, then this build | `a stored item needs 1088 bytes of scratch … using defaults`, on the network by the build's seeds as `clock`; (first version: a save, a reload, the same warning: the fault above) |
+| the settings posted back, 8 s, reload | `erasing the map for the item this firmware cannot read`, `saved`, then `loaded from flash` with everything |
+| token cleared with `POST /token` | `/reload` and a network key on `/api` with the old token: `403`; `scripts/pin.sh`, `POST /token` with the PIN: `token set`; reload with it: `200` |
+| the five pages | `200` each; `/api` as at the start but for the version |
+
+Not tested: a clock that never had a token on a build with none
+(test-clock's was cleared, which is the same path but for the
+`token_cleared` flag); the access point's setup on such an image; the
+release workflow itself, which runs on a tag. Still owed from before:
+the default pack on a stock buzzer circuit.

@@ -85,8 +85,9 @@ Then install it, either way:
   clock then shows a four-digit PIN on its panel for a minute, and
   the page asks for it. The panel is dark for the write,
   and the page waits for the clock to come back.
-- **From the shell**, with the clock's API token (`onebitdawn` on the
-  prebuilt images, or what you built with):
+- **From the shell**, with the clock's API token (what you built
+  with, or set on the System page; a prebuilt image has none until
+  you set one):
 
   ```sh
   API_TOKEN='…' scripts/ota.sh <ip> onebitdawn-ota-<tag>.bin   # send this file
@@ -164,26 +165,30 @@ fetch and install it. The images are built with:
 | --- | --- |
 | network | none: the clock boots as an access point, see above |
 | timezone | `<-07>7`, Vancouver (UTC-7, permanent since BC stopped changing clocks), no daylight saving. For another zone open `/settings` and press "Use this browser's zone", or type a POSIX TZ rule |
-| API token | `onebitdawn` |
+| API token | none: set one on `/system` for the scripts |
 | everything else | the defaults: brightness cap 50 %, access point password `onebitdawn` |
 
 The OTA image is an update image, for a clock that has been flashed
 once over USB (the web installer or `cargo run` above); install it as
-"Updates over the LAN" says, with `API_TOKEN=onebitdawn` on the
-shell path.
+"Updates over the LAN" says.
 
-The token is printed here, so change it once the clock is on your
-network: open `http://<ip>/system`, type a new one (8 to 32 printable
-characters without spaces) with the PIN the clock shows, or post it
-with the old token:
+A prebuilt image has no API token (a token printed here would let
+anything on your network update the clock), so until you set one
+everything that needs it goes from the clock's pages with the PIN on
+its panel, and the scripts are refused. To use the scripts, open
+`http://<ip>/system` and type a token (8 to 32 printable characters
+without spaces) with the PIN the clock shows; to change it later,
+there or with the old one:
 
 ```sh
-curl -X POST -H 'Authorization: Bearer onebitdawn' -d 'token=<new token>' http://<ip>/token
+curl -X POST -H 'Authorization: Bearer <old token>' -d 'token=<new token>' http://<ip>/token
 ```
 
-A token stored this way survives later updates with the prebuilt
-images: the build's token only seeds a clock that has none. From then
-on `scripts/ota.sh` wants the new token in `API_TOKEN`.
+The token is stored with the settings and survives updates;
+`scripts/ota.sh` and the others want it in `API_TOKEN`. (The releases
+up to v0.4 were built with the token `esp32clock`, and a clock that
+saved its settings under one of them has it stored, until it is
+changed or cleared.)
 
 The token is what the scripts send as `Authorization: Bearer`; the
 clock never shows it, only whether one is set. Setting an empty one

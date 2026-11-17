@@ -23,6 +23,16 @@
 //! (`NAME_MAX` bytes, NUL padded) and the label (`LABEL_MAX` bytes, NUL
 //! padded). A clip's data is what `ALARM_CLIP` takes: raw PCM, a beeper
 //! clip, a tracker module, a SID tune or a PT3 module.
+//!
+//! Version 1 is the first public release's, and every firmware after
+//! it must go on reading it: a clock's pack outlives its firmware. A
+//! firmware refuses a pack of another version, and one with any of the
+//! zero bytes or an entry's other flag bits set, and then runs with the
+//! note melodies. So whatever a later pack has that this parser would
+//! get wrong must set one of those: above all a clip of a new kind,
+//! whose magic an older firmware does not know and would play as PCM
+//! with no header, as noise (`clip::is_unsupported` knows only the
+//! kinds there are, and a new version of one of them).
 
 use sha2::{Digest, Sha256};
 
@@ -55,7 +65,8 @@ pub enum PackError {
     Count,
     /// The length in the header is not the length in hand.
     Length,
-    /// An entry's data is outside the pack, or its reserved bits are set.
+    /// An entry's data is outside the pack, or its reserved bits are
+    /// set: a later firmware's pack.
     Entry(usize),
     /// A name that is empty, has other than `a-z` and `_`, is another
     /// clip's, a note melody's or `random`.
@@ -79,7 +90,7 @@ impl PackError {
             PackError::Version => "a clip pack of a version this firmware does not read",
             PackError::Count => "a clip pack holds 1 to 16 clips",
             PackError::Length => "clip pack length mismatch: truncated?",
-            PackError::Entry(_) => "clip pack: an entry points outside the pack",
+            PackError::Entry(_) => "clip pack: an entry points outside the pack, or the pack is for a newer firmware",
             PackError::Name(_) => "clip pack: a clip's name is taken or not a-z and _",
             PackError::Label(_) => "clip pack: a clip's label is empty or has characters a page cannot show",
             PackError::Clip(_) => "clip pack: a clip is shorter than a second or of a version this firmware does not play",

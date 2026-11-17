@@ -1,8 +1,8 @@
 # Build, lint and test on every push and pull request, and publish the
 # OTA image and the default clip pack as workflow artifacts. The image is built with no network
-# (the clock boots as an access point), Vancouver time and the
-# API token `onebitdawn`; "Prebuilt images" in MANUAL.md says how
-# to use it and what to change after the first boot.
+# (the clock boots as an access point), Vancouver time and no API
+# token (updates go by the panel's PIN until one is set); "Prebuilt
+# images" in MANUAL.md says how to use it.
 name: CI
 
 on:
@@ -19,7 +19,7 @@ env:
   WIFI_SSID: ""
   WIFI_PASSWORD: ""
   TZ_RULE: "<-07>7" # Vancouver, UTC-7 all year
-  API_TOKEN: onebitdawn
+  API_TOKEN: "" # none: the PIN on the panel until the owner sets one
   ESPFLASH_VERSION: v4.7.0
 
 jobs:

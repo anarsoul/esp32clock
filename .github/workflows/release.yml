@@ -20,7 +20,7 @@ env:
   WIFI_SSID: ""
   WIFI_PASSWORD: ""
   TZ_RULE: "<-07>7" # Vancouver, UTC-7 all year
-  API_TOKEN: onebitdawn
+  API_TOKEN: "" # none: the PIN on the panel until the owner sets one
   ESPFLASH_VERSION: v4.7.0
 
 jobs:
@@ -113,7 +113,8 @@ jobs:
 
             Update a running clock from `http://<ip>/system` with
             `onebitdawn-ota-${{ github.ref_name }}.bin`, or with
-            `API_TOKEN=… scripts/ota.sh <ip> onebitdawn-ota-${{ github.ref_name }}.bin`.
+            `API_TOKEN=… scripts/ota.sh <ip> onebitdawn-ota-${{ github.ref_name }}.bin`
+            and the clock's API token, if it has one.
 
             The sampled alarm sounds are a clip pack in a partition of
             their own, `onebitdawn-clips-${{ github.ref_name }}.bin`:
@@ -129,9 +130,11 @@ jobs:
 
             The images carry no network (the clock boots as its own access
             point, `clock-xxxx`, password `onebitdawn`, setup form at
-            http://192.168.4.1/), Vancouver time without daylight saving (`<-07>7`) and the API token
-            `onebitdawn`; see "Prebuilt images" in MANUAL.md. What changed
-            is in CHANGELOG.md.
+            http://192.168.4.1/), Vancouver time without daylight saving (`<-07>7`) and no API
+            token: updates and uploads go from the clock's pages with the
+            PIN its panel shows, and the scripts work once a token is set
+            on `http://<ip>/system`; see "Prebuilt images" in MANUAL.md.
+            What changed is in CHANGELOG.md.
 
   pages:
     name: Flasher page

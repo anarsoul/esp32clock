@@ -108,17 +108,31 @@ type Map = MapStorage<u8, AsyncFlash, NoCache>;
 
 type MapError = sequential_storage::Error<FlashStorageError>;
 
-/// Scratch for the map: key, record, item header, rounded up (a 336-byte
-/// record is a 345-byte item); a stale record of another length fits
-/// too. Word aligned so `esp-storage` reads into it directly instead of
-/// through a sector buffer on the stack.
+/// Scratch for the map: an item's key and record, rounded up to a word
+/// (a 386-byte record is 388 bytes of it), with room for a record more than twice
+/// that: a later firmware's, read by this one after a rollback by the
+/// prefix it knows. Word aligned so `esp-storage` reads into it directly
+/// instead of through a sector buffer on the stack.
+///
+/// The size is a promise to every later firmware, from the first public
+/// release on: no item in this map, under any key, is longer than
+/// `ITEM_MAX` bytes, since the map reads each item it passes into the
+/// scratch and one that does not fit fails the read of all of them. A
+/// record that outgrows it goes on under a second key.
 #[repr(C, align(4))]
-struct Scratch([u8; 512]);
+struct Scratch([u8; SCRATCH]);
+
+const SCRATCH: usize = 1024;
+/// The longest item, key and all, there may ever be in the map.
+pub const ITEM_MAX: usize = 1000;
+const _: () = assert!(RECORD_LEN + 16 <= ITEM_MAX && ITEM_MAX + 16 <= SCRATCH);
 
 /// The settings map in the `nvs` partition.
 pub struct Store {
     map: Map,
     scratch: Scratch,
+    /// The map holds an item longer than the scratch: see `load`.
+    oversized: bool,
 }
 
 impl Store {
@@ -156,7 +170,7 @@ impl Store {
                 return None;
             }
         };
-        Some(Store { map: Map::new(AsyncFlash, config, NoCache::new_uncached()), scratch: Scratch([0; 512]) })
+        Some(Store { map: Map::new(AsyncFlash, config, NoCache::new_uncached()), scratch: Scratch([0; SCRATCH]), oversized: false })
     }
 
     /// The stored settings, if there is a valid record. A map that cannot
@@ -184,6 +198,18 @@ impl Store {
                 info!("settings: nothing stored, using defaults");
                 None
             }
+            // An item longer than the scratch is a later firmware's,
+            // which was not to write one (`SCRATCH`). It is left in
+            // flash for that firmware while this one runs on the
+            // defaults, but only until this one has something to save:
+            // the map reads every item on its way to the newest, so a
+            // record written beside that one would never be read back
+            // (test-clock, 2026-11-17), and the save erases the map first.
+            Err(MapError::BufferTooSmall(needed)) => {
+                warn!("settings: a stored item needs {needed} bytes of scratch, more than this firmware has; using defaults, and the next save erases it");
+                self.oversized = true;
+                None
+            }
             Err(e) => {
                 warn!("settings: cannot read the map ({e:?}), erasing it");
                 if let Err(e) = self.map.erase_all().await {
@@ -197,6 +223,11 @@ impl Store {
     /// Write the settings.
     pub async fn save(&mut self, s: &Settings) -> Result<(), MapError> {
         let record: [u8; RECORD_LEN] = s.to_record();
+        if self.oversized {
+            warn!("settings: erasing the map for the item this firmware cannot read");
+            self.map.erase_all().await?;
+            self.oversized = false;
+        }
         self.map.store_item(&mut self.scratch.0, &KEY, &record.as_slice()).await
     }
 }

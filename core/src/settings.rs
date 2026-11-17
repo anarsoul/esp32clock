@@ -501,7 +501,12 @@ pub const TEMP_OFFSET_LIMIT_DC: i16 = 100;
 /// Stored record layout version. Bump when the layout changes, append
 /// the new fields and teach `from_record` the old one, or the user's
 /// settings are lost; never reorder, since an older image reads a newer
-/// record by its prefix.
+/// record by its prefix. Version 12 is the first public release's, and
+/// what it promises an image after it: the fields up to here stay where
+/// they are, a value it does not know in one of them costs it that field
+/// only (`from_record`), and the record with its key stays within
+/// `storage::ITEM_MAX` bytes (1000), which that image's map can read; a
+/// record that outgrows it goes on in a second item.
 const RECORD_VERSION: u8 = 12;
 
 /// Where the hostname sits in a version 3 record.
@@ -733,38 +738,48 @@ impl Settings {
     /// colour, brightness or melody index past this image's table (an
     /// entry a newer image added, or a higher current ceiling) lands on
     /// the last one offered, so that a rollback keeps the user's settings
-    /// instead of starting over. `None` for a field that is out of range
-    /// whatever the version, so a bad record falls back to the defaults.
+    /// instead of starting over. The same goes for every other field
+    /// (2026-11-17, before the first public release): a value this image
+    /// does not know, which a later one may have written into a field
+    /// there already is, is that field at its default (a network or a
+    /// broker that does not read is none, an alarm at no time of day is
+    /// disarmed), and the rest of the record stands, the network above
+    /// all. `None` only for a record shorter than its version says.
     pub fn from_record(r: &[u8]) -> Option<Settings> {
+        let d = Settings::DEFAULT;
         let mut s = Settings {
             color: *r.get(1)? as usize,
             brightness: *r.get(2)? as usize,
             alarm_hour: *r.get(3)?,
             alarm_minute: *r.get(4)?,
             alarm_armed: *r.get(5)? != 0,
-            ..Settings::DEFAULT
+            ..d
         };
+        // An alarm at no time of day is no alarm.
+        if s.alarm_hour >= 24 || s.alarm_minute >= 60 {
+            (s.alarm_hour, s.alarm_minute, s.alarm_armed) = (d.alarm_hour, d.alarm_minute, false);
+        }
         let version = r[0];
         if version >= 2 {
             s.twelve_hour = *r.get(6)? != 0;
             let minutes = i16::from_le_bytes([*r.get(7)?, *r.get(8)?]);
             // The timezone up to version 10; informational after, where
-            // the rule's own check below is the one that counts.
-            if version < 11 {
-                if !(-TZ_LIMIT_MINUTES..=TZ_LIMIT_MINUTES).contains(&minutes) {
-                    return None;
-                }
+            // the rule below is the one that counts.
+            if version < 11 && (-TZ_LIMIT_MINUTES..=TZ_LIMIT_MINUTES).contains(&minutes) {
                 s.tz = tz::fixed(minutes);
             }
         }
         if version >= 3 {
             let len = *r.get(RECORD_HOSTNAME_LEN)? as usize;
             let bytes = r.get(RECORD_HOSTNAME..RECORD_HOSTNAME + HOSTNAME_MAX)?;
-            let name = core::str::from_utf8(bytes.get(..len)?).ok()?;
-            s.hostname = Hostname::new(name)?;
+            s.hostname = bytes.get(..len).and_then(|b| core::str::from_utf8(b).ok()).and_then(Hostname::new).unwrap_or(d.hostname);
         }
         if version >= 4 {
-            s.alarm_days = *r.get(RECORD_ALARM_DAYS)?;
+            // Bits past the week are a later image's.
+            s.alarm_days = match *r.get(RECORD_ALARM_DAYS)? & DAYS_ALL {
+                0 => d.alarm_days,
+                days => days,
+            };
         }
         if version >= 5 {
             s.melody = match *r.get(RECORD_MELODY)? {
@@ -776,14 +791,19 @@ impl Settings {
             };
         }
         if version >= 6 {
-            s.wifi = Credentials {
-                ssid: Text::from_record(*r.get(RECORD_SSID_LEN)?, r.get(RECORD_SSID..RECORD_SSID + SSID_MAX)?)?,
-                password: Secret(Text::from_record(
-                    *r.get(RECORD_PASSWORD_LEN)?,
-                    r.get(RECORD_PASSWORD..RECORD_PASSWORD + PASSWORD_MAX)?,
-                )?),
+            let ssid = Text::from_record(*r.get(RECORD_SSID_LEN)?, r.get(RECORD_SSID..RECORD_SSID + SSID_MAX)?);
+            let password = Text::from_record(*r.get(RECORD_PASSWORD_LEN)?, r.get(RECORD_PASSWORD..RECORD_PASSWORD + PASSWORD_MAX)?);
+            s.wifi = match (ssid, password) {
+                (Some(ssid), Some(password)) => Credentials { ssid, password: Secret(password) },
+                _ => Credentials::NONE,
             };
-            s.token = Secret(Text::from_record(*r.get(RECORD_TOKEN_LEN)?, r.get(RECORD_TOKEN..RECORD_TOKEN + TOKEN_MAX)?)?);
+            if !s.wifi.is_valid() {
+                s.wifi = Credentials::NONE;
+            }
+            s.token = match Text::from_record(*r.get(RECORD_TOKEN_LEN)?, r.get(RECORD_TOKEN..RECORD_TOKEN + TOKEN_MAX)?) {
+                Some(t) if valid_token(t.as_str()) => Secret(t),
+                _ => Secret(Text::EMPTY),
+            };
         }
         if version >= 7 {
             let flags = *r.get(RECORD_FLAGS)?;
@@ -791,38 +811,45 @@ impl Settings {
             s.mqtt_cleared = flags & FLAG_MQTT_CLEARED != 0;
         }
         if version >= 8 {
-            s.temp_offset_dc = i16::from_le_bytes([*r.get(RECORD_TEMP_OFFSET)?, *r.get(RECORD_TEMP_OFFSET + 1)?]);
+            s.temp_offset_dc = i16::from_le_bytes([*r.get(RECORD_TEMP_OFFSET)?, *r.get(RECORD_TEMP_OFFSET + 1)?])
+                .clamp(-TEMP_OFFSET_LIMIT_DC, TEMP_OFFSET_LIMIT_DC);
         }
         if version >= 9 {
-            s.temp_show = TempShow::from_byte(*r.get(RECORD_TEMP_SHOW)?)?;
+            s.temp_show = TempShow::from_byte(*r.get(RECORD_TEMP_SHOW)?).unwrap_or(d.temp_show);
         }
         if version >= 10 {
-            s.mqtt = Broker {
-                host: Text::from_record(*r.get(RECORD_BROKER_HOST_LEN)?, r.get(RECORD_BROKER_HOST..RECORD_BROKER_HOST + BROKER_HOST_MAX)?)?,
-                port: u16::from_le_bytes([*r.get(RECORD_BROKER_PORT)?, *r.get(RECORD_BROKER_PORT + 1)?]),
-                user: Text::from_record(*r.get(RECORD_BROKER_USER_LEN)?, r.get(RECORD_BROKER_USER..RECORD_BROKER_USER + BROKER_USER_MAX)?)?,
-                password: Secret(Text::from_record(
-                    *r.get(RECORD_BROKER_PASSWORD_LEN)?,
-                    r.get(RECORD_BROKER_PASSWORD..RECORD_BROKER_PASSWORD + BROKER_PASSWORD_MAX)?,
-                )?),
+            let host = Text::from_record(*r.get(RECORD_BROKER_HOST_LEN)?, r.get(RECORD_BROKER_HOST..RECORD_BROKER_HOST + BROKER_HOST_MAX)?);
+            let port = u16::from_le_bytes([*r.get(RECORD_BROKER_PORT)?, *r.get(RECORD_BROKER_PORT + 1)?]);
+            let user = Text::from_record(*r.get(RECORD_BROKER_USER_LEN)?, r.get(RECORD_BROKER_USER..RECORD_BROKER_USER + BROKER_USER_MAX)?);
+            let password = Text::from_record(
+                *r.get(RECORD_BROKER_PASSWORD_LEN)?,
+                r.get(RECORD_BROKER_PASSWORD..RECORD_BROKER_PASSWORD + BROKER_PASSWORD_MAX)?,
+            );
+            s.mqtt = match (host, user, password) {
+                (Some(host), Some(user), Some(password)) => Broker { host, port, user, password: Secret(password) },
+                _ => Broker::NONE,
             };
+            if !s.mqtt.is_valid() {
+                s.mqtt = Broker::NONE;
+            }
         }
-        if version >= 11 {
-            s.tz = Text::from_record(*r.get(RECORD_TZ_LEN)?, r.get(RECORD_TZ..RECORD_TZ + TZ_MAX)?)?;
-            tz::parse(s.tz.as_str())?;
+        if version >= 11
+            && let Some(rule) = Text::from_record(*r.get(RECORD_TZ_LEN)?, r.get(RECORD_TZ..RECORD_TZ + TZ_MAX)?)
+            && tz::parse(rule.as_str()).is_some()
+        {
+            s.tz = rule;
         }
         if version >= 12 {
-            s.tx_power_qdbm = *r.get(RECORD_TX_POWER)? as i8;
-            tx_power_name(s.tx_power_qdbm)?;
+            let qdbm = *r.get(RECORD_TX_POWER)? as i8;
+            if tx_power_name(qdbm).is_some() {
+                s.tx_power_qdbm = qdbm;
+            }
         }
         s.color = s.color.min(PALETTE.len() - 1);
-        // A record saved by a build with a higher ceiling may name a step
-        // this build does not offer: land on the brightest one instead of
-        // throwing the whole record away. Anything past the full list is
-        // still a bad record.
-        if s.brightness < BRIGHTNESS_CHOICES.len() && s.brightness >= BRIGHTNESS_STEPS.len() {
-            s.brightness = BRIGHTNESS_STEPS.len() - 1;
-        }
+        // A record saved by a build with a higher ceiling, or by a later
+        // image with more steps, may name a step this build does not
+        // offer: the brightest one it does.
+        s.brightness = s.brightness.min(BRIGHTNESS_STEPS.len() - 1);
         s.is_valid().then_some(s)
     }
 }
@@ -1048,7 +1075,7 @@ mod tests {
     }
 
     #[test]
-    fn bad_records_are_rejected_and_table_indexes_clamped() {
+    fn a_bad_field_is_its_default_and_table_indexes_are_clamped() {
         let s = full();
         let r = s.to_record();
         let with = |f: &dyn Fn(&mut [u8; RECORD_LEN])| {
@@ -1056,24 +1083,59 @@ mod tests {
             f(&mut r);
             Settings::from_record(&r)
         };
-        assert!(with(&|r| r[RECORD_SSID_LEN] = SSID_MAX as u8 + 1).is_none(), "SSID length past the field");
-        assert!(with(&|r| r[RECORD_PASSWORD_LEN] = PASSWORD_MIN as u8 - 1).is_none(), "password of 7");
-        assert!(with(&|r| r[RECORD_PASSWORD_LEN] = PASSWORD_MAX as u8 + 1).is_none(), "password of 65");
-        assert!(with(&|r| r[RECORD_TOKEN_LEN] = TOKEN_MIN as u8 - 1).is_none(), "token of 7");
-        assert!(with(&|r| r[RECORD_TOKEN] = b' ').is_none(), "token with a space");
-        assert!(with(&|r| r[RECORD_SSID] = 0xFF).is_none(), "SSID not UTF-8");
-        assert!(with(&|r| r[RECORD_BROKER_HOST_LEN] = BROKER_HOST_MAX as u8 + 1).is_none(), "host length past the field");
-        assert!(with(&|r| r[RECORD_BROKER_HOST] = b' ').is_none(), "host with a space");
-        assert!(with(&|r| r[RECORD_BROKER_PORT..RECORD_BROKER_PORT + 2].copy_from_slice(&[0, 0])).is_none(), "port 0");
-        assert!(with(&|r| r[RECORD_BROKER_USER] = b' ').is_none(), "user with a space");
-        assert!(with(&|r| r[RECORD_BROKER_PASSWORD] = 0x7f).is_none(), "password with a control character");
-        assert!(with(&|r| r[3] = 24).is_none(), "alarm hour 24");
-        assert!(with(&|r| r[4] = 60).is_none(), "alarm minute 60");
-        assert!(with(&|r| r[2] = BRIGHTNESS_CHOICES.len() as u8).is_none(), "brightness past the whole list");
-        assert!(with(&|r| r[RECORD_ALARM_DAYS] = 0).is_none(), "no alarm day");
-        assert!(with(&|r| r[RECORD_ALARM_DAYS] = 0x80).is_none(), "an eighth day");
-        assert!(with(&|r| r[RECORD_TZ] = b',').is_none(), "a rule that does not parse");
-        assert!(with(&|r| r[RECORD_TZ_LEN] = TZ_MAX as u8 + 1).is_none(), "a rule past its field");
+        // A value this image does not know costs its own field and
+        // nothing else: what a later image may have written is read by
+        // an earlier one after a rollback, and the network must stand.
+        let d = Settings::DEFAULT;
+        let but = |name: &str, f: &dyn Fn(&mut [u8; RECORD_LEN]), expect: Settings| {
+            assert_eq!(with(f), Some(expect), "{name}");
+        };
+        for (name, f) in [
+            ("SSID length past the field", (&|r: &mut [u8; RECORD_LEN]| r[RECORD_SSID_LEN] = SSID_MAX as u8 + 1) as &dyn Fn(&mut [u8; RECORD_LEN])),
+            ("password of 7", &|r| r[RECORD_PASSWORD_LEN] = PASSWORD_MIN as u8 - 1),
+            ("password of 65", &|r| r[RECORD_PASSWORD_LEN] = PASSWORD_MAX as u8 + 1),
+            ("SSID not UTF-8", &|r| r[RECORD_SSID] = 0xFF),
+        ] {
+            but(name, f, Settings { wifi: Credentials::NONE, ..s });
+        }
+        for (name, f) in [
+            ("token of 7", (&|r: &mut [u8; RECORD_LEN]| r[RECORD_TOKEN_LEN] = TOKEN_MIN as u8 - 1) as &dyn Fn(&mut [u8; RECORD_LEN])),
+            ("token of 33", &|r| r[RECORD_TOKEN_LEN] = TOKEN_MAX as u8 + 1),
+            ("token with a space", &|r| r[RECORD_TOKEN] = b' '),
+        ] {
+            but(name, f, Settings { token: Secret(Text::EMPTY), ..s });
+        }
+        for (name, f) in [
+            ("host length past the field", (&|r: &mut [u8; RECORD_LEN]| r[RECORD_BROKER_HOST_LEN] = BROKER_HOST_MAX as u8 + 1) as &dyn Fn(&mut [u8; RECORD_LEN])),
+            ("host with a space", &|r| r[RECORD_BROKER_HOST] = b' '),
+            ("port 0", &|r| r[RECORD_BROKER_PORT..RECORD_BROKER_PORT + 2].copy_from_slice(&[0, 0])),
+            ("user with a space", &|r| r[RECORD_BROKER_USER] = b' '),
+            ("password with a control character", &|r| r[RECORD_BROKER_PASSWORD] = 0x7f),
+        ] {
+            but(name, f, Settings { mqtt: Broker::NONE, ..s });
+        }
+        let unarmed = Settings { alarm_hour: d.alarm_hour, alarm_minute: d.alarm_minute, alarm_armed: false, ..s };
+        but("alarm hour 24", &|r| r[3] = 24, unarmed);
+        but("alarm minute 60", &|r| r[4] = 60, unarmed);
+        but("brightness past the whole list", &|r| r[2] = BRIGHTNESS_CHOICES.len() as u8, Settings { brightness: BRIGHTNESS_STEPS.len() - 1, ..s });
+        but("no alarm day", &|r| r[RECORD_ALARM_DAYS] = 0, Settings { alarm_days: d.alarm_days, ..s });
+        but("an eighth day", &|r| r[RECORD_ALARM_DAYS] |= 0x80, s);
+        but("a rule that does not parse", &|r| r[RECORD_TZ] = b',', Settings { tz: d.tz, ..s });
+        but("a rule past its field", &|r| r[RECORD_TZ_LEN] = TZ_MAX as u8 + 1, Settings { tz: d.tz, ..s });
+        but("a hostname with a space", &|r| r[RECORD_HOSTNAME] = b' ', Settings { hostname: d.hostname, ..s });
+        but("a hostname past its field", &|r| r[RECORD_HOSTNAME_LEN] = HOSTNAME_MAX as u8 + 1, Settings { hostname: d.hostname, ..s });
+        but("another face for the temperature", &|r| r[RECORD_TEMP_SHOW] = 9, Settings { temp_show: d.temp_show, ..s });
+        but("a transmit power that is no level", &|r| r[RECORD_TX_POWER] = 69, Settings { tx_power_qdbm: d.tx_power_qdbm, ..s });
+        but(
+            "an offset past the limit",
+            &|r| r[RECORD_TEMP_OFFSET..RECORD_TEMP_OFFSET + 2].copy_from_slice(&(TEMP_OFFSET_LIMIT_DC + 1).to_le_bytes()),
+            Settings { temp_offset_dc: TEMP_OFFSET_LIMIT_DC, ..s },
+        );
+        // Everything wrong at once is still a record, and a short one is not.
+        let wreck = with(&|r| r[1..].fill(0xFF)).expect("a record of 0xFF");
+        assert!(wreck.is_valid() && wreck.wifi.is_none());
+        assert_eq!(Settings::from_record(&r[..RECORD_LEN - 1]), None, "a record cut short");
+        assert_eq!(Settings::from_record(&[]), None);
         // Bytes 7 and 8 are informational in a version 11 record, but a
         // version 10 record is read from them and checked.
         let old = |m: i16| {
@@ -1083,7 +1145,7 @@ mod tests {
             Settings::from_record(&r)
         };
         assert_eq!(old(-420).map(|s| s.tz), Some(tz::fixed(-420)), "a version 10 record's minutes");
-        assert!(old(TZ_LIMIT_MINUTES + 1).is_none(), "timezone past the limit");
+        assert_eq!(old(TZ_LIMIT_MINUTES + 1).map(|s| s.tz), Some(d.tz), "timezone past the limit");
         // A rule's standard offset may pass the old limit (POSIX allows
         // 24 hours): the record round-trips on this image, and the old
         // field is clamped so that an older image reads the record too.
@@ -1243,7 +1305,7 @@ mod tests {
         }
         let mut bad = ok.to_record();
         bad[RECORD_TEMP_SHOW] = 3;
-        assert_eq!(Settings::from_record(&bad), None, "a bad temperature byte is a bad record");
+        assert_eq!(Settings::from_record(&bad), Some(Settings { temp_show: Settings::DEFAULT.temp_show, ..ok }), "a temperature byte of a later image is the default");
         // The transmit power: the driver's levels up to the ceiling.
         assert_eq!(TX_POWER_CHOICES.last().map(|c| c.1), Some(WIFI_MAX_TX_POWER_QDBM));
         for (name, qdbm) in TX_POWER_CHOICES {
@@ -1260,7 +1322,7 @@ mod tests {
         assert_eq!(tx_power_from_name("18"), None);
         let mut bad = ok.to_record();
         bad[RECORD_TX_POWER] = 72;
-        assert_eq!(Settings::from_record(&bad), None, "a power above the ceiling is a bad record");
+        assert_eq!(Settings::from_record(&bad).map(|s| s.tx_power_qdbm), Some(Settings::DEFAULT.tx_power_qdbm), "a power above the ceiling is the default");
         assert!(Settings { alarm_days: DAYS_WEEKEND, ..ok }.alarm_on(5));
         assert!(!Settings { alarm_days: DAYS_WEEKEND, ..ok }.alarm_on(4));
         assert_eq!(RECORD_LEN, ok.to_record().len());
