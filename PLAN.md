@@ -9335,7 +9335,7 @@ day and tested on the host; the local packs made again with it.
   project's has a SID tune, so nothing shipped changes.
 - Trantor packs to the same 67 559 bytes through `packrefs.py`.
 
-### PCM clips at half the flash: IMA ADPCM, `ADP1` — the A/B heard on white-clock 2026-11-16 ("not bad", "way better than PCM 8k"); the format built 2026-11-16 and heard by the user on a speaker the same day ("audible, but acceptable"); the buzzer through the clock's own decoder and the serial log's clip line not yet
+### PCM clips at half the flash: IMA ADPCM, `ADP1` — the A/B heard on white-clock 2026-11-16 ("not bad", "way better than PCM 8k"); the format built 2026-11-16 and heard by the user on a speaker the same day ("audible, but acceptable"); the serial log's clip line read on test-clock; the buzzer through the clock's own decoder not yet
 
 The user, 2026-11-16: would the references of `BPR3` and `SID2` (an
 LZ) do for PCM too?
@@ -9415,6 +9415,13 @@ LZ) do for PCM too?
   `packs/clips-local-speaker.bin` under the same name and at the same
   place: 351 026 bytes each for 572 126. Such a pack needs this
   firmware on the clock first.
+- On test-clock (the speaker), 2026-11-16, from the serial log: the
+  A/B pack's two clips, 866 chunks each with no underrun and no stray
+  position; filling the ring took 353 ms of 27.7 s for PCM and 524 ms
+  for ADPCM, so the decoder is 0.6 % of the processor. Then `770a519`
+  over the air and `packs/clips-local-speaker.bin`: checked at boot in
+  242 ms, its Futurama the same 524 ms and no underrun. The buzzer
+  through the decoder is still not heard.
 
 ### Backlog, board revision: a line output on the adapter for an amplifier — an idea of 2026-11-15, nothing built or measured; to be tried on the bench board when the amplifiers arrive
 
