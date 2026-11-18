@@ -9653,3 +9653,62 @@ build, on GPIO5.
 
 **Verified.** Trantor heard on a clock 2026-11-17 (the user): it plays
 at its pitch, with no stutter.
+
+## GPIO5's drive strength: tried as a setting and dropped — 2026-11-17
+
+The user's ask: a build with the buzzer pad's drive strength at 40 mA
+(`fun_drv` 3) in place of the reset default, 20 mA (2), and then the
+same as a setting, `buzzer_drive` (5, 10, 20 or 40 mA), on `/settings`
+and in `/api`, in a record of version 13. It was built, put on
+white-clock over the air and saved there at 40.
+
+**The result, the user's on the scope and by ear:** no difference on
+the scope, and it changes nothing for the buzzer; for the speaker the
+default 20 mA is good. The change was dropped whole, the record back
+at version 12, and nothing of it is in the tree.
+
+Why nothing was to be seen, reasoned and not measured: the pad is
+open-drain, so the strength is the low side's alone, and all it sinks
+is Q1's base current through R5, under 1 mA at 5.1 kΩ and half that at
+a stock board's 10 kΩ, well inside the weakest level. The strength is
+the pad's on-resistance, tens of ohms at most, in series with
+kilohms; the rising edge is the base's and R5's, not the pad's. It
+would count only if the pin had to sink several milliamps.
+
+What a second try would need to know:
+
+- esp-hal 1.2.2's LEDC `Channel::configure` applies a default
+  `OutputConfig` with the drive mode, which puts the pad back to
+  20 mA for every tone; the trial wrote `fun_drv` again after it
+  through `IO_MUX::regs().gpio(5)`. The clip's path keeps what
+  `Output::new` was given: a frozen signal's `apply_output_config`
+  does nothing.
+- Whether the strength reached the pad was never read back from the
+  register; the trial's code was right by reading only.
+- white-clock was left on the trial's build
+  (`v0.4-90-gdb2c040-dirty`, `ota_1`) with a version 13 record, which
+  the next image reads by its prefix.
+
+## A 16 kHz clip pack: tried and dropped — 2026-11-17
+
+The user's idea: the default pack's modules are at 31 250 samples a
+second, which the converter's 256 bits a sample make 8 Mbit/s at the
+buzzer's transistor; the same tunes at 16 kHz halve that (4.096 Mbit/s
+asked for, 160 MHz / 39 = 4.103 made) with the stock firmware, and
+might keep Q1 cooler. A script, `scripts/clips-16k.sh`, converted the
+two XM modules and Synchronization again from `mods/` with
+`--rate 16000`, the other arguments as `clips/README.md` has them,
+and packed them with Trantor as it is (a beeper clip is not the
+converter's) under the default pack's names; the CI and the release
+were to make it as a second pack, `onebitdawn-clips-16k-<tag>.bin`.
+
+**The result, the user's:** on the buzzer it makes no difference, the
+transistor gets about as hot as at the full rate; on the speaker it
+sounds bad. The change was dropped whole: the script, the workflows'
+steps and the lines in the manual, the changelog and
+`agents/clips.md`. Nothing of it is in the tree.
+
+Why the heat is the same, reasoned and not measured: Q1 does not
+switch at either bit rate (`agents/hardware.md`, the buzzer's parts),
+so it sits in its linear region with the buzzer's mean current through
+it for the length of the clip, whatever the PDM clock.
