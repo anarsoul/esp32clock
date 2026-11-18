@@ -570,6 +570,58 @@ send buffer. `.stack` went from 41448 to 40936 bytes. 183 host tests.
 Run on test-clock: the session connected and the state published
 after the update. The worst case itself is the host test's.
 
+## A 24 h soak of `v0.4-93-g43d96d9` on the bare bench board — started 2026-11-18
+
+The watchdog's owed soak, and the first long run of the image with the
+watchdog, the clip pack and the 16-bit transmitter fix. The board is
+`another-bench` (10.1.1.65, on USB at `/dev/ttyACM0`): no panel, no
+speaker, no sensors (the NTC reads -19 °C, the LDR dark; neither is a
+finding), so nothing is seen or heard and the session may set it as it
+likes (the user, 2026-11-17). Image as the user flashed it over USB,
+`ota_0`, the home network and broker from `.env`.
+
+Before the clock starts: the default pack by `scripts/clips.sh` (one
+reset), then `espflash monitor` attached, whose reset is the start of
+the run. Everything is host side and lives in `target/soak/`:
+`serial.log` (the monitor), `watch.log` (the driver), `driver.sh`,
+`summary.sh`.
+
+Started 2026-11-17 23:57:00 MST (the boot in `serial.log`, reset
+reason `CoreUsbUart`), to end 2026-11-18 23:57. `espflash monitor`
+hung at "Connecting…" and left the chip in the ROM's download mode,
+off the network, for five minutes, the watchdog not bringing it back
+(it is not running there: the attach's reset is a whole-chip one); an
+`espflash reset` booted it and the log is a plain `cat` of the port.
+First heartbeat: heap free 54080, longest feed gap 1266 ms.
+
+Load, heavier than a clock's day on purpose:
+
+| every | what |
+| --- | --- |
+| 30 s | a 498-byte ping and `GET /api`; uptime, heals, watchdog, mqtt, rssi kept |
+| 5 min | the five pages fetched, status and size kept |
+| 10 min | `POST /play` of the next of the pack's four clips and two note melodies, `/stop` 30 s later |
+| 1 h | a colour set over `/api`: a save, so a flash write |
+| 6 h, first at 20 min | the alarm set two minutes ahead and armed, the melody the next clip; it rings its five minutes out, previews posted meanwhile |
+
+Passes if, over 24 h: one boot in the serial log and the uptime never
+goes back; `heals` and `watchdog` stay 0; no `WARN`, `ERROR` or panic;
+heap free flat but for one-minute dips; the scan's descriptor index
+moves between heartbeats; every `clip:` line without underruns or
+stray positions and at the clip's own length (the half-rate fault
+would double it); the longest feed gap well under `DEADLINE` after
+clips, saves and rings; one MQTT session; the page's time equal to the
+host's. A watcher ends the wait early on a reset, a heal, a watchdog
+count, a warning or five `/api` failures running.
+
+After the 24 h, since both reset the clock: an OTA of the same image
+and the pack again, the feed gap read in the last heartbeat before
+each, which pays the watchdog section's "after an upload and a clip
+pack upload".
+
+Not covered: a panel (the ring runs into no drivers), a speaker, the
+buttons, the access point, the sensors.
+
 ## Checks still owed
 
 Built, and by its heading in `HISTORY.md` not yet seen, heard or run
