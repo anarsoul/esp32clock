@@ -224,6 +224,10 @@ Each with its measurements in `agents/hardware.md`.
 - **The GDMA's `out_dscr` is not the descriptor being read**; it names
   the one two further on. Pace a DMA ring by time and use the register
   as a check at most.
+- **I2S0 runs at one sample width**, 16 bits, for the converter and
+  for a stream of bytes alike. After a run at 8 bits the transmitter
+  now and then takes one byte a sample for every 16-bit clip that
+  follows, at half the rate, whatever its registers say.
 - **Display wires (GPIO6–9)** are SPI2 SIO0–3. The SPI builder resets
   the pull of a bare pin but leaves a `Flex` alone, so `main.rs` sets
   the idle pull-downs on `Flex` pins. No PAC access; `ring.rs`,

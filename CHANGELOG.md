@@ -70,6 +70,9 @@ from `http://<ip>/update`; its settings survive the update.
   entered again.
 - `/api` refuses a `password` with no network to use it on, which an
   unprovisioned access point used to save.
+- A clip no longer plays an octave down and stuttering, which every
+  sampled clip, module and chip tune did now and then after Trantor
+  (the beeper clip) had been played, until Trantor was played again.
 - The System page's line after an upload or a reboot has its full
   stop.
 

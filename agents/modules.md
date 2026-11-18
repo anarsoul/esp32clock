@@ -309,8 +309,11 @@ command, looped or once, and stops within a note.
   256 bits each on the line by default. `tx_pcm_bypass` is set again
   after esp-hal 1.2.2 clears it, or the A-law compander makes white
   noise of the samples. For a beeper clip and the software modulators
-  it is in TDM mode: two 8-bit channels, no clock pins, so the data
-  line is the ring's bytes MSB first at the bit rate.
+  it is in TDM mode: two 16-bit channels, no clock pins, so the data
+  line is the ring's bits at the bit rate, each pair of the stream's
+  bytes swapped in the ring since a word goes out high byte first.
+  Sixteen bits in both modes on purpose (`agents/hardware.md`, "I2S0's
+  sample width").
 - `play` writes the clip's bits (`clip::Stream`) from flash into the
   ring ahead of the DMA. It connects GPIO5 as a frozen open-drain
   signal through the GPIO matrix's inverter once the stream runs, and

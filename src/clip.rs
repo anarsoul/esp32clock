@@ -21,9 +21,20 @@
 //!
 //! A beeper clip is bits already, and for it, as for every clip in a
 //! build with a software modulator (`CLIP_MODULATOR=sd` or `pwm`), the
-//! transmitter runs in TDM mode with two 8-bit channels and no
-//! clock pins, so its data line carries the ring's bytes MSB first at
-//! the clip's bit rate (`Stream::bit_rate`). The ring is `SLOTS` descriptors of `CHUNK` bytes,
+//! transmitter runs in TDM mode with two 16-bit channels and no
+//! clock pins, so its data line carries the ring's bits at the clip's
+//! bit rate (`Stream::bit_rate`). Sixteen bits and not eight, though
+//! the stream is bytes: the converter's samples are 16 bits wide, and
+//! a transmitter that has run at 8 bits now and then goes on taking
+//! one byte a sample when it is next set up for 16, whatever its
+//! registers say, through the peripheral's reset and every start
+//! after, until it has run at 8 bits again: a converter clip then
+//! plays at half its rate with the pacer filling the ring at the full
+//! one (about one start in sixteen after a beeper clip on the bench,
+//! 2026-11-17; `HISTORY.md`). With one width for both the transmitter
+//! is never in the other. A 16-bit word goes out high byte first and
+//! is read from memory low byte first, so `play` swaps each pair of
+//! the stream's bytes in the ring. The ring is `SLOTS` descriptors of `CHUNK` bytes,
 //! the last pointing at the first, and the DMA goes round it until it
 //! is stopped. The C3's GDMA reads internal RAM only, so the clip stays
 //! in flash and `core::clip::Stream` writes its bits into the slots a few
@@ -75,8 +86,9 @@ use crate::melody;
 /// The ring's bytes. In every build, with clips built in or not: the
 /// clips may be a pack's (`pack.rs`).
 const RING_BYTES: usize = SLOTS * CHUNK;
-/// Bits in one TDM frame: two channels of eight.
-const FRAME_BITS: u32 = 16;
+/// Bits in one TDM frame: two channels of sixteen.
+const FRAME_BITS: u32 = 32;
+const _: () = assert!(CHUNK.is_multiple_of(2));
 /// The converter's up-sampling numerator, the IDF's; the denominator
 /// under it gives the ratio: 480, the largest the driver takes, for
 /// two, 240 for four, 160 for six.
@@ -274,7 +286,15 @@ impl Sampler {
         let mut busy_us = 0u64;
         let mut write = |chunk: u32, last: &mut Option<u32>| {
             let from = Instant::now();
-            player.fill(slot(chunk));
+            let slot = slot(chunk);
+            player.fill(slot);
+            // A stream of bytes goes out as 16-bit words, the high byte
+            // of each first: see the module's head.
+            if converter.is_none() {
+                for pair in slot.as_chunks_mut::<2>().0 {
+                    pair.swap(0, 1);
+                }
+            }
             busy_us += from.elapsed().as_micros();
             if last.is_none() && player.done() {
                 *last = Some(chunk);
@@ -292,7 +312,7 @@ impl Sampler {
                 let config = TdmConfig::new_tdm_msb()
                     .with_sample_rate(Rate::from_hz(bit_rate / FRAME_BITS))
                     .with_channels(Channels::STEREO)
-                    .with_data_format(DataFormat::Data8Channel8);
+                    .with_data_format(DataFormat::Data16Channel16);
                 I2s::new(self.hw.i2s.reborrow(), self.hw.dma.reborrow(), config)
             }
             // The chip's PCM-to-PDM converter: the ring is then 16-bit

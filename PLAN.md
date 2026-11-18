@@ -286,6 +286,69 @@ between them, were all answered. test-clock is on this build in
 Not seen: the forms from a phone, whose head is what the 1536 bytes
 are tight for.
 
+## A clip at half its pitch: the transmitter's sample width — fixed 2026-11-17, Trantor to be heard
+
+The user's report: now and then a clip plays at half its pitch and
+stutters, and starting another clip does not clear it.
+
+**Reproduced** on test-clock with previews from a script, cut at
+random times, and the clip's log line: from one moment every
+converter clip counted stray positions by the dozen (the DMA not
+where the clock puts it), sixteen clips in a row, the user hearing it
+on the bench; then none again. Both changes came straight after a
+preview of Trantor, the one beeper clip, which runs the transmitter in
+TDM mode where the others use the converter.
+
+**Measured**, with a temporary log of the I2S registers and of the
+chunks the DMA really read, over rounds of Trantor for a random time
+and then a converter clip (the output on GPIO20 for the user's
+ears):
+
+- a slow clip is read at exactly half the rate (21 chunks where the
+  clock counts 42), with every register the same as in a good one,
+  and the peripheral is reset between clips (the receiver's registers
+  are back at their defaults);
+- it follows about one Trantor in sixteen (59 of some 1000 rounds),
+  whatever slot the DMA was at and however full its FIFO when Trantor
+  was stopped, and however long Trantor ran; it then stays for every
+  converter clip until the next Trantor;
+- the 16 kHz clips (master-clock divider 3) never showed it in the
+  few rounds they had, the 31 250 Hz ones did at divider 2 and, in a
+  build at 128 bits a sample, at 5 just as often: not the divider;
+- esp-hal starts the transmitter with no `tx_update` after its reset,
+  where the IDF has "have to update registers before start"; one
+  added after the start changed nothing (8 of 130). Nor did a reset of
+  the transmitter and its FIFO at the stop with the clock still on
+  (5 of 130), stopping the DMA first and waiting for `tx_idle` (8 of
+  200), or writing another sample width and the right one back, each
+  latched (11 of 200);
+- a converter clip with one of the TDM path's values forced into it,
+  thirteen of them by turns: only `tx_bits_mod` at 7, the beeper
+  clip's 8-bit samples, gives the half rate, and gives it every time.
+
+So the transmitter, once it has run at 8 bits, sometimes keeps taking
+one byte a sample when it is set up for 16, in some state no register
+shows and no reset reaches. A 16-bit sample's two bytes are then two
+samples, at half the rate.
+
+**The fix** is to never run it at 8 bits: the beeper clip (and the
+software modulators' streams) go out as two 16-bit TDM channels, 32
+bits a frame at the same bit rate, and `play` swaps each pair of the
+stream's bytes in the ring, since a word is read low byte first and
+sent high byte first. The swap is by hand and not the driver's
+big-endian setting so that the order does not rest on a register
+nobody here has seen on a scope. `agents/hardware.md` has the fact,
+the guide a rule.
+
+On test-clock: 0 slow in 249 rounds of a first build (with the
+big-endian setting), and 0 clips with a stray position in 440 of the
+change as it is, Trantor's own pacing included.
+
+Not checked: that Trantor sounds as it did. The bytes' order is by
+reasoning (the converter's samples are read the same way); a wrong
+order would be heard as a rough edge on every note. test-clock has the
+build, on GPIO5.
+
 ## Checks still owed
 
 Built, and by its heading in `HISTORY.md` not yet seen, heard or run

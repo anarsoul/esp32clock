@@ -75,6 +75,38 @@ clock, 2026-11-12).
 - `ring::position`, the scan heartbeat's figure, is off by the same
   two.
 
+## I2S0's sample width
+
+The transmitter is only ever set up for 16-bit samples, the beeper
+clip's stream of bytes included (two 16-bit TDM channels, the bytes
+swapped in pairs).
+
+- A transmitter that has run with 8-bit samples (`tx_bits_mod` 7)
+  sometimes goes on taking one byte a sample when it is next set up
+  for 16: the registers read as they should, every one, and the DMA
+  is read at exactly half the rate. A converter clip then plays an
+  octave down while the pacer fills the ring by the clock, so it
+  stutters as well.
+- It was about one start in sixteen after a beeper clip (59 of some
+  1000 on test-clock, 2026-11-17), and it stays through the
+  peripheral's reset and every later start, until the transmitter has
+  run at 8 bits again, which clears it fifteen times in sixteen.
+- Not cured by: another master-clock divider (5 as 2), `tx_update`
+  after the start as the IDF has it, a `tx_reset` and `tx_fifo_reset`
+  with the clock still on at the stop, letting the transmitter run dry
+  to `tx_idle` before the stop, or writing another width and the right
+  one back, each latched.
+- Forcing `tx_bits_mod` to 7 in a converter clip gives the same half
+  rate every time; none of the TDM path's other values does.
+- With 16 bits for the beeper clip too: 0 slow starts in 249 rounds,
+  and in 440 clips of the change as committed.
+- The check is the clip's log line: a slow clip counts stray
+  positions by the dozen, a good one none.
+- Not in Espressif's errata for the C3 (three entries on 2026-11-17:
+  CPU-863, ADC-183, ADC-270, none about I2S), and no report of it was
+  found in the esp-idf or esp-hal issues. ADC-270 is the same kind of
+  thing in another peripheral: a counter the reset does not clear.
+
 ## Display wires (GPIO6–9)
 
 They are SPI2 SIO0–3.
