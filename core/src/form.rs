@@ -1103,7 +1103,7 @@ x.onerror=function(){say('Request failed: connection lost.',1);dis(0)};return x}
 function poll(n){fetch('/api',{cache:'no-store'}).then(function(x){return x.json()})\
 .then(function(j){say('Back up: firmware '+j.version+' in '+j.slot+', clips: '+j.clips+'.');dis(0)})\
 .catch(function(){if(n>0)setTimeout(function(){poll(n-1)},2000);else{say('The clock has not come back; check it.',1);dis(0)}})}\
-function back(m){say(m+' Waiting for the clock to come back.');setTimeout(function(){poll(20)},5000)}\
+function back(m){say(m+'. Waiting for the clock to come back.');setTimeout(function(){poll(20)},5000)}\
 function up(u){$('b').onclick=function(){if(!f.files[0]){at(this);say('Choose a file.',1);return}\
 ask(this,function(pin){var x=go(u,pin,back);\
 x.upload.onprogress=function(e){if(e.lengthComputable)p.value=e.loaded/e.total};\
@@ -1333,10 +1333,16 @@ pub fn write_provision_page(
     // shown by the script that makes it work. Rescan by script keeps
     // what was typed: it posts `/scan`, whose answer is the redirect
     // to this form, and takes only the list out of that, with the
-    // pick kept if it is still listed.
+    // pick kept if it is still listed. A refused form comes back by a
+    // redirect, as a new page: what was in it, the password apart, is
+    // kept in the tab's session storage at the submit and put back
+    // when the page says it was refused.
     out.write_str(
         "<script>var $=function(i){return document.getElementById(i)},n=$('n'),o=$('o'),i=$('i'),k=$('k'),v=$('v');\
-function f(){o.hidden=i.disabled=n.value!=''}n.onchange=f;f();\
+function f(){o.hidden=i.disabled=n.value!=''}n.onchange=f;\
+try{var F=document.forms[0],S=sessionStorage,K=['ssid_pick','ssid','tz','hostname','tx_power'];\
+if(/[?&]error=/.test(location.search)){for(var x of K){var y=S.getItem(x);if(y!=null)F[x].value=y}if(n.selectedIndex<0)n.value=''}\
+F.onsubmit=function(){for(var x of K)S.setItem(x,F[x].value)}}catch(e){}f();\
 $('l').hidden=false;v.onchange=function(){k.type=v.checked?'text':'password'};\
 $('r').onclick=function(e){e.preventDefault();var b=this,p=n.value;b.disabled=true;b.textContent='Scanning…';\
 fetch('/scan',{method:'POST'}).then(function(r){return r.text()}).then(function(h){\
@@ -2442,6 +2448,18 @@ mod tests {
         // The stored network was past the budget: it is typed in, and Other is selected.
         assert!(out.contains("<option value=\"\" selected>Other"));
         assert!(out.contains(&format!("name=ssid id=i maxlength={SSID_MAX} value=\"{}\"", "&amp;".repeat(SSID_MAX))));
+    }
+
+    /// A refused setup form is filled in again from the tab's session
+    /// storage: every field of the form is kept there but the password.
+    #[test]
+    fn setup_page_keeps_every_field_but_the_password() {
+        let mut page = String::new();
+        write_provision_page(&mut page, &Settings::DEFAULT, &status(false), &[], Note::None).unwrap();
+        let list = &page[page.find("K=[").unwrap() + 3..];
+        let kept: Vec<&str> = list[..list.find(']').unwrap()].split(',').map(|k| k.trim_matches('\'')).collect();
+        let fields: Vec<&str> = field_names(&page).into_iter().filter(|n| *n != "password").collect();
+        assert_eq!(kept, fields);
     }
 
     /// The setup page with the twelve networks the scan keeps, every

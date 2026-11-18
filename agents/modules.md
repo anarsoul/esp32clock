@@ -149,7 +149,12 @@ its own task, with per-listener state and counters for the heartbeat.
   `/settings`, `/ha`, `/api`, `/play`, `/token`, `/ota`) is answered
   `411`, and any `Transfer-Encoding` `400`, since a bodiless post is
   not an empty form. The command posts (`/reload`, `/ap`, `/pin`,
-  `/scan`, `/stop`) take a bare `curl -X POST`.
+  `/scan`, `/stop`) take a bare `curl -X POST`. A head with no end
+  within `REQUEST_BUF` is a `431`, a form's body over `BODY_MAX` or
+  the buffer a `413`, a head that does not parse a `400`; the first
+  two after what the client is still sending has been read and thrown
+  away (`discard_until_quiet`, `discard`), within `HEAD_TIMEOUT`, past
+  which the connection is closed with no answer.
 - Forms: `GET`/`POST` on `/`, `/settings` and `/ha` on the station
   (`/` is the setup form on the access point) and on `/api`; `POST
   /play`, `POST /stop`. A saved form redirects to its own page with

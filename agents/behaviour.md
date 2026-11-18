@@ -291,7 +291,7 @@ once.
   setup form in its sign-in sheet by itself.
 - `GET /` is the setup form: network, password, timezone, hostname,
   the station's transmit power.
-- `/system`, `/ota`, `/api` and `/token` work there too. `/settings`
+- `/system`, `/clips`, `/ota`, `/api` and `/token` work there too. `/settings`
   and `/ha` do not: the captive redirect takes them, and the system
   page there links to the setup form and leaves out its access-point
   button.
@@ -323,7 +323,12 @@ The form's rules:
   (`form::settle_password`): an empty password with the stored network
   keeps the stored password unless the scan lists that network as
   open, and an empty password for another network the scan lists as
-  secured is refused with the notice. `/api` takes what it is given.
+  secured is refused with the notice. `/api` takes what it is given,
+  but a request that would leave a password with no network is a
+  `400` (`Credentials::password_alone`).
+- A refused form comes back filled in: the page's script keeps every
+  field but the password in the tab's session storage at the submit
+  and puts them back when the page carries `?error=`.
 - A form that changes nothing resets at once (`Then::Join`). One that
   changes anything is committed, the persist task saves it and then
   resets. Every save on the access point resets into the station once

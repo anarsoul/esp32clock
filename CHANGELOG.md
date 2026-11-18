@@ -59,6 +59,20 @@ from `http://<ip>/update`; its settings survive the update.
   builds clips into the firmware, for such a clock; it is empty by
   default now.
 
+### Fixed
+
+- A request too long for the clock is told so, where the connection
+  was closed with no answer: `431` for a head over 1536 bytes, `413`
+  for a form's body over the limit, `400` for a head that does not
+  parse.
+- The setup form on the access point comes back filled in after it
+  is refused (the password apart), where every field had to be
+  entered again.
+- `/api` refuses a `password` with no network to use it on, which an
+  unprovisioned access point used to save.
+- The System page's line after an upload or a reboot has its full
+  stop.
+
 ### Added
 
 - A sampled clip can be IMA ADPCM, four bits a sample: half the flash

@@ -25,9 +25,11 @@ The user's, and what the readiness check of the same day left open.
   description of it (the user's; a photograph, so the user's to take).
 - [ ] `CHANGELOG.md`: `[Unreleased]` made the version's section, the
   compare links under it.
-- [ ] An install of an image with no token from the web installer or
+- [x] An install of an image with no token from the web installer or
   the CI's artifact: the access point's setup, then a token set with
-  the PIN.
+  the PIN. Done on test-clock 2026-11-17 with a local build of the
+  CI's configuration written by espflash ("An install from nothing",
+  below); the web installer itself is the last item's.
 - [ ] The default pack heard on a stock buzzer circuit (no diode, R5
   at 10 kΩ), which is what a builder has; the README's wording on the
   mod by what is heard.
@@ -145,6 +147,141 @@ on a breadboard with the firmware as it is, the level at the
 amplifier's input, the hiss with a silent clip and with Wi-Fi busy;
 then the setting and the new pin, and the two side by side.
 
+## An install from nothing on the bench, access point included — run 2026-11-17
+
+The release list's install, and the access point's checks the session
+could not make while the host's only Wi-Fi was its LAN: a USB dongle
+(`wlp0s20f0u1`) joins the clock's network now, with a NetworkManager
+profile that takes no default route and no DNS from it, so the host
+stays on the LAN. No code changed. The image was `3eccec4` built as
+the CI builds it (no network, no token, `TZ_RULE=<-07>7`), the merged
+image, the OTA image and the default pack made with the release
+workflow's commands; test-clock's flash was erased whole
+(`espflash erase-flash`), the merged image written at 0 and the pack
+at 0x2E0000. The pages were driven in headless Chromium, the PINs
+read from the serial log.
+
+What was seen, all as designed unless it says otherwise:
+
+- **First boot.** `clips: pack of 4 clips`, the access point
+  `clock-f044` on channel 1, the first scan in the log. The dongle
+  joined in 2 s and had 192.168.4.2 from `dhcpd`, with the router and
+  the DNS server 192.168.4.1.
+- **Captive.** The DNS answers any name's A query with 192.168.4.1
+  and an AAAA with no records; `/generate_204`,
+  `/hotspot-detect.html`, `/settings`, `/ha` and an unknown path are
+  a 302 to `http://192.168.4.1/`, a foreign `Host` too; `/`,
+  `/system`, `/clips`, `/tz.js` and the favicon answer.
+  `scripts/verify-csrf.sh 192.168.4.1` passed whole.
+- **The setup form.** A listed network hides and disables the typed
+  name; Show the password, the browser-zone button (`PDT7`,
+  America/Vancouver) and Rescan work, Rescan keeping the pick and the
+  typed password; two `POST /scan` at once were each answered after
+  the one scan (2.4 s). A typed password under eight characters is
+  stopped by the browser. Refused by the clock with nothing saved: a
+  secured network with no password, a short password, a bad hostname,
+  a bad timezone, each with its notice naming the field.
+- **A wrong password.** Saved for `esptest`: the clock reset into the
+  station, logged `wrong password?` at each of ten attempts 14.6 s
+  apart, self-healed after 131 s and began again, and never became an
+  access point. It was brought back by erasing `nvs` over USB.
+- **The right one.** `vasilykh-wrt`, hostname `test-clock`, 11 dBm
+  and the browser's zone in one save: the saved page, the reset, the
+  address by DHCP 5.3 s after boot, the time synced.
+- **The PIN.** A wrong PIN on `/token` is a 403 and a 9 s lockout
+  that the next click reports; then the token set from the System
+  page with the PIN, the firmware uploaded from the page with a PIN
+  (907 KB in 17 s, "Back up … in ota_1" 7 s later, confirmed good at
+  its first boot), Reboot with a PIN. With the token:
+  `scripts/reload.sh`, `scripts/clips.sh`, a wrong Bearer refused.
+- **Back to the access point**, from the page with a PIN and by
+  `POST /ap` with the token: the setup form has the stored network
+  picked and the stored hostname, zone and power; the System page
+  there has no Access point button and says a token is set. Save
+  untouched resets into the station at once; the timezone alone with
+  an empty password saves, resets and joins with the stored password.
+
+Found (fixed the same day, in the section after this one):
+
+- A request head and body over `REQUEST_BUF` is an empty reply and no
+  log line: 1530 bytes were answered, 1590 were not. The open item
+  under "Nits", now measured on the air.
+- `POST /api password=…` on the unprovisioned access point saved (a
+  password set, no network) and did not reset: the open backlog item,
+  as it describes.
+- A refused setup form comes back as a fresh one: the picked network,
+  the hostname and the rest are gone, and on a new clock the pick is
+  "Other, typed below" again, so pressing Save a second time is "no
+  network was named".
+- The System page's line after an upload or a reboot reads
+  "…; rebooting Waiting for the clock to come back.", two messages
+  joined with no full stop (`back()` in the page's script).
+- `agents/behaviour.md` did not list `/clips` among the pages the
+  access point serves; it does now.
+
+Not done: the buttons (the 10 s hold, the IP display), the panel
+itself (`AP`, the PIN's digits, the blank station), a phone's sign-in
+sheet, and the web installer in a browser. test-clock was left as it
+was found (lime, alarm 01:00 disarmed, the broker, the local pack and
+`futurama`, the session's token), on this image in `ota_1`.
+
+## The install run's findings fixed — built 2026-11-17, run on test-clock
+
+The four things the run above found, no new setting and nothing in
+the record.
+
+- **A request too long is answered.** `read_request` gave
+  `NoRequest::Close` for a head with no end in `REQUEST_BUF`, a body
+  over `BODY_MAX` and a head that does not parse. Now a `431`, a
+  `413` and a `400`. An answer written with bytes unread is lost to
+  the reset, so the first two read what is coming and throw it away
+  first, the request buffer as scratch: the 413 the rest of the
+  body by its length (`discard`), the 431, which cannot know a
+  length, until the client has been quiet 100 ms or has sent eight
+  buffers (`discard_until_quiet`). All of it is inside the
+  listener's `HEAD_TIMEOUT`, so a body that takes longer than 2 s
+  is still a close.
+- **`/api` refuses a password with no network**, a `400`, when the
+  request is what made it so (`Credentials::password_alone`, under
+  test); a clock already in that state takes its other keys.
+- **A refused setup form comes back filled in.** The refusal is a
+  redirect, so the page is a new one. Its script keeps the pick, the
+  typed name, the timezone, the hostname and the power in
+  `sessionStorage` at the submit and puts them back when the query
+  has `error=`; never the password. A pick no longer in the list
+  falls back to "Other". A test ties the script's list to the
+  form's fields. The page is 4761 bytes of 8032 at its worst.
+- **The System page's line** has a full stop between the clock's
+  answer and "Waiting for the clock to come back."
+
+On test-clock, over the air, then with `nvs` erased for the access
+point's half (a build as the CI makes it):
+
+- on the station a 1.7 KB and a 5 KB cookie are a `431`, a 900-byte
+  body to `/api` a `413`, `HELLO` a `400`, each with its line in the
+  log, and the next request is served; on the access point the setup
+  form with a 1.7 KB cookie is a `431`. A 909 KB body to `/api` is
+  still an empty reply, the 2 s being over first;
+- `POST /api password=…` on the unprovisioned access point is the
+  `400` and `password_set` stays false; `color=red` after it is
+  taken;
+- in headless Chromium the form refused for a secured network with
+  no password came back with the pick, `PDT7`, `test-clock` and
+  11 dBm; a visit without `error=` shows the clock's own values; a
+  typed "Other" name came back typed; the password field is empty
+  each time; with the password typed it saved and joined;
+- the Reboot line reads "rebooting with the time carried over.
+  Waiting for the clock to come back."
+
+One thing not explained: on the access point one `curl` straight
+after three others was refused its connection (`Failed to connect`),
+once; 60 posts in a row on the station, with and without a `400`
+between them, were all answered. test-clock is on this build in
+`ota_1` (the CI's configuration), its settings as before.
+
+Not seen: the forms from a phone, whose head is what the 1536 bytes
+are tight for.
+
 ## Checks still owed
 
 Built, and by its heading in `HISTORY.md` not yet seen, heard or run
@@ -166,8 +303,8 @@ is made or is no longer wanted, and put the result in the section.
 - **The station picks its access point: the strongest of each scan** — built 2026-11-13, not on a clock yet.
 - **The page split in four: clock, settings, Home Assistant, system** — built 2026-11-14, to be tried on white-clock.
 - **The thermometer held while Q1 is hot** — measured on white-clock 2026-11-14, the hold built and run there 2026-11-15; a short preview and the serial log's lines not yet seen.
-- **The pages after a UX review: PIN at the click, a saved notice, the bad field named** — built 2026-11-15, run on test-clock in headless Chromium; the setup form the user's, 2026-11-15; a real upload from the page not tried.
-- **Synchronization in the default pack** — 2026-11-16, built and tested on the host; the pack not on a clock yet.
+- **The pages after a UX review: PIN at the click, a saved notice, the bad field named** — built 2026-11-15, run on test-clock in headless Chromium; the setup form the user's, 2026-11-15; the setup form and a real upload from the page run on test-clock 2026-11-17 ("An install from nothing").
+- **Synchronization in the default pack** — 2026-11-16, built and tested on the host; the pack written to test-clock and read at boot 2026-11-17, not heard.
 - **PCM clips at half the flash: IMA ADPCM, `ADP1`** — the A/B heard on white-clock 2026-11-16 ("not bad", "way better than PCM 8k"); the format built 2026-11-16 and heard by the user on a speaker the same day ("audible, but acceptable"); the serial log's clip line read on test-clock; the buzzer through the clock's own decoder not yet.
 - **The PT3 clips' limiter: the buzzer's as the speaker's, the speaker's to be made gentler** — 2026-11-16, the buzzer's clip converted and tested on the host, not heard on a buzzer; a knee for the PT3 limiter built, and `--knee 37 --drive 150` chosen by the user on test-clock's speaker.
 - **The project renamed: onebitdawn** — 2026-11-17, built and tested on the host; the pages and Home Assistant not yet seen on a clock.
@@ -275,7 +412,8 @@ Nits:
   start kept failing `heal::reset` and `ota::install` would spin for
   ever. Unreachable with esp-hal 1.2.2's constant error conditions;
   a `STOP` check before the retry keeps the invariant.
-- **Oversized or unparseable requests get a TCP reset, not a status.**
+- ~~**Oversized or unparseable requests get a TCP reset, not a status.**~~
+  Fixed 2026-11-17 ("The install run's findings fixed").
   `read_request` returns `None` for a head over `REQUEST_BUF`, a body
   over `BODY_MAX` or a bad request line, and the socket is closed with
   bytes pending. Answer 413/400 after a bounded drain, as `/ota` does.
@@ -352,7 +490,8 @@ Gaps:
   make this image discard the whole record. Fix: a bad string field
   falls back to its default (`Credentials::NONE`, empty token) and the
   rest is kept.
-- **`/api` on the access point saves a password with no network.**
+- ~~**`/api` on the access point saves a password with no network.**~~
+  Fixed 2026-11-17 ("The install run's findings fixed").
   Since 2026-10-30 the persist task resets off the access point only
   with a network stored, so this is a pointless save and no reset;
   the guard on `/api` is still missing. The
@@ -427,6 +566,8 @@ Nits:
   cookie another gadget at 192.168.4.1 may have set. Over the limit is
   the silent close of the open "oversized requests" item, on the one
   page whose user cannot see the log.
+  Since 2026-11-17 over the limit is a `431` the browser shows; the
+  room is what it was.
   Checked 2026-11-17: the form also posts the timezone, the hostname
   and the transmit power now, and a body was refused over `BODY_MAX`
   (512) whatever the head left. Measured by a test the same day

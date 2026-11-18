@@ -248,10 +248,15 @@ async fn read_request<'a>(socket: &mut TcpSocket<'_>, buf: &'a mut [u8; REQUEST_
     fn close<E>(_: E) -> NoRequest {
         NoRequest::Close
     }
+    const BAD: NoRequest = NoRequest::Refuse("400 Bad Request");
     let mut n = 0;
     let head_end = loop {
         if n == buf.len() {
-            return Err(NoRequest::Close);
+            // A head with no end in the buffer: how much more is coming
+            // is unknown, so what arrives is discarded until the client
+            // pauses, and then it is told.
+            discard_until_quiet(socket, buf).await;
+            return Err(NoRequest::Refuse("431 Request Header Fields Too Large"));
         }
         let got = socket.read(&mut buf[n..]).await.map_err(close)?;
         if got == 0 {
@@ -264,9 +269,9 @@ async fn read_request<'a>(socket: &mut TcpSocket<'_>, buf: &'a mut [u8; REQUEST_
     };
 
     let (upload, content_length) = {
-        let head = parse_head(core::str::from_utf8(&buf[..head_end]).map_err(close)?).ok_or(NoRequest::Close)?;
+        let head = parse_head(core::str::from_utf8(&buf[..head_end]).map_err(|_| BAD)?).ok_or(BAD)?;
         if head.transfer_encoding {
-            return Err(NoRequest::Refuse("400 Bad Request"));
+            return Err(BAD);
         }
         let content_length = match (head.method, head.content_length) {
             (_, Some(n)) => n,
@@ -278,7 +283,10 @@ async fn read_request<'a>(socket: &mut TcpSocket<'_>, buf: &'a mut [u8; REQUEST_
     };
     if !upload {
         if content_length > BODY_MAX || head_end + content_length > buf.len() {
-            return Err(NoRequest::Close);
+            // The rest of the body is read before the answer, or the
+            // close resets the connection and the client never sees it.
+            discard(socket, buf, (head_end + content_length).saturating_sub(n)).await;
+            return Err(NoRequest::Refuse("413 Content Too Large"));
         }
         while n < head_end + content_length {
             let got = socket.read(&mut buf[n..]).await.map_err(close)?;
@@ -305,6 +313,36 @@ async fn read_request<'a>(socket: &mut TcpSocket<'_>, buf: &'a mut [u8; REQUEST_
         origin: head.origin,
         body,
     })
+}
+
+/// Read and throw away `remaining` bytes of a refused request's body,
+/// the request buffer as scratch. Nothing over `DRAIN_MAX` is waited
+/// for, and the listener's `HEAD_TIMEOUT` is over the whole of it.
+async fn discard(socket: &mut TcpSocket<'_>, buf: &mut [u8; REQUEST_BUF], remaining: usize) {
+    if remaining > DRAIN_MAX {
+        return;
+    }
+    let mut left = remaining;
+    while left > 0 {
+        match socket.read(&mut buf[..left.min(REQUEST_BUF)]).await {
+            Ok(0) | Err(_) => break,
+            Ok(n) => left -= n,
+        }
+    }
+}
+
+/// Read and throw away what a client is still sending, until it has
+/// been quiet for `QUIET` or has sent `REQUEST_BUF` eight times over:
+/// for a head too long to find the end of.
+async fn discard_until_quiet(socket: &mut TcpSocket<'_>, buf: &mut [u8; REQUEST_BUF]) {
+    const QUIET: Duration = Duration::from_millis(100);
+    let mut left = 8 * REQUEST_BUF;
+    while left > 0 {
+        match with_timeout(QUIET, socket.read(&mut buf[..])).await {
+            Ok(Ok(n)) if n > 0 => left = left.saturating_sub(n),
+            _ => break,
+        }
+    }
 }
 
 /// The head of every response with a body of the clock's own making.
@@ -630,8 +668,18 @@ fn respond(out: &mut Response, req: &Request<'_>, body: &[u8]) -> Result<Then, c
             // network and broker keys need the token, except on the access
             // point, whose own password is the gate; the rest do not.
             let trusted = net::mode() == Mode::AccessPoint || auth::token(req.authorization).is_ok();
-            let mut trial = settings::get();
+            let current = settings::get();
+            let mut trial = current;
             match form::apply(&mut trial, body, if trusted { Allow::ALL } else { Allow::NONE }) {
+                // A password and no network to use it on: saved, it
+                // would be a record that joins nothing. Only a request
+                // that made it so is refused, so a clock already there
+                // still takes its other keys.
+                Ok(()) if trial.wifi != current.wifi && trial.wifi.password_alone() => {
+                    warn!("http: a password with no network refused");
+                    status_line(out, "400 Bad Request", "text/plain")?;
+                    out.write_str("a password needs a network: send ssid with it\n")?;
+                }
                 Ok(()) => {
                     settings::update(|s| *s = trial);
                     status_line(out, "200 OK", "application/json")?;

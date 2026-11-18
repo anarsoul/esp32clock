@@ -235,6 +235,12 @@ impl Credentials {
         self.ssid.is_empty()
     }
 
+    /// A password with no network to use it on, which `/api` refuses
+    /// to make.
+    pub fn password_alone(&self) -> bool {
+        self.ssid.is_empty() && !self.password.0.is_empty()
+    }
+
     /// The password is empty (open network) or WPA2 length; the SSID is
     /// any length the field holds, empty for none.
     pub fn is_valid(&self) -> bool {
@@ -932,6 +938,18 @@ mod tests {
             mqtt_cleared: false,
             tx_power_qdbm: 34,
         }
+    }
+
+    #[test]
+    fn a_password_alone_is_one_with_no_network() {
+        let with = |ssid: &str, password: &str| Credentials {
+            ssid: Text::new(ssid).unwrap(),
+            password: Secret(Text::new(password).unwrap()),
+        };
+        assert!(with("", "abcdefgh").password_alone());
+        assert!(!with("home", "abcdefgh").password_alone());
+        assert!(!with("home", "").password_alone());
+        assert!(!Credentials::NONE.password_alone());
     }
 
     #[test]
