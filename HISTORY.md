@@ -8920,6 +8920,10 @@ project" (the user). The module is signed `nq`, 27.06.2015.
 - `clips/README.md` credits n1k-o and says the permission is to this
   project. Hibernation and PPK stay in `pt3/`: nobody was asked.
 
+Heard, 2026-11-17 (the user), with the rest of the default pack: the
+buzzer variant on a modded buzzer and the speaker variant on a
+speaker, both good. A stock buzzer circuit was not tried.
+
 ### Wi-Fi transmit power as a setting — DONE, verified by the user on the bench board 2026-11-15
 
 The user's, 2026-11-15: the bench board's ceramic antenna is poor and
@@ -9309,6 +9313,10 @@ the limiter at its 16 ms release.
   `packs/speaker/futurama.adp` since the ADPCM work) has Hibernation,
   PPK and Synchronization made the same way.
 
+Heard, 2026-11-17 (the user): the default pack on a modded buzzer in
+its buzzer variant and on a speaker in its speaker variant, both
+good. A stock buzzer circuit was not tried.
+
 ### The project renamed: onebitdawn — 2026-11-17, built and tested on the host; the pages and Home Assistant not yet seen on a clock
 
 The user's: `esp32clock` "sounds too generic". The name is the 1-bit
@@ -9335,6 +9343,12 @@ keeps the old name wherever it is history.
 - The pages: heading `onebitdawn: <hostname>`, title `<hostname>:
   <page> - onebitdawn` (the hostname first, for a narrow tab), the
   setup form `onebitdawn setup`. 18 bytes a page more.
+
+Seen in Home Assistant, 2026-11-17 (the user): the device's info
+reads "HU-058 on ESP32-C3 by onebitdawn", with the firmware version
+under it. The pages on white-clock, the same day (the user): the
+heading "onebitdawn: white-clock", the tab "white-clock: System -
+onebitdawn". The rename is verified.
 
 ### A clip of a version no player reads is refused — 2026-11-17, built and tested on the host; no upload of such a pack tried on a clock
 

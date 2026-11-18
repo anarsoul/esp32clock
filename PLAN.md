@@ -37,6 +37,9 @@ The user's, and what the readiness check of the same day left open.
 - [ ] The default pack heard on a stock buzzer circuit (no diode, R5
   at 10 kΩ), which is what a builder has; the README's wording on the
   mod by what is heard.
+  Heard so far, 2026-11-17 (the user): the buzzer variant on a modded
+  buzzer and the speaker variant on a speaker, both good; the stock
+  circuit not tried.
 - [x] The installer's list no longer offers v0.1 to v0.4 (the old
   partition table, the `esp32clock` token): `docs/index.html` leaves
   them out by tag (`OLD`); their files stay on `gh-pages` and their
@@ -437,10 +440,7 @@ is made or is no longer wanted, and put the result in the section.
 - **The page split in four: clock, settings, Home Assistant, system** — built 2026-11-14, to be tried on white-clock.
 - **The thermometer held while Q1 is hot** — measured on white-clock 2026-11-14, the hold built and run there 2026-11-15; a short preview and the serial log's lines not yet seen.
 - **The pages after a UX review: PIN at the click, a saved notice, the bad field named** — built 2026-11-15, run on test-clock in headless Chromium; the setup form the user's, 2026-11-15; the setup form and a real upload from the page run on test-clock 2026-11-17 ("An install from nothing").
-- **Synchronization in the default pack** — 2026-11-16, built and tested on the host; the pack written to test-clock and read at boot 2026-11-17, not heard.
 - **PCM clips at half the flash: IMA ADPCM, `ADP1`** — the A/B heard on white-clock 2026-11-16 ("not bad", "way better than PCM 8k"); the format built 2026-11-16 and heard by the user on a speaker the same day ("audible, but acceptable"); the serial log's clip line read on test-clock; the buzzer through the clock's own decoder not yet.
-- **The PT3 clips' limiter: the buzzer's as the speaker's, the speaker's to be made gentler** — 2026-11-16, the buzzer's clip converted and tested on the host, not heard on a buzzer; a knee for the PT3 limiter built, and `--knee 37 --drive 150` chosen by the user on test-clock's speaker.
-- **The project renamed: onebitdawn** — 2026-11-17, built and tested on the host; the pages and Home Assistant not yet seen on a clock.
 - **A clip of a version no player reads is refused** — 2026-11-17, built and tested on the host; no upload of such a pack tried on a clock.
 - **Forward compatibility before the first public release** — 2026-11-17, built, tested on the host and on test-clock; not committed, not tagged.
 
