@@ -152,6 +152,20 @@ either way.
   the pin at about 3.5 V, and Q1 stays off. Fit it whenever you fit
   RBE.
 
+<p align="center">
+  <img src="pics/board_top.jpg" width="48%" align="top" alt="The component side of a board with the buzzer mod: RBE beside Q1, R5, and the BAT42 under the adapter">
+  <img src="pics/board_bottom.jpg" width="48%" align="top" alt="The solder side of the same board: the flyback diode across the buzzer's pins">
+</p>
+
+A board with the mod. On the component side RBE lies beside Q1, on
+the transistor's legs; R5 is in its place above the adapter; and the
+BAT42 hangs under the adapter between the module's GPIO5 and 3.3 V
+pins. On the solder side the 1N4148 is across the buzzer's two pins,
+in the corner by the buttons. The green on top of the buzzer is
+masking tape over its opening, with a small hole made by a needle,
+which makes a Helmholtz resonator of the buzzer's cavity: not one of
+the four changes, but the tunes come through louder.
+
 With the mod Q1 gets hot to the touch while a clip of sampled sound, a
 tracker module, a SID or a PT3 tune plays. Such a clip is a stream of
 pulses 125 to 250 ns long, and the transistor cannot switch that

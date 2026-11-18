@@ -21,8 +21,12 @@ The user's, and what the readiness check of the same day left open.
   `v0.4-67-gfb0e18f`). Three in the README under the feature list,
   all six in the manual beside what they show; the manual said four
   pages and has `/clips` in its list now.
-- [ ] A picture of the board with the buzzer mod, beside the README's
+- [x] A picture of the board with the buzzer mod, beside the README's
   description of it (the user's; a photograph, so the user's to take).
+  Two, taken by the user 2026-11-17, in `pics/`: the component side
+  (RBE beside Q1, R5, the BAT42 under the adapter) and the solder side
+  (the flyback diode across the buzzer), under the mod's four changes
+  in the README with a caption that says where each part is.
 - [ ] `CHANGELOG.md`: `[Unreleased]` made the version's section, the
   compare links under it.
 - [x] An install of an image with no token from the web installer or
