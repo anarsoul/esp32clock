@@ -192,6 +192,14 @@ them yet.
 
 ## Also
 
+- This stage is for a speaker, not for the board's buzzer. The 16 Ω
+  buzzer in the 8 Ω speaker's place is very quiet (the bench,
+  2026-11-17): the collector's signal is clean, but across the buzzer,
+  behind RS, every edge has a sharp peak, which a speaker does not
+  show. The likely reason, not measured: the buzzer's coil on its
+  iron core takes little current at audio frequencies from a stage
+  that sets the voltage, where the stock stage, with Q1 in its linear
+  region, sets the current. Keep the buzzer on the main README's mod.
 - The speaker draws 85 to 167 mA in pulses from the 5 V rail. Do the
   main README's C3 replacement (10 µF) and use a 1 A supply.
 - The clips in `clips/` are shaped for the buzzer and sound thin on

@@ -87,6 +87,24 @@ that day, on a clock's board:
   With RBE as well Q1 is off while the pin is released.
 - `speaker-mod/` keeps its own RBE and BAT42, with other values.
 
+The buzzer in the speaker's stage (330 Ω, 100 Ω, D1, the BAT42), the
+user's bench, 2026-11-17:
+
+- It is very quiet there, in the 8 Ω speaker's place.
+- With RS left in, the collector's signal is clean and the buzzer's
+  own has sharp peaks on every rising and falling edge. A speaker
+  shows none.
+- So the buzzer stays on the diode and R5 at 5.1 kΩ, with Q1 in its
+  linear region and warm; the switching stage is the speaker's.
+- Why, reasoned and not measured: with 5.1 kΩ Q1 is a class A stage,
+  a current source of its gain times the mean base current (±85 to
+  ±120 mA of swing for a gain of 200 to 290), which pushes that
+  current through the coil whatever its impedance; a switch sets the
+  voltage, and the coil on its iron core then takes little current at
+  2 to 4 kHz. The buzzer's inductance is not known. The audio current
+  could be read across RS at 1 ms a division with the bandwidth
+  limited, in both stages.
+
 ## The GDMA's `out_dscr`
 
 It is not the descriptor being read. On the C3 it names the one two
