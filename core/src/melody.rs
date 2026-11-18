@@ -504,7 +504,23 @@ pub fn pick(index: usize, random: u32, avoid: Option<usize>) -> usize {
     if index != RANDOM {
         return index;
     }
-    let tunes = count() - 1;
+    draw(count() - 1, random, avoid)
+}
+
+/// As `pick` while the clips are not to be played (the clip task hung
+/// in one, `watchdog::Trips::clips_suspect`): a note melody's index is
+/// itself, a clip's is the beeps, and `RANDOM` draws among the note
+/// melodies only. So an alarm set to a clip still sounds.
+pub fn pick_notes(index: usize, random: u32, avoid: Option<usize>) -> usize {
+    if index == RANDOM {
+        return draw(TUNES.len() - 1, random, avoid);
+    }
+    if index < TUNES.len() { index } else { 0 }
+}
+
+/// One of the `tunes` melodies after the beeps, not `avoid` when there
+/// is another.
+fn draw(tunes: usize, random: u32, avoid: Option<usize>) -> usize {
     let mut i = 1 + random as usize % tunes;
     if Some(i) == avoid {
         i = 1 + i % tunes;
@@ -593,6 +609,32 @@ mod tests {
         // And over a pack's table, which is longer.
         install(Some(pack::fullest()));
         random_pick();
+    }
+
+    #[test]
+    fn with_the_clips_under_suspicion_only_notes_are_picked() {
+        for with_pack in [false, true] {
+            if with_pack {
+                install(Some(crate::pack::fullest()));
+            }
+            for i in 0..TUNES.len() {
+                assert_eq!(pick_notes(i, 7, None), i, "a note melody is itself");
+            }
+            for i in TUNES.len()..count() {
+                assert!(get(i).clip.is_some());
+                assert_eq!(pick_notes(i, 7, None), 0, "a clip is the beeps");
+            }
+            assert_eq!(pick_notes(LIMIT, 7, None), 0, "an index past the table is the beeps");
+            let mut seen = [false; TUNES.len()];
+            for r in 0..100u32 {
+                let i = pick_notes(RANDOM, r, None);
+                assert!(get(i).clip.is_none() && i != 0);
+                seen[i] = true;
+                assert_ne!(pick_notes(RANDOM, r, Some(i)), i);
+            }
+            assert!(seen[1..].iter().all(|s| *s), "every note melody but the beeps is drawn");
+            install(None);
+        }
     }
 
     fn random_pick() {

@@ -40,6 +40,7 @@ use log::{info, warn};
 use crate::clip;
 use crate::display;
 use crate::melody::{self, Melody};
+use crate::watchdog;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Command {
@@ -93,8 +94,16 @@ const SILENT_PCT: u8 = 100;
 /// from the hardware RNG, never the one drawn last, and `last` remembers
 /// it. Logs the choice as `what`.
 fn resolve(index: usize, last: &mut Option<usize>, what: &str) -> Melody {
-    let picked = melody::pick(index, Rng::new().random(), *last);
+    // With the clips under suspicion (the clip task hung in one and the
+    // watchdog reset the clock) only notes play, so the alarm the grace
+    // rings again after that reset does not hang the same way.
+    let notes_only = watchdog::clips_suspect();
+    let random = Rng::new().random();
+    let picked = if notes_only { melody::pick_notes(index, random, *last) } else { melody::pick(index, random, *last) };
     let m = melody::get(picked);
+    if notes_only && picked != index && index != melody::RANDOM {
+        warn!("buzzer: {} is a clip and the clip task hung in one: notes until a new pack or firmware", melody::name(index));
+    }
     if index == melody::RANDOM {
         *last = Some(picked);
         info!("buzzer: {what} {} (random)", m.name);

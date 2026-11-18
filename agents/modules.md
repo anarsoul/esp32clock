@@ -480,7 +480,8 @@ mark carries a layout version. `freeze` is for a mode switch.
 **`core/src/watchdog.rs`**: the timeouts (`HARD_TIMEOUT_SECS`,
 `DEADLINE_MS`, `FEED_PERIOD_MS`), the parties that check in (`Party`),
 `overdue` and `verdict`, and `Trips`, the carry record's word: resets
-since power-up and the `Cause` of the last.
+since power-up, the `Cause` of the last, and `clips_suspect`, set by a
+reset over the clip task and cleared by `clips_trusted`.
 
 **`src/watchdog.rs`**: `start` sets the RTC watchdog (stage 0 a core
 reset, stage 1 a system reset) right after `esp_hal::init`;
@@ -489,7 +490,9 @@ reset, stage 1 a system reset) right after `esp_hal::init`;
 the scan (bounded by `HALT_WAIT`) and resets. `check_in` and `expect`
 are for the parties: the display task on every pass of its loop, the
 clip task from a clip's start to its end. `note_boot` counts the
-timer's own reset from the reset reason. `Report` is the heartbeat's:
+timer's own reset from the reset reason. `clips_suspect` is what the
+buzzer task asks before it picks a melody, and `trust_clips` what the
+firmware and pack uploads call before their reboot. `Report` is the heartbeat's:
 the count, the last cause, the longest gap between two feeds.
 `bench`, only with the `bench-hang` feature, hangs the firmware on
 purpose: `POST /hang/thread`, `irq` or `cs` (a spin in a thread-mode
@@ -555,7 +558,7 @@ settings, so a hang there is counted), the minute heartbeat log.
 
 ## What the host tests cover
 
-`cargo host-test` runs the tests of `core/` on the host: 179 on
+`cargo host-test` runs the tests of `core/` on the host: 181 on
 2026-11-17. The players' tests over real clips run only with
 `ALARM_CLIP` naming some, which the CI does in a second run.
 `.cargo/config.toml` aims every cargo command at the chip, which is
@@ -574,7 +577,8 @@ Covered:
   parser, the PIN and token header rules.
 - Image and state: the appended-hash split, the carry codec (an older
   layout's record included), the watchdog's deadline, verdict and
-  carry word, the clip
+  carry word, which resets put the clips under suspicion and the
+  notes-only pick that follows, the clip
   pack's layout with every refusal, the melody table with and without
   a pack.
 - Time: the calendar arithmetic, the POSIX TZ parser with its rejects

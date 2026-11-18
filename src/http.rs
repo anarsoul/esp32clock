@@ -871,6 +871,8 @@ async fn upload(out: &mut Response, req: &Request<'_>, socket: &mut TcpSocket<'_
         Ok(Written::Clips(done)) => {
             status_line(out, "200 OK", "text/plain")?;
             writeln!(out, "clips: a pack of {} clips written, {} bytes; rebooting", done.clips, done.bytes)?;
+            // A new pack: if the clip task hung in the old one, try these.
+            watchdog::trust_clips();
             Ok(Then::Reload)
         }
         Err(e) => {

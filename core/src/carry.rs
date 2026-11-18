@@ -127,7 +127,7 @@ mod tests {
             unix_us: Some(1_761_000_123_456_789),
             ota_boots: 2,
             boot_ap: true,
-            watchdog: Trips { count: 3, last: Cause::Missed(Party::Display) },
+            watchdog: Trips { count: 3, last: Cause::Missed(Party::Clip), clips_suspect: true },
         };
         let words = encode(&c);
         assert_eq!(words[0], MARK);
@@ -167,7 +167,7 @@ mod tests {
         }
         // An older image's record: its nine words, the tenth stale.
         words[0] = TAG | OLDEST;
-        words[9] = Trips { count: 9, last: Cause::Hardware }.to_word();
+        words[9] = Trips { count: 9, last: Cause::Hardware, clips_suspect: true }.to_word();
         assert!(readable(words[0]));
         assert_eq!(decode(words), c, "the watchdog's word is not read under a mark that had none");
         // Written back, it is this layout's again.

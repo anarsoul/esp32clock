@@ -94,7 +94,27 @@ pub fn note_boot(reason: Option<SocResetReason>) {
     }
     let trips = carry::get().watchdog;
     if trips.count > 0 {
-        warn!("watchdog: {} resets since power-up, the last by {}", trips.count, trips.last.name());
+        warn!(
+            "watchdog: {} resets since power-up, the last by {}{}",
+            trips.count,
+            trips.last.name(),
+            if trips.clips_suspect { "; the clip task hung in a clip, so notes only until a new pack or firmware" } else { "" }
+        );
+    }
+}
+
+/// Whether the clip task hung in a clip since power-up, with no new
+/// pack or firmware since: the buzzer plays notes only.
+pub fn clips_suspect() -> bool {
+    carry::get().watchdog.clips_suspect
+}
+
+/// A new clip pack or firmware is in place: its clips are tried again.
+/// Call before the reset into it.
+pub fn trust_clips() {
+    if clips_suspect() {
+        warn!("watchdog: clips to be played again, with the new pack or firmware");
+        carry::update(|c| c.watchdog = c.watchdog.clips_trusted());
     }
 }
 
@@ -150,6 +170,9 @@ impl fmt::Display for Report {
         write!(f, "{} resets", trips.count)?;
         if trips.count > 0 {
             write!(f, " (last by {})", trips.last.name())?;
+        }
+        if trips.clips_suspect {
+            f.write_str(", clips not played")?;
         }
         write!(f, ", longest feed gap {} ms", LONGEST_GAP_MS.load(Ordering::Relaxed))
     }

@@ -106,6 +106,11 @@ leaves the running one in place, and a new image that cannot reach the
 network within three boots, or hangs, is rolled back. Settings are
 kept.
 
+If a clip ever hangs the clock while it plays, the clock resets itself
+and from then on rings and previews in notes only (a clip's melody as
+the beeps), so the alarm still sounds. A firmware update, a new clip
+pack or a power cycle brings the clips back.
+
 ### Clip packs
 
 The alarm melodies that are not notes (sampled sound, a ZX Spectrum

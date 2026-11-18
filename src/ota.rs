@@ -305,6 +305,7 @@ pub(crate) async fn fill(buf: &mut [u8], first: &mut &[u8], body: &mut impl Read
 /// and the carry record notes one boot of an unconfirmed image.
 pub async fn reboot() -> ! {
     carry::update(|c| c.ota_boots = 1);
+    crate::watchdog::trust_clips();
     info!("ota: rebooting into the new image");
     heal::reboot().await
 }

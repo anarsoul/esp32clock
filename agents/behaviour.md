@@ -380,6 +380,17 @@ The watchdog, for a hang, where self-heal is for the network:
 - Either reset keeps the carry record: the time (up to a minute old
   after the timer's own reset, shown as it is until SNTP), the alarm
   state, the boots of an unconfirmed image.
+- A clip task that hung in a clip puts the clips under suspicion
+  (`Trips::clips_suspect`, in the carry record): from that reset on
+  the buzzer plays notes only, a clip's melody as the beeps and
+  `random` among the note melodies (`melody::pick_notes`), for the
+  alarm and a preview alike. Without it the missed-alarm grace would
+  ring the same clip after the reset and hang again, for as long as
+  the grace lasts: an alarm that flashes and never sounds. A firmware
+  update or a clip pack upload ends it (`watchdog::trust_clips`), and
+  a power cut; no clip can play to its end to end it, since none is
+  played. The boot line says so and the heartbeat has `clips not
+  played`.
 - The boot line and the heartbeat carry the count since power-up and
   the cause of the last (`the hardware timer`, or the task that missed
   its check-in); the heartbeat also has the longest gap between two

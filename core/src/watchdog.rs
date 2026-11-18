@@ -88,20 +88,39 @@ impl Cause {
 }
 
 /// Watchdog resets since power-up and the cause of the last, one word
-/// of the carry record: the count in the low 24 bits, the cause above.
+/// of the carry record: the count in the low 23 bits, then the
+/// distrust of the clips, the cause in the top byte.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct Trips {
     pub count: u32,
     pub last: Cause,
+    /// The clip task hung in a clip: nothing plays one until
+    /// `clips_trusted`. A clip that hangs its player would otherwise
+    /// be rung again by the missed-alarm grace after the reset, and
+    /// hang again, for as long as the grace lasts: an alarm that
+    /// flashes and never sounds. Kept through later resets of any
+    /// cause; a power cut clears it with the record.
+    pub clips_suspect: bool,
 }
 
-const COUNT_MASK: u32 = 0x00FF_FFFF;
+const COUNT_MASK: u32 = 0x007F_FFFF;
+const SUSPECT_BIT: u32 = 0x0080_0000;
 const CAUSE_HARDWARE: u32 = 0xFF;
 
 impl Trips {
     /// One more reset, by `cause`.
     pub const fn tripped(self, cause: Cause) -> Trips {
-        Trips { count: if self.count < COUNT_MASK { self.count + 1 } else { COUNT_MASK }, last: cause }
+        Trips {
+            count: if self.count < COUNT_MASK { self.count + 1 } else { COUNT_MASK },
+            last: cause,
+            clips_suspect: self.clips_suspect || matches!(cause, Cause::Missed(Party::Clip)),
+        }
+    }
+
+    /// The clips are worth trying again: a new pack or a new firmware
+    /// is in place.
+    pub const fn clips_trusted(self) -> Trips {
+        Trips { clips_suspect: false, ..self }
     }
 
     pub const fn to_word(self) -> u32 {
@@ -110,7 +129,7 @@ impl Trips {
             Cause::Hardware => CAUSE_HARDWARE,
             Cause::Missed(p) => p as u32 + 1,
         };
-        (if self.count < COUNT_MASK { self.count } else { COUNT_MASK }) | cause << 24
+        (if self.count < COUNT_MASK { self.count } else { COUNT_MASK }) | if self.clips_suspect { SUSPECT_BIT } else { 0 } | cause << 24
     }
 
     /// A cause this firmware does not know (a later one's party) is read
@@ -120,7 +139,7 @@ impl Trips {
             0 => Cause::None,
             n => Party::ALL.into_iter().find(|p| *p as u32 + 1 == n).map_or(Cause::Hardware, Cause::Missed),
         };
-        Trips { count: w & COUNT_MASK, last }
+        Trips { count: w & COUNT_MASK, last, clips_suspect: w & SUSPECT_BIT != 0 }
     }
 }
 
@@ -164,20 +183,39 @@ mod tests {
         assert_eq!(Trips::default().to_word(), 0, "an empty record's zero word is no reset");
         assert_eq!(Trips::from_word(0), Trips::default());
         for last in [Cause::None, Cause::Hardware, Cause::Missed(Party::Display), Cause::Missed(Party::Clip)] {
-            let t = Trips { count: 12_345, last };
-            assert_eq!(Trips::from_word(t.to_word()), t);
+            for clips_suspect in [false, true] {
+                let t = Trips { count: 12_345, last, clips_suspect };
+                assert_eq!(Trips::from_word(t.to_word()), t);
+            }
         }
-        let t = Trips::default().tripped(Cause::Missed(Party::Clip)).tripped(Cause::Hardware);
-        assert_eq!(t, Trips { count: 2, last: Cause::Hardware });
+        let t = Trips::default().tripped(Cause::Missed(Party::Display)).tripped(Cause::Hardware);
+        assert_eq!(t, Trips { count: 2, last: Cause::Hardware, clips_suspect: false });
     }
 
     #[test]
     fn the_count_saturates_and_an_unknown_cause_is_the_hardwares() {
-        let full = Trips { count: COUNT_MASK, last: Cause::Hardware };
+        let full = Trips { count: COUNT_MASK, last: Cause::Hardware, clips_suspect: false };
         assert_eq!(full.tripped(Cause::Hardware).count, COUNT_MASK);
-        assert_eq!(Trips::from_word(Trips { count: u32::MAX, last: Cause::None }.to_word()).count, COUNT_MASK);
+        assert_eq!(Trips::from_word(Trips { count: u32::MAX, last: Cause::None, clips_suspect: false }.to_word()), Trips { count: COUNT_MASK, ..Trips::default() });
         // A party a later firmware added.
-        assert_eq!(Trips::from_word(3 | 0x40 << 24), Trips { count: 3, last: Cause::Hardware });
+        assert_eq!(Trips::from_word(3 | 0x40 << 24), Trips { count: 3, last: Cause::Hardware, clips_suspect: false });
+    }
+
+    #[test]
+    fn only_a_hung_clip_task_puts_the_clips_under_suspicion() {
+        for cause in [Cause::Hardware, Cause::Missed(Party::Display)] {
+            assert!(!Trips::default().tripped(cause).clips_suspect, "{cause:?}");
+        }
+        let hung = Trips::default().tripped(Cause::Missed(Party::Clip));
+        assert!(hung.clips_suspect);
+        // Whatever resets the clock next, the clip is no better for it.
+        let later = hung.tripped(Cause::Hardware).tripped(Cause::Missed(Party::Display));
+        assert!(later.clips_suspect);
+        assert_eq!(later.count, 3);
+        // A new pack or firmware: the count and the cause stay.
+        let trusted = later.clips_trusted();
+        assert_eq!(trusted, Trips { count: 3, last: Cause::Missed(Party::Display), clips_suspect: false });
+        assert!(!Trips::default().clips_trusted().clips_suspect);
     }
 
     #[test]

@@ -87,7 +87,10 @@ from `http://<ip>/update`; its settings survive the update.
   cut, and an update that hangs is rolled back like one that never
   reaches the network. `/api` has the count of such resets since
   power-up as `watchdog`; the serial log's boot line and heartbeat say
-  what caused the last.
+  what caused the last. If it was a clip that hung the clock, the
+  alarm and the previews play notes only until a firmware update, a
+  new clip pack or a power cycle, so a bad clip cannot silence the
+  alarm.
 - A sampled clip can be IMA ADPCM, four bits a sample: half the flash
   of the same clip as PCM, 8 KB a second at 16 kHz.
   `scripts/wav2pcm.sh in.wav out.adp` makes one from a sound file and

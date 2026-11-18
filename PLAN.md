@@ -280,6 +280,35 @@ the serial log read beside `/api`:
   minute.
 - The plain build answers `POST /hang/thread` with a 404.
 
+**A review's finding, fixed 2026-11-17: a clip that hangs the clip
+task made a reset loop during the alarm.** The ring plays the clip,
+the clip task misses its check-in, the feeder resets, the grace rings
+the missed alarm with the same clip, and so on until the grace runs
+out: a panel that flashes and no sound. Now a reset over the clip
+task sets `Trips::clips_suspect` (bit 23 of the watchdog's word, the
+count 23 bits), which later resets of any cause keep, and while it is
+set the buzzer picks with `melody::pick_notes`: a clip's melody is the
+beeps, `random` draws among the note melodies. The review asked for
+it to clear "once a clip has played to its end or at power-up"; with
+every clip replaced by notes none can play to its end, so it is
+cleared by what can have mended the clip, a firmware update or a clip
+pack upload (`watchdog::trust_clips`, before their reboot), and by a
+power cut with the record. Two host tests (which causes set it and
+what keeps and clears it; the notes-only pick with and without a
+pack), 181 in all.
+
+Run on test-clock the same day, bench-hang build, melody `keygen` (a
+clip), the alarm set a minute ahead and `POST /hang/clip` before it:
+`ring keygen`, the clip task parked, the feeder's reset 10.3 s later,
+and at 0.6 s of the next boot "keygen is a clip and the clip task hung
+in one" and `ring beeps`; no second reset, still ringing 90 s on, the
+heartbeat with `clips not played`. The plain build sent to `/ota`
+logged "clips to be played again" and a preview of `keygen` played the
+clip. Not run: a preview while under suspicion (the ring was still on
+and a preview is ignored then; it is the same `resolve`), a pack
+upload's clearing. The second ring was heard as beeps by the user
+(test-clock has a speaker connected).
+
 Still owed: a soak with no reset, and the longest gap read after a
 clip, a save, an upload and a clip pack upload.
 
