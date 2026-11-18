@@ -323,7 +323,9 @@ command, looped or once, and stops within a note.
   underruns and the time spent filling the ring (the player's share of
   the processor).
 - Registers, through `regs()`: the DMA's descriptor register, for the
-  pacer's check only, and I2S0's `tx_conf`, for the bypass bit.
+  pacer's check only, I2S0's `tx_conf`, for the bypass bit, and its
+  clock divider's two, written a second time by `settle_clock`
+  (`agents/hardware.md`, "I2S0's clock divider").
 
 **`core/src/adpcm.rs`**: a PCM clip at four bits a sample, pure.
 `Decoder` reads IMA ADPCM in place behind the `ADP1` header (the rate,

@@ -9712,3 +9712,97 @@ Why the heat is the same, reasoned and not measured: Q1 does not
 switch at either bit rate (`agents/hardware.md`, the buzzer's parts),
 so it sits in its linear region with the buzzer's mean current through
 it for the length of the clip, whatever the PDM clock.
+
+## Trantor's stray positions: the I2S clock's fraction — reproduced, fixed and verified 2026-11-18
+
+The soak's Trantor counted about 1890 stray positions in every 30 s
+preview but the first after the boot. Reproduced on `another-bench`
+(the soak's boot still running, `v0.4-93-g43d96d9`, the log a `cat` of
+the port, previews by `POST /play` and `/stop`):
+
+| Trantor played for | stray positions |
+| --- | --- |
+| 10 s | 0 |
+| 14 s | 121 |
+| 16 s | 258 |
+| 20 s | 652 |
+| 30 s | 1886 to 1895 (four plays) |
+| 60 s | 5589 |
+
+What came before (Trantor, a note melody, `keygen` through the
+converter) made no difference, and the converter's clips counted
+none. So it is not a jump but a drift: the DMA's slot leaves the
+clock's by one chunk in about 9.7 s, the check allows one, from about
+10 s half the ticks are counted and from about 19 s all 125 a second.
+One chunk (16 ms) in 9.7 s is 0.165 %. The beeper's line is 512 kbit/s,
+which esp-hal makes as an MCLK of 4.096 MHz: 160 MHz by 39 1/16
+(`tx_clkm_conf` `34000027`, `tx_clkm_div_conf` `003c0001`, read on the
+board). The sixteenth is 0.16 % of the divider: on every play but the
+first after a reset the fraction is not what the registers say. Which
+way the line is off was not measured.
+
+The IDF writes other coefficients before the real ones; esp-hal
+1.2.2 does the like on the PCR chips only, not on the C3. First tried
+in `src/clip.rs` (marked EXPERIMENT, for a stream of bytes only) with
+an older IDF's, as remembered: 7 with x 317, y 7, z 3 ("otherwise the
+clock division might be inaccurate"), then esp-hal's own back, then
+`tx_update`, before the transfer starts. By
+OTA to `ota_1` (`v0.4-94-g7b01372-dirty`): Trantor for 30 s, 30 s
+again, 30 s after `keygen`, 60 s after `twinkle`, 0 stray positions
+each time.
+
+What it means for a clock (reasoned, not heard: the board has no
+speaker): the pacer writes by the clock, so over a five-minute ring
+the line and the writing part by some thirty chunks, twice round the
+ring; the ring's 31329 strays in 300 s were that. A line that is slow
+has its chunk rewritten under it within half a minute, one that is
+fast catches up with the writing in a little over two.
+
+**Built** the same day as `settle_clock` in `src/clip.rs`, called
+for every clip between the transmitter's setup and the transfer's
+start: the converter's path too, as the IDF does it for every mode,
+though its divider is whole and it counted nothing. `agents/hardware.md`
+has the fact, the changelog a line. No pure logic in it, so no test.
+
+**The IDF's sequence, read** (v6.0.1's
+`esp_hal_i2s/esp32c3/include/hal/i2s_ll.h`, `i2s_ll_tx_set_raw_clk_div`:
+"Workaround for the double division issue. The division coefficients
+must be set in particular sequence. And it has to switch to a small
+division first"): the whole part 2, `yn1` 0, y 1, z 0, x 0, then the
+target's `yn1`, z, y, x and the whole part last, a field a write.
+`settle_clock` does that now, from what esp-hal left in the
+registers. Both sequences cured the strays; the run below is the
+remembered one's, the one after it this one's.
+
+**Run on `another-bench`** (by OTA to `ota_0`, previews cut by
+`/stop`): Trantor 30 s, 30 s after `keygen`, 60 s after `halftime` and
+`synchronization`, 0 stray positions each; `keygen` twice, `halftime`
+and `synchronization` for 30 s, 0 each, and filling for 6609 to
+7970 ms of the 30 s, the soak's figures to within a percent, so the
+converter's clips run at the rate they did.
+
+**Run again with the IDF's sequence** (OTA to `ota_1`): Trantor 30 s
+first after the boot, 30 s after `keygen`, 60 s after
+`synchronization`, 30 s after `halftime`, 0 stray positions each;
+`keygen`, `synchronization` and `halftime` 0 each, filling 6617, 7994
+and 6777 ms of 30 s.
+
+**The ring, on the build as it stands** (OTA to `ota_0` of
+`another-bench`; white-clock got the same image): Trantor as the
+alarm, rung its five minutes out, `clip: cut short, 0 underruns, 0
+stray positions, 3871 of 300023 ms filling`, where the soak's ring
+counted 31329. Around it Trantor for 30 s three times and `keygen`
+and `synchronization` for 20 s, 0 each. The alarm was put back
+(06:21, disarmed, beeps).
+
+**A stopgap** (the user, 2026-11-18): esp-hal's `main` (d6caef0,
+`i2s/clocks/v2v3.rs`) writes the IDF's sequence for the C3 and S3
+itself, so there is nothing to report upstream, and `settle_clock`
+goes when the project moves to a release with that.
+
+**Heard on white-clock, 2026-11-18** (the user, on the same image):
+Trantor was heard there, and Halftime and Synchronization as well,
+through the converter: "No issues."
+
+Not tried: the half-rate fault of `agents/hardware.md` with the 8-bit
+setup and this sequence in.

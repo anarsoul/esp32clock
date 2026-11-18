@@ -150,6 +150,30 @@ swapped in pairs).
   found in the esp-idf or esp-hal issues. ADC-270 is the same kind of
   thing in another peripheral: a counter the reset does not clear.
 
+## I2S0's clock divider
+
+`clip::settle_clock` writes the master clock's divider a second time
+before every transfer, in the IDF's sequence for this chip
+(`i2s_ll_tx_set_raw_clk_div`, "the double division issue"): a small
+division first (2, with y alone set), then the target's `yn1`, z, y,
+x and the whole part, in that order. esp-hal 1.2.2 does it on the
+chips with a PCR only; its `main` does it for the C3 too, so
+`settle_clock` is a stopgap, to be dropped at the update that brings
+that.
+
+- Without it the divider's fraction is not what the registers say on
+  every start but the first after a reset. The beeper clip's line,
+  160 MHz by 39 1/16, ran 0.165 % off: the DMA left the pacer's clock
+  by a chunk in 9.7 s, counted as stray positions from about 10 s in
+  (1890 in 30 s, 5589 in 60 s on another-bench, 2026-11-18), and by
+  some thirty chunks over a five-minute ring. Which way was not
+  measured.
+- With it: none in 30 and 60 s, whatever was played before.
+- The converter's divider is whole and its clips counted none either
+  way; they get the same write.
+- The check is the clip's log line after 20 s or more of a beeper
+  clip; a 10 s preview shows nothing.
+
 ## Display wires (GPIO6–9)
 
 They are SPI2 SIO0–3.

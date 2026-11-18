@@ -73,6 +73,9 @@ from `http://<ip>/update`; its settings survive the update.
 - A clip no longer plays an octave down and stuttering, which every
   sampled clip, module and chip tune did now and then after Trantor
   (the beeper clip) had been played, until Trantor was played again.
+- Trantor (the beeper clip) plays at its own rate every time. On
+  every play but the first after a reset the line ran 0.16 % off the
+  clock the clip is fed by, which a long ring would have run into.
 - Play no longer interrupts a ringing alarm (it played the melody
   once and left the alarm silent): Play, Stop and the MQTT `play`
   command do nothing while the alarm rings. A button on the clock or

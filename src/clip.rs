@@ -350,6 +350,7 @@ impl Sampler {
                 return None;
             }
         };
+        settle_clock();
         let transfer = match tx.write(ring) {
             Ok(t) => t,
             Err((e, _, ring)) => {
@@ -399,6 +400,44 @@ impl Sampler {
         }
         cancelled
     }
+}
+
+/// Write the master clock's divider again the way the IDF's
+/// `i2s_ll_tx_set_raw_clk_div` does for this chip (v6.0.1, "the double
+/// division issue. The division coefficients must be set in particular
+/// sequence. And it has to switch to a small division first"): a
+/// divider of 2 with y alone set, then the target's `yn1`, z, y, x and
+/// the whole part, in that order. esp-hal 1.2.2 does it on the chips
+/// with a PCR only. Without it the divider's fraction is not what the
+/// registers say on every start but the first after a reset: a beeper
+/// clip's 39 1/16 ran 0.16 % off, a chunk in ten seconds against the
+/// pacer's clock (2026-11-18; `agents/hardware.md`). The converter's
+/// divider is whole and showed nothing; it gets the same, as in the
+/// IDF. Call with the transmitter configured and not started.
+///
+/// A stopgap for esp-hal 1.2.2: its `main` does this sequence itself
+/// for this chip (`i2s/clocks/v2v3.rs`, seen 2026-11-18). Drop this
+/// function and its call when the project moves to a release that
+/// has it.
+fn settle_clock() {
+    let regs = I2S0::regs();
+    let (conf, div) = (regs.tx_clkm_conf().read(), regs.tx_clkm_div_conf().read());
+    let (num, x, y, z, yn1) =
+        (conf.tx_clkm_div_num().bits(), div.tx_clkm_div_x().bits(), div.tx_clkm_div_y().bits(), div.tx_clkm_div_z().bits(), div.tx_clkm_div_yn1().bit());
+    let (clkm, coef) = (regs.tx_clkm_conf(), regs.tx_clkm_div_conf());
+    // A field a write, as the IDF's bit-field stores are.
+    clkm.modify(|_, w| unsafe { w.tx_clkm_div_num().bits(2) });
+    coef.modify(|_, w| w.tx_clkm_div_yn1().clear_bit());
+    coef.modify(|_, w| unsafe { w.tx_clkm_div_y().bits(1) });
+    coef.modify(|_, w| unsafe { w.tx_clkm_div_z().bits(0) });
+    coef.modify(|_, w| unsafe { w.tx_clkm_div_x().bits(0) });
+    coef.modify(|_, w| w.tx_clkm_div_yn1().bit(yn1));
+    coef.modify(|_, w| unsafe { w.tx_clkm_div_z().bits(z) });
+    coef.modify(|_, w| unsafe { w.tx_clkm_div_y().bits(y) });
+    coef.modify(|_, w| unsafe { w.tx_clkm_div_x().bits(x) });
+    clkm.modify(|_, w| unsafe { w.tx_clkm_div_num().bits(num) });
+    regs.tx_conf().modify(|_, w| w.tx_update().set_bit());
+    while regs.tx_conf().read().tx_update().bit_is_set() {}
 }
 
 /// Make the pin a released open-drain output of the GPIO register,
