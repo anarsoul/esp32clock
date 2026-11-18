@@ -43,6 +43,9 @@ pub struct Status {
     pub heals: u32,
     /// Watchdog resets since power-up.
     pub watchdog: u32,
+    /// The clip task hung in a clip and the watchdog reset the clock:
+    /// notes play in place of every clip until a new pack or firmware.
+    pub clips_paused: bool,
     /// When the last self-heal happened, if one did and the time was known.
     pub last_heal: Option<HealStamp>,
     /// The room in tenths of a degree Celsius: `None` before the first
@@ -625,7 +628,7 @@ fn write_tz_script(out: &mut impl core::fmt::Write, st: &Status) -> core::fmt::R
 /// The settings as JSON (the SSID, then whether a password and a token
 /// are set, never their values), followed by the read-only status keys
 /// `version`, `slot`, `clips` (`pack` when the clips are the `clips`
-/// partition's, `builtin` when they are the firmware's), `mode`, `uptime` (seconds), `heals`, `watchdog` (resets by it since power-up), `temp_c` and
+/// partition's, `builtin` when they are the firmware's), `mode`, `uptime` (seconds), `heals`, `watchdog` (resets by it since power-up), `clips_paused` (notes play in place of the clips, one having hung the player), `temp_c` and
 /// `temp_f` (tenths, or null with no thermometer), `light` (0 to 100,
 /// or null before the first reading), `rssi` (dBm, or null while not
 /// connected), `utc_offset` and `dst` (the minutes east of UTC and
@@ -647,7 +650,7 @@ pub fn write_json(out: &mut impl core::fmt::Write, s: &Settings, st: &Status) ->
         out,
         "\",\"skip\":{},\"melody\":\"{}\",\"twelve_hour\":{},\"tz\":\"{}\",\"temp_offset\":{},\"temp_show\":\"{}\",\"hostname\":\"{}\",\"tx_power\":{},\"ssid\":\"{}\",\"password_set\":{},\"token_set\":{},\
 \"mqtt_host\":\"{}\",\"mqtt_port\":{},\"mqtt_user\":\"{}\",\"mqtt_password_set\":{},\"mqtt\":\"{}\",\"ringing\":{},\
-\"version\":\"{}\",\"slot\":\"{}\",\"clips\":\"{}\",\"mode\":\"{}\",\"uptime\":{},\"heals\":{},\"watchdog\":{},\"temp_c\":{},\"temp_f\":{},\"light\":{},\"rssi\":{},\
+\"version\":\"{}\",\"slot\":\"{}\",\"clips\":\"{}\",\"mode\":\"{}\",\"uptime\":{},\"heals\":{},\"watchdog\":{},\"clips_paused\":{},\"temp_c\":{},\"temp_f\":{},\"light\":{},\"rssi\":{},\
 \"utc_offset\":{},\"dst\":{},\"last_heal\":",
         s.skip_next,
         melody::name(s.melody),
@@ -673,6 +676,7 @@ pub fn write_json(out: &mut impl core::fmt::Write, s: &Settings, st: &Status) ->
         st.uptime_secs,
         st.heals,
         st.watchdog,
+        st.clips_paused,
         OrNull(st.temp_dc.map(Tenths)),
         OrNull(st.temp_dc.map(|dc| Tenths(fahrenheit_tenths(dc)))),
         OrNull(st.light),
@@ -955,7 +959,7 @@ pub fn write_page(
 <label>{} Alarm armed</label>\
 <label>Alarm time <input type=time name=alarm value={:02}:{:02}></label>\
 <div class=d>Alarm days{}</div>\
-<label>{} Skip the next alarm</label>{}\
+<label>{} Skip the next alarm</label>{}{}\
 <label>Alarm sound <select name=melody id=m>",
         Check("armed", s.alarm_armed),
         s.alarm_hour,
@@ -963,6 +967,7 @@ pub fn write_page(
         DayChecks(s.alarm_days),
         Check("skip", s.skip_next),
         NextAlarm(s, st.local),
+        ClipsPaused(st.clips_paused),
     )?;
     for (i, m) in melody::all().enumerate() {
         write!(out, "<option value={}{}>{}</option>", m.name, if i == s.melody { " selected" } else { "" }, HtmlStr(m.label))?;
@@ -1469,6 +1474,20 @@ impl core::fmt::Display for NextAlarm<'_> {
     }
 }
 
+/// Why the alarm beeps where a clip was chosen: shown while the clips
+/// are not played (`Status::clips_paused`), whether or not an alarm is
+/// armed, since Play beeps as well.
+struct ClipsPaused(bool);
+
+impl core::fmt::Display for ClipsPaused {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        if self.0 {
+            f.write_str("<p><small>Clips paused: one hung the player. Upload a pack or update the firmware to try again.</small></p>")?;
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1482,6 +1501,7 @@ mod tests {
             uptime_secs: 46_296 * 86_400 + 3 * 3600 + 59 * 60,
             heals: 4_000_000_000,
             watchdog: 16_777_215,
+            clips_paused: true,
             last_heal: heal.then_some(HealStamp { unix_secs: 1_800_000_000, weekday: 2, hour: 23, minute: 59, ago_secs: Some(400 * 86_400) }),
             temp_dc: Some(-200),
             light: Some(100),
@@ -2151,6 +2171,35 @@ mod tests {
         let mut unsynced = st;
         unsynced.local = None;
         assert!(!page(&s, &unsynced).contains("Next alarm"));
+    }
+
+    /// The clock page says why the alarm beeps while the clips are not
+    /// played, armed or not, and nothing of it otherwise; the JSON has
+    /// the flag either way.
+    #[test]
+    fn the_page_says_when_the_clips_are_paused() {
+        let line = "<p><small>Clips paused: one hung the player. Upload a pack or update the firmware to try again.</small></p>";
+        let page = |s: &Settings, st: &Status| pages(s, st, Note::None)[0].clone();
+        let mut s = Settings { alarm_armed: true, ..Settings::DEFAULT };
+        let mut st = status(true);
+        st.clips_paused = true;
+        let out = page(&s, &st);
+        // Under the next alarm, above the sound it explains.
+        assert!(out.contains(&format!(".</small></p>{line}<label>Alarm sound")), "{out}");
+        s.alarm_armed = false;
+        assert!(page(&s, &st).contains(&format!(" Skip the next alarm</label>{line}<label>Alarm sound")), "shown with no alarm armed");
+        let mut json = String::new();
+        write_json(&mut json, &s, &st).unwrap();
+        assert!(json.contains(r#""watchdog":16777215,"clips_paused":true,"temp_c""#), "{json}");
+
+        st.clips_paused = false;
+        assert!(!page(&s, &st).contains("Clips paused"));
+        for out in pages(&s, &st, Note::None) {
+            assert!(!out.contains("Clips paused"));
+        }
+        let mut json = String::new();
+        write_json(&mut json, &s, &st).unwrap();
+        assert!(json.contains(r#""clips_paused":false"#));
     }
 
     /// A form is posted by its script, which keeps what was typed when

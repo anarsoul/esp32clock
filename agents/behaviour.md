@@ -210,6 +210,7 @@ Read-only keys; posting one is refused as an unknown key:
 | `uptime` | seconds |
 | `heals`, `last_heal` | self-heal resets since power-up; the last one's Unix seconds or `null` |
 | `watchdog` | resets by the watchdog since power-up |
+| `clips_paused` | whether notes play in place of the clips, one having hung the player |
 | `temp_c`, `temp_f` | the room in tenths; `null` with no thermometer fitted or before the first reading |
 | `light` | 0 dark to 100; `null` before the first reading |
 | `rssi` | the station's signal in dBm from its last beacon, read every 10 s by `net::wifi_task` into an atomic; `null` while not connected and on the access point |
@@ -390,7 +391,12 @@ The watchdog, for a hang, where self-heal is for the network:
   update or a clip pack upload ends it (`watchdog::trust_clips`), and
   a power cut; no clip can play to its end to end it, since none is
   played. The boot line says so and the heartbeat has `clips not
-  played`.
+  played`; the clock page says "Clips paused: one hung the player.
+  Upload a pack or update the firmware to try again." above the alarm
+  sound, armed or not, and `/api` has `clips_paused`. The MQTT state
+  carries the key with the rest of the JSON, and Home Assistant has
+  it as a diagnostic binary sensor of the `problem` class, "Clips
+  paused".
 - The boot line and the heartbeat carry the count since power-up and
   the cause of the last (`the hardware timer`, or the task that missed
   its check-in); the heartbeat also has the longest gap between two
@@ -457,11 +463,11 @@ Discovery:
   host test parses the payload and checks each key against the JSON,
   each `set/` key against the allow list and each select option
   against the parser.
-- Nineteen entities: selects for colour, brightness, melody and the
+- Twenty entities: selects for colour, brightness, melody and the
   panel temperature; a `time` for the alarm; switches for armed, skip
   and 12 hour; a text for the days; a number for the thermometer
   offset; sensors for temperature, light, signal, uptime and
-  self-heals; a binary sensor for ringing; buttons for play, silence
+  self-heals; binary sensors for ringing and for the clips paused; buttons for play, silence
   and reload.
 
 The session:

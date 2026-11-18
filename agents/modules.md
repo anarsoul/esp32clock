@@ -558,7 +558,7 @@ settings, so a hang there is counted), the minute heartbeat log.
 
 ## What the host tests cover
 
-`cargo host-test` runs the tests of `core/` on the host: 181 on
+`cargo host-test` runs the tests of `core/` on the host: 182 on
 2026-11-17. The players' tests over real clips run only with
 `ALARM_CLIP` naming some, which the CI does in a second run.
 `.cargo/config.toml` aims every cargo command at the chip, which is

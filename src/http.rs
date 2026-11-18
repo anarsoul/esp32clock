@@ -438,6 +438,7 @@ pub fn status() -> Status {
         uptime_secs: embassy_time::Instant::now().as_secs(),
         heals: heal::count(),
         watchdog: watchdog::count(),
+        clips_paused: watchdog::clips_suspect(),
         last_heal,
         temp_dc,
         light,

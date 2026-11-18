@@ -108,7 +108,9 @@ kept.
 
 If a clip ever hangs the clock while it plays, the clock resets itself
 and from then on rings and previews in notes only (a clip's melody as
-the beeps), so the alarm still sounds. A firmware update, a new clip
+the beeps), so the alarm still sounds. The clock page says "Clips
+paused" above the alarm sound while that holds, `/api` has
+`clips_paused`, and Home Assistant shows a "Clips paused" problem. A firmware update, a new clip
 pack or a power cycle brings the clips back.
 
 ### Clip packs
@@ -285,7 +287,8 @@ integration as a device named after its hostname, with no YAML: the
 colour, brightness, alarm time, armed, skip, days, melody, 12 hour
 clock, panel temperature and thermometer offset as entities you can
 set, the room temperature, light, signal, uptime and self-heals as
-sensors, a binary sensor that is on while the alarm rings, and
+sensors, a binary sensor that is on while the alarm rings, another
+that is on while the clips are paused, and
 buttons to play the melody, silence it or a ringing alarm, and reload
 the clock. The broker must speak MQTT 5 (Mosquitto 1.6 and later, which includes the
 Home Assistant add-on, does); the connection is plain, not TLS, so

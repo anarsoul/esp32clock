@@ -42,7 +42,7 @@ pub type TopicBuf = heapless::String<48>;
 
 /// Longest discovery payload the firmware's buffer must hold; the test
 /// prints the worst case.
-pub const DISCOVERY_MAX: usize = 4608;
+pub const DISCOVERY_MAX: usize = 5120;
 
 /// What the MQTT task is doing, for the page and the JSON.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -420,6 +420,13 @@ pub fn write_discovery(out: &mut impl core::fmt::Write, d: &Device<'_>) -> core:
     c.icon("alarm-light")?;
     c.close()?;
 
+    // Why the alarm sounded in beeps: `form::Status::clips_paused`.
+    c.open("clips_paused", "binary_sensor", "Clips paused")?;
+    c.on_off("clips_paused")?;
+    c.out.write_str(",\"dev_cla\":\"problem\"")?;
+    c.diagnostic()?;
+    c.close()?;
+
     c.open("play", "button", "Play melody")?;
     c.press(Command::Play)?;
     c.icon("music-note")?;
@@ -454,6 +461,7 @@ mod tests {
             uptime_secs: 100,
             heals: 0,
             watchdog: 0,
+            clips_paused: false,
             last_heal: Some(HealStamp { unix_secs: 1_800_000_000, weekday: 2, hour: 23, minute: 59, ago_secs: None }),
             temp_dc: None,
             light: Some(50),
@@ -538,7 +546,7 @@ mod tests {
         assert_eq!(v["stat_t"], "onebitdawn/clock-ffffff/state");
         assert_eq!(v["avty_t"], "onebitdawn/clock-ffffff/status");
         let cmps = v["cmps"].as_object().unwrap();
-        assert_eq!(cmps.len(), 19);
+        assert_eq!(cmps.len(), 20);
 
         let mut json = String::new();
         write_json(&mut json, &Settings::DEFAULT, &status()).unwrap();

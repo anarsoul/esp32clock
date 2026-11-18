@@ -105,8 +105,8 @@ What takes it:
   listener until it was hoisted (2026-11-07).
 - The MQTT task's future holds its socket buffers (1 KB receive, 2 KB
   send), the 1 KB `BumpBuffer`, the state JSON (1 KB) and the
-  discovery payload (`mqtt::DISCOVERY_MAX`, 4608; the worst case is
-  4174, printed by the `mqtt` test): about 15 KB in all.
+  discovery payload (`mqtt::DISCOVERY_MAX`, 5120; the worst case is
+  4771, printed by the `mqtt` test): about 15 KB in all.
 - The clip ring is 16 KB in every build, since any build may meet a
   pack.
 

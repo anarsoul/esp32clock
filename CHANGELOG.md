@@ -90,7 +90,8 @@ from `http://<ip>/update`; its settings survive the update.
   what caused the last. If it was a clip that hung the clock, the
   alarm and the previews play notes only until a firmware update, a
   new clip pack or a power cycle, so a bad clip cannot silence the
-  alarm.
+  alarm; the clock page says so, `/api` has `clips_paused` and Home
+  Assistant a "Clips paused" binary sensor.
 - A sampled clip can be IMA ADPCM, four bits a sample: half the flash
   of the same clip as PCM, 8 KB a second at 16 kHz.
   `scripts/wav2pcm.sh in.wav out.adp` makes one from a sound file and

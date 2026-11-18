@@ -309,6 +309,30 @@ and a preview is ignored then; it is the same `resolve`), a pack
 upload's clearing. The second ring was heard as beeps by the user
 (test-clock has a speaker connected).
 
+**A second review's addition, 2026-11-17: the pause is shown.** A user
+whose alarm beeps, and whose Play on the chosen clip beeps too, would
+take the pack or the firmware for broken. `form::Status::clips_paused`
+(from `watchdog::clips_suspect`): a line on the clock page under the
+next alarm and above the alarm sound, armed or not, and
+`"clips_paused"` in `/api` beside `watchdog`, so in the MQTT state as
+well. The Home Assistant entity, a diagnostic binary sensor of the
+`problem` class, took the discovery payload with a full pack to 4771
+bytes, past `DISCOVERY_MAX`'s 4608, so the limit is 5120 now (the
+user: "Raise the limit, grow a buffer"); `.stack` went from 41960 to
+41448 bytes, the 512 of the MQTT task's buffer. Twenty entities. One host test (the line with the flag and
+without, the JSON both ways), 182 in all; the clock page at its worst
+is 6101 bytes of 8032.
+
+Run on test-clock the same day: a preview of `keygen` with
+`/hang/clip` posted first, the feeder's reset, and then
+`"clips_paused":true` in `/api` and the line on the clock page between
+the skip checkbox and "Alarm sound" (no alarm armed); the plain build
+sent to `/ota` put both back (`false`, no line).
+With the entity in, test-clock's discovery message was read off the
+broker after a `/reload`: 4450 bytes, twenty components, `clips_paused`
+among them as written; the session stayed connected. Not looked at in
+Home Assistant itself.
+
 Still owed: a soak with no reset, and the longest gap read after a
 clip, a save, an upload and a clip pack upload.
 
