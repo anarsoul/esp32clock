@@ -10,6 +10,20 @@ The pin drives a PNP with its emitter at +5 V. Any driven level turns
 it on, including a 3.3 V high; only a released open-drain line is
 silent. Never make it push-pull.
 
+The parts:
+
+- Q1 is an S8550 in TO-92: 625 mW at 25 °C, about 200 °C/W, 500 mA,
+  −25 V (typical datasheet figures; makers differ a little).
+- The buzzer's coil is 16 Ω (the user's measurement, 2026-11-17; the
+  README said 32 Ω until then).
+- The most Q1 can dissipate with that load is at half the supply
+  across it: 2.5 V, 156 mA, 0.39 W, whatever its gain and R5. That is
+  a pin stuck low or a transistor held half on; inside the rating,
+  with the junction near 120 °C in a warm case. Calculated.
+- R5 sets the base current, not the pad: about 0.43 mA at 10 kΩ and
+  0.84 mA at 5.1 kΩ. Saturating into 16 Ω takes about 300 mA of
+  collector current, so Q1 does not saturate with either. Calculated.
+
 The pin under a clip:
 
 - The clip drives it from I2S0 with the GPIO matrix's inverter on, so
@@ -36,8 +50,9 @@ The bit rate:
   buzzer (`bench/`, 2026-11-13: a BC557, 5.1 k, a 100 Ω load). There a
   silent clip hissed at 128 bits and not at 256, and clips with heavy
   bass were distorted at either until a 2.2 kΩ resistor from base to
-  emitter let the saturated transistor turn off in time. No clock has
-  that resistor; whether an S8550 saturates depends on its load.
+  emitter let the saturated transistor turn off in time. On a clock's
+  own board that resistor changes nothing on the scope (2026-11-17,
+  under the mod below): into 16 Ω the S8550 does not saturate.
 - The converter at 64 bits a sample is white noise.
 - The clip's bits come in long pulses: a per-bit sigma-delta stream at
   256 kbit/s was quieter than one pulse per 16 kHz period
@@ -61,6 +76,16 @@ neither part:
 - R5 at 5.1 kΩ instead of 10 kΩ, whose doubled base current squares
   the collector's falling edge (a slope with 10 kΩ) and makes the
   buzzer louder.
+
+The mod was four parts until 2026-11-17, with RBE (2.2 kΩ from Q1's
+base to its emitter) and a BAT42 from GPIO5 to 3.3 V. The user's scope
+that day, on a clock's board:
+
+- The signal with all four is the same as with the diode and R5 at
+  5.1 kΩ alone, so RBE and the BAT42 are out of the README.
+- A BAT42 with no RBE keeps Q1 on all the time: never fit it alone.
+  With RBE as well Q1 is off while the pin is released.
+- `speaker-mod/` keeps its own RBE and BAT42, with other values.
 
 ## The GDMA's `out_dscr`
 

@@ -27,6 +27,9 @@ The user's, and what the readiness check of the same day left open.
   (RBE beside Q1, R5, the BAT42 under the adapter) and the solder side
   (the flyback diode across the buzzer), under the mod's four changes
   in the README with a caption that says where each part is.
+  Retaken by the user the same day without RBE and the BAT42, which
+  the scope showed change nothing (`agents/hardware.md`, the buzzer's
+  mod): the mod is two changes, the diode and R5.
 - [ ] `CHANGELOG.md`: `[Unreleased]` made the version's section, the
   compare links under it.
 - [x] An install of an image with no token from the web installer or

@@ -85,7 +85,7 @@ display and differs in these ways:
 | pin header | the one that comes with the module |
 | 2 × 10 kΩ 0603 resistors, ideally 1 % | R1 and R2 on the adapter; only needed for the temperature and light sensors |
 | 10 µF 25 V electrolytic capacitor | replaces the kit's C3, optional but recommended |
-| 1N4148 diode, a 5.1 kΩ and a 2.2 kΩ resistor, a BAT42 diode | the buzzer mod: optional, but the clips do not sound good without it |
+| 1N4148 diode, a 5.1 kΩ resistor | the buzzer mod: optional, but the clips do not sound good without it |
 | 5 V USB power supply | 1 A recommended; 500 mA works |
 
 ### The clock board
@@ -128,7 +128,7 @@ contacts and there is clearance under the adapter, fit the socket and
 the adapter is removable; if not, solder the adapter's header straight
 into the U4 footprint.
 
-**The buzzer mod, optional:** four changes that make the alarm louder
+**The buzzer mod, optional:** two changes that make the alarm louder
 and cleaner. The beeps and the note melodies are fine on a stock
 board; the [clips](#clips) are not, so do the mod if you want them:
 without it they are quiet and distorted. The firmware is the same
@@ -141,31 +141,19 @@ either way.
   ground every time Q1 turns off.
 - 5.1 kΩ for R5 instead of 10 kΩ, which doubles Q1's base current, so
   the transistor switches harder and the buzzer is louder.
-- RBE, a 2.2 kΩ resistor the board has no place for, from Q1's base
-  to its emitter, soldered across those two legs. It takes the charge
-  out of the base when the pin lets go, so the transistor turns off in
-  time; without it a clip with heavy bass is distorted. Of the four
-  this is the one a clip needs most.
-- A BAT42 Schottky diode (a BAT54 will do) from GPIO5 to 3.3 V, the
-  anode to the pin and the cathode, the end with the band, to 3.3 V.
-  RBE pulls the base, and through R5 the released pin, up to the 5 V
-  rail, more than the ESP32-C3's pin is rated for; the diode holds
-  the pin at about 3.5 V, and Q1 stays off. Fit it whenever you fit
-  RBE.
 
 <p align="center">
-  <img src="pics/board_top.jpg" width="48%" align="top" alt="The component side of a board with the buzzer mod: RBE beside Q1, R5, and the BAT42 under the adapter">
+  <img src="pics/board_top.jpg" width="48%" align="top" alt="The component side of a board with the buzzer mod: R5 by the adapter, Q1 and the buzzer">
   <img src="pics/board_bottom.jpg" width="48%" align="top" alt="The solder side of the same board: the flyback diode across the buzzer's pins">
 </p>
 
-A board with the mod. On the component side RBE lies beside Q1, on
-the transistor's legs; R5 is in its place above the adapter; and the
-BAT42 hangs under the adapter between the module's GPIO5 and 3.3 V
-pins. On the solder side the 1N4148 is across the buzzer's two pins,
-in the corner by the buttons. The green on top of the buzzer is
-masking tape over its opening, with a small hole made by a needle,
-which makes a Helmholtz resonator of the buzzer's cavity: not one of
-the four changes, but the tunes come through louder.
+A board with the mod. On the component side the 5.1 kΩ R5 is in its
+place by the adapter. On the solder side the 1N4148 is across the
+buzzer's two pins, in the corner by the buttons. The green on top of
+the buzzer is masking tape over its opening, with a small hole made
+by a needle, which makes a Helmholtz resonator of the buzzer's
+cavity: not one of the two changes, but the tunes come through
+louder.
 
 With the mod Q1 gets hot to the touch while a clip of sampled sound, a
 tracker module, a SID or a PT3 tune plays. Such a clip is a stream of
@@ -173,8 +161,8 @@ pulses 125 to 250 ns long, and the transistor cannot switch that
 fast: with under a milliamp of base current its edges are no shorter
 than the pulses. So for the length of the clip it never gets fully on
 or off and sits in its linear region, half on, with the buzzer's mean
-current through it: about 78 mA at 2.5 V at the worst, 0.2 W for the
-buzzer's 32 Ω coil on 5 V, inside the S8550's rating. It stays cold
+current through it: about 156 mA at 2.5 V at the worst, 0.4 W for the
+buzzer's 16 Ω coil on 5 V, inside the S8550's rating of 0.625 W. It stays cold
 when idle, on the beeps and on a beeper clip, whose pulses are long
 enough to switch on. Q1 stands next to the NTC, so the firmware holds
 the temperature at what it was before such a clip, for its length and
