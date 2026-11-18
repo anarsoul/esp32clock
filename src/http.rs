@@ -48,7 +48,7 @@ use crate::buzzer;
 use crate::config::HTTP_PORT;
 use crate::form::{self, Allow, FormError, HealStamp, LocalNow, Note, Page, Status};
 use crate::net::{self, Mode};
-use crate::{auth, clock, display, heal, mqtt, ota, pack, sensors, settings};
+use crate::{auth, clock, display, heal, mqtt, ota, pack, sensors, settings, watchdog};
 
 /// The tab icon: the panel as pixel art, a 32 px `12:34` and a 16 px
 /// `1:23` as PNG entries in one ICO, served at the path browsers ask
@@ -437,6 +437,7 @@ pub fn status() -> Status {
         mode: if net::mode() == Mode::AccessPoint { "ap" } else { "sta" },
         uptime_secs: embassy_time::Instant::now().as_secs(),
         heals: heal::count(),
+        watchdog: watchdog::count(),
         last_heal,
         temp_dc,
         light,
@@ -704,6 +705,26 @@ fn respond(out: &mut Response, req: &Request<'_>, body: &[u8]) -> Result<Then, c
         // A deliberate reset, which is also the way to test the carry:
         // no hold for a ringing alarm.
         (Method::Post, "/reload") => return restart(out, req, "rebooting with the time carried over", Then::Reload),
+        // The bench's hangs, for trying the watchdog: watchdog.rs.
+        #[cfg(feature = "bench-hang")]
+        (Method::Post, path) if path.starts_with("/hang/") => {
+            let hang = watchdog::bench::Hang::parse(&path["/hang/".len()..]);
+            match (hang, auth::token_or_pin(req.authorization)) {
+                (Some(hang), Ok(())) => {
+                    watchdog::bench::request(hang);
+                    status_line(out, "200 OK", "text/plain")?;
+                    writeln!(out, "hanging: {hang:?}")?;
+                }
+                (None, _) => {
+                    status_line(out, "404 Not Found", "text/plain")?;
+                    out.write_str("no such hang\n")?;
+                }
+                (_, Err(e)) => {
+                    status_line(out, e.status, "text/plain")?;
+                    writeln!(out, "{}", e.text)?;
+                }
+            }
+        }
         _ if net::mode() == Mode::AccessPoint => {
             // The captive portal: a phone's probe lands here through the
             // DNS and is sent to the page, which the phone then shows.

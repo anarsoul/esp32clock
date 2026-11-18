@@ -36,7 +36,8 @@ shape everything else:
 | root (`onebitdawn`) | the tasks and drivers around it: `src/*.rs` and `src/bin/main.rs`. Re-exports `core`'s modules from `src/lib.rs`, so both halves are `crate::…` |
 
 A module with both halves has the same name in each crate (`clock`,
-`carry`, `http`, `ota`, `pack`, `buttons`, `clip`, `mqtt`, `sensors`): types
+`carry`, `http`, `ota`, `pack`, `buttons`, `clip`, `mqtt`, `sensors`,
+`watchdog`): types
 and rules in `core/src/`, the peripheral and the task in `src/`.
 Build-time configuration (credentials, timezone, token, clips) is read
 by `core/src/config.rs` and `core/build.rs`.
@@ -46,13 +47,15 @@ by `core/src/config.rs` and `core/build.rs`.
 `src/bin/main.rs`, in order:
 
 1. Release the buzzer pin (open drain, high) before anything else.
-2. Open the flash; map the `clips` partition, if the table has one,
-   and put the clip pack it holds in the melody table (`pack::init`);
-   load the settings record, fill what it lacks from
+2. Start the watchdog's timer (`watchdog::start`); open the flash;
+   read the reset reason and the RTC-RAM carry record (`carry::init`),
+   restore a carried time, check the OTA slot and roll back an image
+   that never confirmed itself (`ota::init`), so a boot that hangs
+   after this is counted; map the `clips` partition, if the table has
+   one, and put the clip pack it holds in the melody table
+   (`pack::init`).
+3. Load the settings record, fill what it lacks from
    the build's seeds, publish it (`settings::init`).
-3. Read the reset reason and the RTC-RAM carry record (`carry::init`);
-   check the OTA slot and roll back an image that never confirmed
-   itself (`ota::init`); restore a carried time.
 4. Choose the mode for this whole boot: **station**, or **access
    point** if no network is stored or the carry record asks for it.
    The driver does not do both.
@@ -71,6 +74,7 @@ executor** runs the rest cooperatively.
 | interrupt | `scan::scan_task` | SPI2, DMA channel 0, GPIO6–9 | starts the display ring; afterwards only stop, resume, halt |
 | interrupt | `clip::clip_task` | I2S0, DMA channel 1, the buzzer pin while a clip plays | keeps the sound ring filled ahead of the DMA |
 | thread | `display::display_task` | the UI state | tick, button or settings change → `ui` → render → publish; rings the alarm |
+| thread | `watchdog::watchdog_task` | the RTC watchdog | feeds it while the display task, and the clip task during a clip, check in; resets the clock when one does not |
 | thread | `buttons::button_task` | GPIO3, GPIO4 | debounce into press events |
 | thread | `buzzer::buzzer_task` | LEDC, the buzzer pin | note melodies; hands clips to the clip task |
 | thread | `sensors::sensor_task` | ADC1, GPIO0, GPIO1 | filtered NTC and LDR readings |
@@ -214,7 +218,7 @@ argument.
 | where | what | survives |
 | --- | --- | --- |
 | `nvs` partition | the settings record (`core::settings`): versioned, append-only, so an older image reads a newer record by its prefix | everything |
-| RTC RAM | the carry record (`carry`): Unix time, alarm bookkeeping, the skip flag, self-heal count, OTA boot count, the access-point flag | software resets only |
+| RTC RAM | the carry record (`carry`): Unix time, alarm bookkeeping, the skip flag, self-heal count, OTA boot count, the access-point flag, the watchdog's count | software and watchdog resets only |
 | `otadata` | which app slot boots | everything |
 | `clips` partition | the clip pack (`core::pack`); absent on a clock flashed before it existed, which the firmware allows for | everything but a web install, which writes the default pack |
 
@@ -233,6 +237,18 @@ scan on a dark frame and writes the time to the carry record first:
   connects keep failing; waits out a ringing alarm.
 - `heal::switch_mode`: between station and access point; starts the
   carry record over.
+
+A hang is ended by the watchdog (`src/watchdog.rs` over
+`core::watchdog`), in two layers. The RTC watchdog timer resets the
+chip `HARD_TIMEOUT_SECS` after its last feed, whatever the firmware is
+doing. Its feeder is a task on the thread executor, the lowest context
+there is, so a feed proves that the interrupt executor, the radio's
+threads and every critical section gave the CPU back; and it feeds
+only while each expected party has checked in within `DEADLINE_MS`,
+which catches a task parked on an await while the rest runs. A missed
+check-in is a reset by the feeder, the panel blanked first if the scan
+still answers; the timer's own reset cannot blank it. Either is
+counted in the carry record, which survives both.
 
 After a software reset the panel shows the time again before Wi-Fi is
 up. A panic resets through `custom_halt` in `main.rs` without the

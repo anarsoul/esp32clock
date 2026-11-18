@@ -10,8 +10,9 @@
 //! raise the access point.
 //!
 //! The record is used only after a software reset, which is what the
-//! self-heal and the panic handler do. Any other reset reason, power-on,
-//! brown-out, a watchdog, the flasher's reset, discards it: `init` zeroes
+//! self-heal and the panic handler do, or a reset by the RTC watchdog
+//! (`watchdog`), which leaves RTC RAM as it was. Any other reset reason,
+//! power-on, brown-out, the flasher's reset, discards it: `init` zeroes
 //! the record so nothing stale can be read, and the boot line says so.
 
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -49,7 +50,7 @@ fn write_raw(v: [u32; WORDS]) {
 /// the reason and whether the record was kept.
 pub fn init() -> (Option<SocResetReason>, bool) {
     let reason = esp_hal::system::reset_reason();
-    let soft = matches!(reason, Some(SocResetReason::CoreSw | SocResetReason::Cpu0Sw));
+    let soft = matches!(reason, Some(SocResetReason::CoreSw | SocResetReason::Cpu0Sw)) || crate::watchdog::was_reset_by(reason);
     let keep = soft && readable(read_raw()[0]);
     if !keep {
         write_raw(encode(&Carried::default()));

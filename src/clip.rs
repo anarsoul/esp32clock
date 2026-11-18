@@ -82,6 +82,7 @@ use log::{info, warn};
 use static_cell::ConstStaticCell;
 
 use crate::melody;
+use crate::watchdog::{self, Party};
 
 /// The ring's bytes. In every build, with clips built in or not: the
 /// clips may be a pack's (`pack.rs`).
@@ -218,7 +219,11 @@ pub async fn clip_task(hw: Hardware, pin: GPIO5<'static>) -> ! {
         // of it.
         if let Some(data) = melody::clip_data(index) {
             PLAYING.store(data.as_ptr() as usize, Ordering::Relaxed);
+            // Watched from here to the clip's end; the loop that fills
+            // the ring checks in.
+            watchdog::expect(Party::Clip, true);
             sampler.play(&mut pin, data, looping, &STOP).await;
+            watchdog::expect(Party::Clip, false);
             PLAYING.store(0, Ordering::Relaxed);
         }
         DONE.signal(());
@@ -367,6 +372,9 @@ impl Sampler {
             if let Either::Second(c) = select(Timer::after(tick), cancel.wait()).await {
                 break Some(c);
             }
+            #[cfg(feature = "bench-hang")]
+            watchdog::bench::park(Party::Clip).await;
+            watchdog::check_in(Party::Clip);
             let played = pacer.played(position(first), chunks_in(started.elapsed().as_micros(), bit_rate));
             // Past the last chunk and the one after, which is zeros.
             if last.is_some_and(|last| played > last + 1) {

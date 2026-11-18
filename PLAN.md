@@ -154,6 +154,141 @@ on a breadboard with the firmware as it is, the level at the
 amplifier's input, the hiss with a silent clip and with Wi-Fi busy;
 then the setting and the new pin, and the two side by side.
 
+### A watchdog — designed, built and run on test-clock 2026-11-17; a soak still owed
+
+The backlog's "No watchdog" (second pass): `esp_hal::init` disables
+every watchdog, so a hang that is not a panic leaves the panel dark, or
+one row lit, until the power is cut, and a new image that hangs is
+never rolled back.
+
+What can hang, and what it takes with it:
+
+| context | how | what else stops |
+| --- | --- | --- |
+| thread executor | a task spins without an `await` | every thread-mode task |
+| thread executor | a task parked on an `await` that never completes | nothing else |
+| interrupt executor (scan, clip) | a spin | all of thread mode |
+| esp-radio's threads | a spin | the main thread; a block only stops Wi-Fi, which is `heal`'s |
+| a critical section | waits for ever | everything, interrupts included |
+
+Two layers.
+
+**The RWDT** (RTC slow clock, independent of the main system),
+enabled right after `esp_hal::init`: stage 0 `ResetCore` at
+`watchdog::HARD_TIMEOUT`, 60 s, and `ResetSystem` one stage later.
+`ResetCore` leaves the RTC domain alone, so the carry record should
+survive (esp-hal zeroes persistent RAM on power-on only); a bench
+check. 60 s and not a few seconds (the user, 2026-11-17): a clock in
+a reset loop still has time to join the network and say something
+each boot. It also means the boot needs no feeding by hand. The cost
+is a row latched at full current for up to a minute in the worst hang.
+
+It is fed from one place, `watchdog_task` on the thread executor, once
+a second. That is the lowest context there is, so a feed proves the
+interrupt executor, the radio's threads and the critical sections all
+gave the CPU back. Never feed from an interrupt or the interrupt
+executor.
+
+**Check-ins**, for the task that waits for ever while the rest runs.
+The feeder feeds only if every party that is expected has checked in
+within `watchdog::DEADLINE`, 10 s:
+
+- `display_task`, every pass of its loop (its wait is bounded at about
+  a second);
+- `clip_task`, only while a clip plays: expected from the start of a
+  clip to its end, which is also the interrupt executor's sign of life.
+
+Not watched: the tasks that wait on an event by design (buttons,
+buzzer, the listeners, persist), the scan ring's position (decided
+against, 2026-11-17), and the network, which is `heal`'s: a router
+that is off must not become a reset loop.
+
+On a missed check-in the feeder stops feeding, writes who it was into
+the carry record, then tries `scan::halt`, `clock::carry_time` and a
+software reset; if that hangs too the RWDT ends it within the minute.
+No wait for a ringing alarm and no MQTT goodbye.
+
+The parties, the deadline and the verdict are `core/src/watchdog.rs`,
+under test; the RWDT and the task are `src/watchdog.rs`.
+
+Across the reset:
+
+- `carry::init` keeps the record on the RTC-watchdog reset reasons as
+  on the software ones.
+- One word appended to the carry record (a new layout, the low byte of
+  `MARK`): watchdog resets since power-up and the last culprit (a
+  party, or none for the hardware's own reset). In the boot log, the
+  heartbeat and `/api` (a new status key); not on a page, not in MQTT.
+- `ota_boots` survives a watchdog reset with the record, so an image
+  that hangs is rolled back. `carry::init` and `ota::init` move ahead
+  of `pack::init` and the settings load, or an image that hangs there
+  is never counted. (`clock::restore_carried` before `ota::init` is
+  the fourth pass's "stale time" item; same move.)
+- After the hardware's reset the carried time is the last the display
+  wrote, up to `HARD_TIMEOUT` old, and is shown as it is until SNTP:
+  within a minute of right is good enough (the user, 2026-11-17).
+- The heartbeat gains the longest gap between two feeds, so the
+  figures above can be judged from a soak.
+
+Decided against (the user, 2026-11-17): stage 0 as an interrupt that
+stores the interrupted program counter in the carry record, so the
+boot log would name where a spin was.
+
+Built 2026-11-17 as designed: `core/src/watchdog.rs` (six tests) and
+`src/watchdog.rs`; the carry record is layout 5 with the word
+appended, read only under a mark that has it, since an older image
+leaves the tenth word stale. `ota::init` runs before the settings
+are loaded now, so its boot line no longer says whether a token is
+set (the `boot:` line does). Builds, clippy clean, 179 host tests.
+
+Not known until it is run: whether RTC RAM is as it was after the
+`ResetCore`; whether espflash still flashes and its monitor still
+resets a clock whose RTC watchdog is running (the timer is in the RTC
+domain and outlives the USB reset; esptool turns it off over
+USB-JTAG for that reason).
+
+Run on test-clock 2026-11-17, with a build of the `bench-hang`
+feature (`watchdog::bench`: `POST /hang/<kind>` with the token, and
+`BENCH_HANG=boot` for an image that spins in `main` after `ota::init`),
+the serial log read beside `/api`:
+
+| hang | ended by | back, after the request | boot line |
+| --- | --- | --- | --- |
+| `thread`, a spin in a thread-mode task | the timer | 70 s | `CoreRtcWdt`, record kept, "by the hardware timer" |
+| `irq`, a spin on the interrupt executor | the timer | 70 s | the same |
+| `cs`, a spin in a critical section | the timer | 70 s | the same |
+| `display`, the task parked | the feeder, 9.5 s after the park | 20 s | `CoreSw`, "by the display task" |
+| `clip`, the task parked in a preview | the feeder, 10.2 s after | 20 s | `CoreSw`, "by the clip task" |
+
+- RTC RAM is as it was after the `ResetCore` (the ROM prints it as
+  `rst:0x9 (RTCWDT_SYS_RST)`, esp-hal reads `CoreRtcWdt`): the count,
+  the time and `ota_boots` all came across, the time a minute old.
+- The `BENCH_HANG=boot` image sent to `/ota`: boot 1 of 2 and boot 2
+  of 2 each spun and were reset by the timer with `ota_boots` going
+  1, 2, 3, the third boot switched back, and the clock answered from
+  `ota_0` 129 s after the upload, the count up by two. The time it
+  showed then was two minutes old until SNTP.
+- espflash 4.7.0 flashes a clock whose timer is running (10 s, twice);
+  the USB reset discards the record, so the count starts at 0.
+- Seen by the way: with the board left in the ROM's download mode
+  ("waiting for download", after espflash's monitor was attached with
+  `--no-reset` to a freshly flashed board), the timer the firmware had
+  started fired a minute later and booted the firmware. The RTC
+  watchdog outlives a reset into the ROM; nothing here depends on it.
+- The heartbeat after a boot with a Wi-Fi join and an MQTT session:
+  longest feed gap 1261 ms. No clip, save or upload was in that
+  minute.
+- The plain build answers `POST /hang/thread` with a 404.
+
+Still owed: a soak with no reset, and the longest gap read after a
+clip, a save, an upload and a clip pack upload.
+
+The checks as they were listed: the record kept across a `ResetCore`; a spin in
+thread mode, a spin on the interrupt executor and a critical section
+that never ends each reset the clock in a minute with the count up; a
+parked display task is named; an OTA of an image that hangs is rolled
+back; a soak with no reset and the longest gap in the heartbeat.
+
 ## An install from nothing on the bench, access point included — run 2026-11-17
 
 The release list's install, and the access point's checks the session
@@ -442,6 +577,7 @@ is made or is no longer wanted, and put the result in the section.
 - **The pages after a UX review: PIN at the click, a saved notice, the bad field named** — built 2026-11-15, run on test-clock in headless Chromium; the setup form the user's, 2026-11-15; the setup form and a real upload from the page run on test-clock 2026-11-17 ("An install from nothing").
 - **PCM clips at half the flash: IMA ADPCM, `ADP1`** — the A/B heard on white-clock 2026-11-16 ("not bad", "way better than PCM 8k"); the format built 2026-11-16 and heard by the user on a speaker the same day ("audible, but acceptable"); the serial log's clip line read on test-clock; the buzzer through the clock's own decoder not yet.
 - **A clip of a version no player reads is refused** — 2026-11-17, built and tested on the host; no upload of such a pack tried on a clock.
+- **A watchdog** — built and every reset path run on test-clock 2026-11-17; a soak, and the longest feed gap after a clip, a save and the two uploads, not yet.
 - **Forward compatibility before the first public release** — 2026-11-17, built, tested on the host and on test-clock; not committed, not tagged.
 
 Headings that still say planned or not run, though the work is in
@@ -514,7 +650,9 @@ Bugs, in rough order of value:
 
 Gaps:
 
-- **No watchdog.** `esp_hal::init` disables the SWD, RWDT and both
+- ~~**No watchdog.**~~ Built 2026-11-17 ("A watchdog", above), with a
+  minute's timeout, not a few seconds, and run on test-clock.
+  `esp_hal::init` disables the SWD, RWDT and both
   timer-group watchdogs and nothing re-enables one. A hang that is not a
   panic (a lockup in the Wi-Fi driver, a critical section waiting on
   something, an infinite loop in a freshly uploaded image) leaves the
@@ -634,7 +772,8 @@ Gaps:
   empty SSID, which the boot turns back into an access point. A
   harmless loop, but the script sees "saved" and a reset for nothing.
   Fix: the same guard on `/api` in access-point mode.
-- **The OTA rollback carries a stale time.** `ota::init` runs before
+- ~~**The OTA rollback carries a stale time.**~~ Fixed 2026-11-17 with
+  the watchdog: `restore_carried` runs before `ota::init`. `ota::init` runs before
   `clock::restore_carried` in `main.rs`, so its `carry_time()` is a
   no-op (`unix_micros` is `None`) and the record keeps the time written
   at the end of the previous boot; the restore then adds `RESET_PAUSE`

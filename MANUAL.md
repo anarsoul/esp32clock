@@ -103,7 +103,8 @@ Then install it, either way:
 
 The new image goes to the other slot; a failed or interrupted write
 leaves the running one in place, and a new image that cannot reach the
-network within three boots is rolled back. Settings are kept.
+network within three boots, or hangs, is rolled back. Settings are
+kept.
 
 ### Clip packs
 

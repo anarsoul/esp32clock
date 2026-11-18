@@ -25,3 +25,4 @@ pub mod ring;
 pub mod scan;
 pub mod sensors;
 pub mod storage;
+pub mod watchdog;

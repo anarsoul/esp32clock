@@ -453,6 +453,7 @@ mod tests {
             mode: "sta",
             uptime_secs: 100,
             heals: 0,
+            watchdog: 0,
             last_heal: Some(HealStamp { unix_secs: 1_800_000_000, weekday: 2, hour: 23, minute: 59, ago_secs: None }),
             temp_dc: None,
             light: Some(50),

@@ -109,7 +109,9 @@ changes): `WIFI_SSID`, `WIFI_PASSWORD`, `TZ_RULE` (or the older
 and `CLIP_PDM_BITS` (`agents/clips.md`). The network, the token, the
 timezone and the broker are seeds: a stored record wins over a later
 build's constants. `ESP_LOG` on the command line overrides the
-config's `info`.
+config's `info`. The `bench-hang` feature (never in a release) adds
+`POST /hang/<kind>` and reads `BENCH_HANG=boot` in `src/watchdog.rs`,
+for trying the watchdog on the bench (`agents/modules.md`).
 
 `rust-version` must stay at 1.95 or higher or cargo's MSRV-aware
 resolver picks an esp-rom-sys that esp-storage cannot build with.
@@ -163,16 +165,22 @@ must keep.
   the time carried.
 - A station that cannot join never turns into an access point by
   itself.
+- The RTC watchdog is fed by `watchdog_task` alone, on the thread
+  executor, never from an interrupt or the interrupt executor: a feed
+  must prove everything above it gave the CPU back. A task checks in
+  (`watchdog::Party`) only if every wait in its loop is bounded well
+  under `DEADLINE_MS`; the network's health is `heal`'s, not the
+  watchdog's.
 - A failed upload, firmware or pack, leaves what was running in use
   wherever it can; check before anything is erased.
 
 ## Layout
 
 The pure modules live in `core/src/` and the firmware re-exports them
-from `src/lib.rs`, so firmware code says `crate::settings`. Nine
+from `src/lib.rs`, so firmware code says `crate::settings`. Ten
 modules are split, the pure half in `core/src/` and the hardware half
 in `src/` under the same name: `buttons`, `clock`, `carry`, `http`,
-`ota`, `pack`, `clip`, `mqtt`, `sensors`. Each `core` module ends with
+`ota`, `pack`, `clip`, `mqtt`, `sensors`, `watchdog`. Each `core` module ends with
 its `#[cfg(test)] mod tests`. The full account of each file is
 `agents/modules.md`.
 
@@ -204,6 +212,7 @@ its `#[cfg(test)] mod tests`. The full account of each file is
 | `src/mqtt.rs` | the MQTT session task |
 | `src/storage.rs` | the one flash handle, the settings map, the persist task |
 | `src/heal.rs` | the deliberate resets |
+| `core/src/watchdog.rs`, `src/watchdog.rs` | the deadlines, parties and the carry word; the RTC watchdog and its feeder task |
 | `src/carry.rs`, `src/clock.rs` | the RTC-RAM record; the time and its carry |
 | `src/ota.rs`, `src/pack.rs` | the firmware upload and rollback; the `clips` partition and its upload |
 | `src/sensors.rs`, `src/buttons.rs` | the ADC task; the GPIO task |
@@ -297,7 +306,8 @@ Each with its measurements in `agents/hardware.md`.
   deliberate reset goes through `heal::reset`, which waits for
   `scan::halt` (the ring ends on its blanking frame, and the stop
   is latched against an upload's `resume`) first. The panic
-  path in `custom_halt` cannot do this and is the one exception.
+  path in `custom_halt` and the RTC watchdog's own reset cannot do
+  this and are the exceptions.
 - The heartbeat's `scan` field is images published, stops (and stops that
   had to cancel the transfer, which the bench never showed), running or
   halted, and the index of the descriptor the DMA is reading (0 the conf
@@ -379,7 +389,8 @@ release from that one on, with the newer one's data in flash:
   under a second key. A new major version of `sequential-storage`
   must read the map as 8.0 wrote it.
 - **The carry record** is append-only from layout 4: a later layout
-  adds words after the nine and bumps the low byte of `MARK`;
+  adds words after the nine and bumps the low byte of `MARK` (layout 5
+  added the watchdog's word, read only under a mark that has it);
   `carry::readable` takes this layout or any later one and reads the
   words it knows, `ota_boots` among them, so an update or a rollback
   across a layout change still counts its boots. An image writes the

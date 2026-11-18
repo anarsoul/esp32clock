@@ -39,4 +39,5 @@ pub mod shape;
 pub mod sid;
 pub mod tz;
 pub mod ui;
+pub mod watchdog;
 pub mod xm;

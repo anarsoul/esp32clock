@@ -33,7 +33,7 @@ use onebitdawn::buzzer;
 use onebitdawn::clip;
 use onebitdawn::settings::Settings;
 use onebitdawn::net::Mode;
-use onebitdawn::{buttons, carry, clock, dhcpd, display, dnsd, heal, http, mqtt, net, ota, pack, scan, sensors, settings, storage};
+use onebitdawn::{buttons, carry, clock, dhcpd, display, dnsd, heal, http, mqtt, net, ota, pack, scan, sensors, settings, storage, watchdog};
 
 // The app descriptor the esp-idf bootloader requires, with the git
 // version in it so an image file says what it is before it is flashed.
@@ -92,6 +92,10 @@ async fn main(spawner: Spawner) -> ! {
 
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
+    // The watchdog's timer, which `init` has just turned off, before
+    // anything can hang: a minute, far longer than the boot, so nothing
+    // feeds it until its task runs.
+    let rtc = watchdog::start(peripherals.RTC_TIMER);
 
     // Heap for the Wi-Fi driver, sized as esp-radio recommends.
     esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 64 * 1024);
@@ -136,6 +140,23 @@ async fn main(spawner: Spawner) -> ! {
     // Saved settings, so the first frame already has the user's colour.
     // Without a usable nvs partition they live in RAM for this boot.
     storage::init_flash(FlashStorage::new(peripherals.FLASH));
+    // The carry record and the boots of an unconfirmed image first, so
+    // an image that hangs anywhere after this is counted and rolled
+    // back. `ota::init` may reset the chip to roll back; nothing is
+    // running yet.
+    let (reason, kept) = carry::init();
+    if kept {
+        info!("boot: reset reason {reason:?}, carried over {:?}", carry::get());
+    } else {
+        info!("boot: reset reason {reason:?}, RTC carry-over discarded");
+    }
+    watchdog::note_boot(reason);
+    // With a carried time the clock is known before Wi-Fi is even
+    // started, and a rollback's reset carries it on.
+    let time_carried = clock::restore_carried();
+    ota::init();
+    #[cfg(feature = "bench-hang")]
+    watchdog::bench::at_boot();
     // The clip pack, if the table has a `clips` partition with one in
     // it: before the settings, whose melody is held to the table.
     pack::init();
@@ -164,17 +185,7 @@ async fn main(spawner: Spawner) -> ! {
             (false, true, false) => "none",
         }
     );
-    let (reason, kept) = carry::init();
-    if kept {
-        info!("boot: reset reason {reason:?}, software reset: carried over {:?}", carry::get());
-    } else {
-        info!("boot: reset reason {reason:?}, RTC carry-over discarded");
-    }
-    // Slot bookkeeping over the same flash handle. This may reset the chip
-    // to roll back an unconfirmed image; nothing is running yet.
-    ota::init();
-    // With a carried time the clock is known before Wi-Fi is even started.
-    if clock::restore_carried()
+    if time_carried
         && let Some(t) = clock::now()
     {
         info!("clock: time carried over the reset, local time {:02}:{:02}:{:02}", t.hour, t.minute, t.second);
@@ -227,6 +238,13 @@ async fn main(spawner: Spawner) -> ! {
     let hw = scan::ScanHardware { spi: peripherals.SPI2, dma: peripherals.DMA_CH0, wires, buf, spare };
     scan_spawner.spawn(scan::scan_task(hw).expect("spawn scan"));
     spawner.spawn(display::display_task(stack).expect("spawn display"));
+    // On the thread executor, the lowest context: see watchdog.rs.
+    spawner.spawn(watchdog::watchdog_task(rtc).expect("spawn watchdog"));
+    #[cfg(feature = "bench-hang")]
+    {
+        spawner.spawn(watchdog::bench::thread_task().expect("spawn bench thread"));
+        scan_spawner.spawn(watchdog::bench::irq_task().expect("spawn bench irq"));
+    }
     spawner.spawn(buttons::button_task(button_top, button_bottom).expect("spawn buttons"));
     // The clips, if any are built in, go out of I2S0 on the same pin,
     // from a task on the interrupt executor beside the scan: a clip's
@@ -272,7 +290,7 @@ async fn main(spawner: Spawner) -> ! {
         let (sent, failed, streak) = net::probe_stats();
         info!(
             "alive {} s, heap free {} bytes; scan {}; \
-             gateway probes {} sent, {} failed, {} failing now; self-heal resets {}; sensors {}; mqtt {}",
+             gateway probes {} sent, {} failed, {} failing now; self-heal resets {}; watchdog {}; sensors {}; mqtt {}",
             Instant::now().as_secs(),
             esp_alloc::HEAP.free(),
             scan::Report,
@@ -280,6 +298,7 @@ async fn main(spawner: Spawner) -> ! {
             failed,
             streak,
             heal::count(),
+            watchdog::Report,
             sensors::Report,
             mqtt::Report
         );

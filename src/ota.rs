@@ -32,7 +32,7 @@ use static_cell::StaticCell;
 pub use onebitdawn_core::ota::Slot;
 use onebitdawn_core::ota::{DESC_MAGIC, DESC_OFFSET, DESC_VERSION, HASH_APPENDED, HASH_LEN, IMAGE_MAGIC, hash_chunk, version_from};
 
-use crate::auth::{self, Refusal, refuse};
+use crate::auth::{Refusal, refuse};
 use crate::config::OTA_BOOT_LIMIT;
 use crate::storage::with_flash;
 use crate::{carry, clock, heal, scan};
@@ -88,8 +88,10 @@ pub(crate) static BUFFERS: Mutex<CriticalSectionRawMutex, Option<&'static mut Bu
 /// Read the partition table once, remember the booted and selected
 /// slots, and roll back a new image that has not been confirmed in
 /// `OTA_BOOT_LIMIT` boots. Call after `storage::init_flash` and
-/// `carry::init` and before the scan starts: a rollback resets the chip
-/// from here, with no transfer in flight.
+/// `carry::init` and before anything else that can hang, the settings
+/// not yet loaded: a boot is counted from here, and one that ends in a
+/// watchdog reset counts as any other. A rollback resets the chip from
+/// here, with no transfer in flight.
 pub fn init() {
     let mut table = [0u8; PARTITION_TABLE_MAX_LEN];
     let booted = match with_flash(|flash| partitions::read_partition_table(flash, &mut table).map(|t| t.booted_partition())) {
@@ -113,13 +115,7 @@ pub fn init() {
         "ota: firmware {VERSION}, booted from {}, otadata selects {}, updates {}",
         booted.name(),
         selected.name(),
-        if !ota_layout {
-            "impossible (no OTA slots in the table)"
-        } else if auth::token_enabled() {
-            "from the page with a PIN and from the script with the token"
-        } else {
-            "from the page with a PIN only (no API token set)"
-        }
+        if ota_layout { "possible" } else { "impossible (no OTA slots in the table)" }
     );
 
     let boots = carry::get().ota_boots;

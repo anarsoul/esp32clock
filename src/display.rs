@@ -18,7 +18,7 @@ use crate::net::{self, Mode};
 use crate::panel::{Panel, ScanImage};
 use crate::settings::{self, Settings};
 use crate::ui::{Field, IP_STEP, Ui, View};
-use crate::{auth, carry, clock, heal, scan, sensors, settings as settings_mod};
+use crate::{auth, carry, clock, heal, scan, sensors, settings as settings_mod, watchdog};
 
 /// Step time of the waiting animation and of the blink.
 const BLINK_STEP: Duration = Duration::from_millis(250);
@@ -172,6 +172,9 @@ pub async fn display_task(stack: Stack<'static>) -> ! {
     }
 
     loop {
+        #[cfg(feature = "bench-hang")]
+        watchdog::bench::park(watchdog::Party::Display).await;
+        watchdog::check_in(watchdog::Party::Display);
         let now = Instant::now();
         let time = clock::now();
         // Keep the carried time fresh for a panic reset, which cannot

@@ -96,3 +96,8 @@ codegen-units = 1     # LLVM can perform better optimizations using a single thr
 debug         = 2     # prefer slower builds but better debugging experience
 lto           = 'fat'
 opt-level     = 's'
+
+[features]
+# Hangs on purpose, for trying the watchdog on the bench (`watchdog::bench`):
+# `POST /hang/<kind>` and `BENCH_HANG=boot`. Never in a release.
+bench-hang = []

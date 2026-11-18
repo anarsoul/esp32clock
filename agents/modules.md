@@ -469,11 +469,36 @@ every deliberate reset.
 `encode`/`decode`.
 
 **`src/carry.rs`**: the RTC-RAM record, used only after a software
-reset (`CoreSw`/`Cpu0Sw`; anything else zeroes it at boot). It holds
+reset (`CoreSw`/`Cpu0Sw`) or the RTC watchdog's; anything else zeroes
+it at boot. It holds
 the self-heal count and time, the skip flag, the local second the
 alarm last rang, the Unix time last written, the boots of an
-unconfirmed OTA image and the access-point flag for the next boot. The
+unconfirmed OTA image, the access-point flag for the next boot and the
+watchdog's resets with the cause of the last. The
 mark carries a layout version. `freeze` is for a mode switch.
+
+**`core/src/watchdog.rs`**: the timeouts (`HARD_TIMEOUT_SECS`,
+`DEADLINE_MS`, `FEED_PERIOD_MS`), the parties that check in (`Party`),
+`overdue` and `verdict`, and `Trips`, the carry record's word: resets
+since power-up and the `Cause` of the last.
+
+**`src/watchdog.rs`**: `start` sets the RTC watchdog (stage 0 a core
+reset, stage 1 a system reset) right after `esp_hal::init`;
+`watchdog_task`, on the thread executor, feeds it every second while
+`verdict` finds nobody overdue, and otherwise notes the party, halts
+the scan (bounded by `HALT_WAIT`) and resets. `check_in` and `expect`
+are for the parties: the display task on every pass of its loop, the
+clip task from a clip's start to its end. `note_boot` counts the
+timer's own reset from the reset reason. `Report` is the heartbeat's:
+the count, the last cause, the longest gap between two feeds.
+`bench`, only with the `bench-hang` feature, hangs the firmware on
+purpose: `POST /hang/thread`, `irq` or `cs` (a spin in a thread-mode
+task, on the interrupt executor, in a critical section; the timer's to
+end), `/hang/display` or `clip` (that task parked at its check-in; the
+feeder's), all with the token or a PIN, and a build with
+`BENCH_HANG=boot` spins in `main` after `ota::init` on every boot,
+which sent to `/ota` is the update that hangs and is rolled back.
+`cargo build --release --features bench-hang`.
 
 **`src/heal.rs`**: the deliberate resets.
 
@@ -524,12 +549,13 @@ socket task around it.
 
 **`src/bin/main.rs`**: pin setup, the display wires with their
 pull-downs, executors, task spawning, the panic reset hook, log
-timestamps, the reset reason and carried time at boot, the OTA
-rollback check, the minute heartbeat log.
+timestamps, the watchdog's start, the reset reason and carried time
+at boot and the OTA rollback check (before the clip pack and the
+settings, so a hang there is counted), the minute heartbeat log.
 
 ## What the host tests cover
 
-`cargo host-test` runs the tests of `core/` on the host: 170 on
+`cargo host-test` runs the tests of `core/` on the host: 179 on
 2026-11-17. The players' tests over real clips run only with
 `ALARM_CLIP` naming some, which the CI does in a second run.
 `.cargo/config.toml` aims every cargo command at the chip, which is
@@ -546,7 +572,9 @@ Covered:
   trip and every older version.
 - Web: the form parser and the page sizes against `PAGE_MAX`, the head
   parser, the PIN and token header rules.
-- Image and state: the appended-hash split, the carry codec, the clip
+- Image and state: the appended-hash split, the carry codec (an older
+  layout's record included), the watchdog's deadline, verdict and
+  carry word, the clip
   pack's layout with every refusal, the melody table with and without
   a pack.
 - Time: the calendar arithmetic, the POSIX TZ parser with its rejects

@@ -209,6 +209,7 @@ Read-only keys; posting one is refused as an unknown key:
 | `mode` | `sta` or `ap` |
 | `uptime` | seconds |
 | `heals`, `last_heal` | self-heal resets since power-up; the last one's Unix seconds or `null` |
+| `watchdog` | resets by the watchdog since power-up |
 | `temp_c`, `temp_f` | the room in tenths; `null` with no thermometer fitted or before the first reading |
 | `light` | 0 dark to 100; `null` before the first reading |
 | `rssi` | the station's signal in dBm from its last beacon, read every 10 s by `net::wifi_task` into an atomic; `null` while not connected and on the access point |
@@ -366,6 +367,25 @@ Self-heal, each ending in a reset with the panel blanked first:
 - A self-heal due while the alarm rings waits for the ring to end, by
   a press or its timeout.
 
+The watchdog, for a hang, where self-heal is for the network:
+
+- The RTC watchdog resets the chip 60 s after its last feed
+  (`watchdog::HARD_TIMEOUT_SECS`). The feeder, a task on the thread
+  executor, feeds it every second.
+- The feeder resets the clock itself, the panel blanked first, when
+  the display task has not checked in for 10 s
+  (`watchdog::DEADLINE_MS`), or the clip task while a clip plays. It
+  does not wait for a ringing alarm and says no MQTT goodbye.
+- The network is not its business: a router that is off is no reset.
+- Either reset keeps the carry record: the time (up to a minute old
+  after the timer's own reset, shown as it is until SNTP), the alarm
+  state, the boots of an unconfirmed image.
+- The boot line and the heartbeat carry the count since power-up and
+  the cause of the last (`the hardware timer`, or the task that missed
+  its check-in); the heartbeat also has the longest gap between two
+  feeds. `/api` has the count, `watchdog`. No page shows it and it is
+  not in the MQTT discovery.
+
 The time across a software reset:
 
 - The display tick writes the Unix time to RTC RAM every second; a
@@ -512,7 +532,8 @@ Any failure, a truncated or corrupt file included, brings the panel
 back on the running image with `otadata` untouched.
 
 Rollback: the bootloader only falls back on a bad checksum, so the
-carry record counts the boots of the new image. A software reset
+carry record counts the boots of the new image. A software reset or
+a watchdog's
 before a gateway probe has been answered or an HTTP request served
 bumps the count, and the third such boot (`config::OTA_BOOT_LIMIT`)
 switches back. A power cut clears the count.

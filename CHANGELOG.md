@@ -82,6 +82,12 @@ from `http://<ip>/update`; its settings survive the update.
 
 ### Added
 
+- A watchdog. A clock whose firmware hangs resets itself within a
+  minute, where it used to stay dark or frozen until the power was
+  cut, and an update that hangs is rolled back like one that never
+  reaches the network. `/api` has the count of such resets since
+  power-up as `watchdog`; the serial log's boot line and heartbeat say
+  what caused the last.
 - A sampled clip can be IMA ADPCM, four bits a sample: half the flash
   of the same clip as PCM, 8 KB a second at 16 kHz.
   `scripts/wav2pcm.sh in.wav out.adp` makes one from a sound file and

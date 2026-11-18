@@ -41,6 +41,8 @@ pub struct Status {
     pub uptime_secs: u64,
     /// Self-heal resets since power-up.
     pub heals: u32,
+    /// Watchdog resets since power-up.
+    pub watchdog: u32,
     /// When the last self-heal happened, if one did and the time was known.
     pub last_heal: Option<HealStamp>,
     /// The room in tenths of a degree Celsius: `None` before the first
@@ -623,7 +625,7 @@ fn write_tz_script(out: &mut impl core::fmt::Write, st: &Status) -> core::fmt::R
 /// The settings as JSON (the SSID, then whether a password and a token
 /// are set, never their values), followed by the read-only status keys
 /// `version`, `slot`, `clips` (`pack` when the clips are the `clips`
-/// partition's, `builtin` when they are the firmware's), `mode`, `uptime` (seconds), `heals`, `temp_c` and
+/// partition's, `builtin` when they are the firmware's), `mode`, `uptime` (seconds), `heals`, `watchdog` (resets by it since power-up), `temp_c` and
 /// `temp_f` (tenths, or null with no thermometer), `light` (0 to 100,
 /// or null before the first reading), `rssi` (dBm, or null while not
 /// connected), `utc_offset` and `dst` (the minutes east of UTC and
@@ -645,7 +647,7 @@ pub fn write_json(out: &mut impl core::fmt::Write, s: &Settings, st: &Status) ->
         out,
         "\",\"skip\":{},\"melody\":\"{}\",\"twelve_hour\":{},\"tz\":\"{}\",\"temp_offset\":{},\"temp_show\":\"{}\",\"hostname\":\"{}\",\"tx_power\":{},\"ssid\":\"{}\",\"password_set\":{},\"token_set\":{},\
 \"mqtt_host\":\"{}\",\"mqtt_port\":{},\"mqtt_user\":\"{}\",\"mqtt_password_set\":{},\"mqtt\":\"{}\",\"ringing\":{},\
-\"version\":\"{}\",\"slot\":\"{}\",\"clips\":\"{}\",\"mode\":\"{}\",\"uptime\":{},\"heals\":{},\"temp_c\":{},\"temp_f\":{},\"light\":{},\"rssi\":{},\
+\"version\":\"{}\",\"slot\":\"{}\",\"clips\":\"{}\",\"mode\":\"{}\",\"uptime\":{},\"heals\":{},\"watchdog\":{},\"temp_c\":{},\"temp_f\":{},\"light\":{},\"rssi\":{},\
 \"utc_offset\":{},\"dst\":{},\"last_heal\":",
         s.skip_next,
         melody::name(s.melody),
@@ -670,6 +672,7 @@ pub fn write_json(out: &mut impl core::fmt::Write, s: &Settings, st: &Status) ->
         st.mode,
         st.uptime_secs,
         st.heals,
+        st.watchdog,
         OrNull(st.temp_dc.map(Tenths)),
         OrNull(st.temp_dc.map(|dc| Tenths(fahrenheit_tenths(dc)))),
         OrNull(st.light),
@@ -1478,6 +1481,7 @@ mod tests {
             mode: "sta",
             uptime_secs: 46_296 * 86_400 + 3 * 3600 + 59 * 60,
             heals: 4_000_000_000,
+            watchdog: 16_777_215,
             last_heal: heal.then_some(HealStamp { unix_secs: 1_800_000_000, weekday: 2, hour: 23, minute: 59, ago_secs: Some(400 * 86_400) }),
             temp_dc: Some(-200),
             light: Some(100),

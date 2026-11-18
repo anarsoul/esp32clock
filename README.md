@@ -29,7 +29,8 @@ What the clock does:
 - Setup from the clock's own access point, with a captive portal, when
   no network is stored.
 - Self-healing: the clock resets itself when the network is lost for
-  minutes, carrying the time and the alarm state across the reset.
+  minutes or its firmware hangs (a watchdog), carrying the time and
+  the alarm state across the reset.
 
 <p align="center">
   <img src="screenshots/clock-light.png" width="31%" align="top" alt="The clock page: the alarm, the display and the status lines">
