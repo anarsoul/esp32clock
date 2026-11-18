@@ -157,7 +157,10 @@ The clock page, `/`:
   (it applies the form with `Allow::ALL`, since nothing is saved); the
   page posts it by script so the form is not reloaded. `POST /stop`,
   the Stop button, the same way: no token, its body ignored, it
-  silences a preview and ends a ringing alarm as a press would.
+  silences a preview. Neither does anything while the alarm rings
+  (`buzzer::preview`, `buzzer::stop_preview`), nor does the MQTT
+  `play`: a press or the MQTT `silence` ends a ring. `silence` is
+  the bus's Stop as well: with no alarm ringing it ends a preview.
 - The status lines, under the firmware line: the network and signal
   (`Wi-Fi home, -62 dBm.`, or `not connected`, or `no network
   stored`), the broker (`MQTT connected 10.1.1.5:1883.`, `MQTT

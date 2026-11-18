@@ -38,6 +38,7 @@ use esp_hal::time::Rate;
 use log::{info, warn};
 
 use crate::clip;
+use crate::display;
 use crate::melody::{self, Melody};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -59,12 +60,29 @@ pub fn ring(melody: usize) {
     COMMAND.signal(Command::Ring(melody));
 }
 
-/// Play this melody, or a random tune, once.
+/// Play this melody, or a random tune, once. Ignored while the alarm
+/// rings: a preview from a page or the bus never takes the buzzer from
+/// it. The flag is up before the display task signals the ring, and the
+/// callers share its executor, so none gets in between the two.
 pub fn preview(melody: usize) {
+    if display::ringing() {
+        info!("buzzer: preview ignored, the alarm is ringing");
+        return;
+    }
     COMMAND.signal(Command::Preview(melody));
 }
 
-/// Silence, within one note.
+/// An end to a preview, for the page's Stop button. Ignored while the
+/// alarm rings, as `preview` is: a press ends a ring, a page does not.
+pub fn stop_preview() {
+    if display::ringing() {
+        info!("buzzer: stop ignored, the alarm is ringing");
+        return;
+    }
+    COMMAND.signal(Command::Stop);
+}
+
+/// Silence, within one note. The display task's, for the end of a ring.
 pub fn stop() {
     COMMAND.signal(Command::Stop);
 }

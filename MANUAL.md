@@ -280,8 +280,8 @@ colour, brightness, alarm time, armed, skip, days, melody, 12 hour
 clock, panel temperature and thermometer offset as entities you can
 set, the room temperature, light, signal, uptime and self-heals as
 sensors, a binary sensor that is on while the alarm rings, and
-buttons to play the melody, silence a ring and reload the clock. The
-broker must speak MQTT 5 (Mosquitto 1.6 and later, which includes the
+buttons to play the melody, silence it or a ringing alarm, and reload
+the clock. The broker must speak MQTT 5 (Mosquitto 1.6 and later, which includes the
 Home Assistant add-on, does); the connection is plain, not TLS, so
 give the clock a broker user of its own. Everything is under
 `onebitdawn/clock-xxxxxx/` (the last three bytes of the MAC):

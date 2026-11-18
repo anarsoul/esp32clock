@@ -567,6 +567,7 @@ fn respond(out: &mut Response, req: &Request<'_>, body: &[u8]) -> Result<Then, c
             // Preview the sound chosen in the form without saving anything:
             // the form is applied to a scratch copy and only its melody used,
             // so the page's broker rule need not hold (`Allow::ALL`).
+            // Nothing sounds while the alarm rings (`buzzer::preview`).
             let mut trial = settings::get();
             if let Err(e) = form::apply(&mut trial, body, Allow::ALL) {
                 warn!("http: play form rejected: {e:?}");
@@ -575,13 +576,10 @@ fn respond(out: &mut Response, req: &Request<'_>, body: &[u8]) -> Result<Then, c
             redirect_home(out, Note::None)?;
         }
         (Method::Post, "/stop") => {
-            // The page's Stop button: an end to a preview, and to a ring
-            // as a press would end it, so the panel does not go on
-            // ringing in silence. Whatever body came with it is ignored.
-            buzzer::stop();
-            if display::ringing() {
-                display::silence();
-            }
+            // The page's Stop button: an end to a preview. A ringing
+            // alarm is not its to end, nor `/play`'s to interrupt; the
+            // buzzer ignores both. Whatever body came with it is ignored.
+            buzzer::stop_preview();
             redirect_home(out, Note::None)?;
         }
         (Method::Get, "/favicon.ico") => {

@@ -337,8 +337,12 @@ async fn incoming(id: &DeviceId, topic: &str, payload: &[u8]) -> bool {
                     buzzer::preview(settings::get().melody);
                 }
                 Some(Command::Silence) => {
+                    // Quiet, whatever is sounding: the ring ended as a
+                    // press would, or a preview stopped. Each of the two
+                    // acts only in its own case.
                     info!("mqtt: silence");
                     display::silence();
+                    buzzer::stop_preview();
                 }
                 Some(Command::Reload) => {
                     // The reset says its own goodbye; the caller does it.

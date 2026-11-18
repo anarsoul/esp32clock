@@ -73,6 +73,10 @@ from `http://<ip>/update`; its settings survive the update.
 - A clip no longer plays an octave down and stuttering, which every
   sampled clip, module and chip tune did now and then after Trantor
   (the beeper clip) had been played, until Trantor was played again.
+- Play no longer interrupts a ringing alarm (it played the melody
+  once and left the alarm silent): Play, Stop and the MQTT `play`
+  command do nothing while the alarm rings. A button on the clock or
+  the MQTT `silence` command ends it.
 - The System page's line after an upload or a reboot has its full
   stop.
 
@@ -125,8 +129,10 @@ from `http://<ip>/update`; its settings survive the update.
   tune's register writes through) or a ZX Spectrum one
   (`scripts/pt32clip.py`, from a Pro Tracker 3 or Vortex Tracker II
   module: the firmware has the player and an AY-3-8910 of its own).
-- A Stop button beside Play on the settings page (`POST /stop`): it
-  ends a preview, and a ringing alarm as a button press would.
+- A Stop button beside Play on the clock page (`POST /stop`): it
+  ends a preview.
+- The MQTT `silence` command, and its button in Home Assistant, stops
+  a preview as well as a ringing alarm.
 - `CLIP_PDM_BITS` at build time (128, 256, the default, or 384) sets
   how many bits the PDM converter makes of a sample, and
   `scripts/xm2clip.py --knee` where a module's limiter starts, up to

@@ -158,9 +158,10 @@ pub enum Route<'t> {
 /// What the `cmd` topic takes; the buttons' `pl_prs` payloads.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Command {
-    /// Preview the stored melody once, as `POST /play` does.
+    /// Preview the stored melody once, as `POST /play` does; like it,
+    /// ignored while the alarm rings.
     Play,
-    /// End a ring, as a press does.
+    /// End a ring, as a press does, or stop a preview.
     Silence,
     /// `POST /reload`: the deliberate reset with the carry record.
     Reload,

@@ -349,6 +349,72 @@ reasoning (the converter's samples are read the same way); a wrong
 order would be heard as a rough edge on every note. test-clock has the
 build, on GPIO5.
 
+## A preview never interrupts the alarm — built 2026-11-17, run on test-clock, not yet heard
+
+The user's report: `/play` interrupts a ringing alarm; while the alarm
+sounds, `/play` and `/stop` should be ignored.
+
+**Cause.** The buzzer task takes the latest command whatever it is
+doing, so a `Preview` during a ring replaced the loop with one pass of
+the previewed melody and then silence, the panel still flashing; and
+`POST /stop` was written to end a ring as a press does. The MQTT
+`play` command went the same way as `/play`.
+
+**Design.** The rule is the buzzer's, not each caller's:
+`buzzer::preview` and a new `buzzer::stop_preview` do nothing while
+`display::ringing()`, and say so in the log; `buzzer::ring` and
+`buzzer::stop` stay the display task's, unconditional. `/play` and the
+MQTT `play` call the first, `/stop` the second and no longer
+`display::silence`. The flag goes up before the display task signals
+the ring, and the display, HTTP, MQTT and buzzer tasks are all on the
+thread executor, so a preview cannot slip in between the two; one
+signalled just before is replaced or cut by the ring. Both routes
+answer as before (the redirect), so the page shows nothing new. The
+MQTT `silence` command is unchanged: ending a ring from Home Assistant
+is what it is for, and a press still ends one.
+
+**The bus's Stop** (the user, the same day: Home Assistant has a
+button to preview and none to stop it). `silence` does both: the MQTT
+task calls `display::silence`, which acts only while ringing, and
+`buzzer::stop_preview`, which acts only while not. No new command,
+entity or discovery byte, and nothing an older automation sent means
+anything else.
+
+**Built:** `src/buzzer.rs`, `src/http.rs`, `src/mqtt.rs`; the
+manual, `agents/behaviour.md`, `agents/modules.md`, the changelog.
+No pure logic in it, so no new test.
+
+**Run on test-clock, 2026-11-17** (by OTA to `ota_1`, the monitor
+attached, the alarm set a minute ahead; the board has no buzzer, so
+this is the log and `/api`, not the ear). The ring was `keygen`, one
+clip from start to end:
+
+| at, ms of uptime | sent | log | `ringing` after |
+| --- | --- | --- | --- |
+| 71169 | | `buzzer: ring keygen` | true |
+| 76614 | `POST /play`, `melody=halftime` (303) | `buzzer: preview ignored, the alarm is ringing` | true |
+| 80699 | `POST /stop` (303) | `buzzer: stop ignored, the alarm is ringing` | true |
+| 85183 | MQTT `cmd` `play` | `mqtt: play`, then the same `preview ignored` | true |
+| 89247 | MQTT `cmd` `silence` | `mqtt: silence`, `clip: cut short, 0 underruns, 0 stray positions` | false |
+
+One `clip:` line for the whole ring, at the silence, 18 s after it
+began: nothing cut or restarted the clip before. With no alarm
+after it, `/play` logged `buzzer: preview halftime` and `/stop` cut
+it 4 s later (`clip: cut short`). The alarm was put back to 01:00,
+disarmed.
+
+**The bus's Stop run on test-clock, 2026-11-17** (a second OTA, to
+`ota_0`): the MQTT `play` (`buzzer: preview keygen`) was cut by
+`silence` 4 s later (`clip: cut short`), and so was a preview from
+`/play` (`halftime`); with the alarm ringing, `silence` ended it 7 s
+in as before (`ringing` false), the log saying `buzzer: stop ignored,
+the alarm is ringing` beside it, which is `stop_preview` standing
+aside for `display::silence`. The alarm was put back again.
+
+**Not checked:** the ear, and the page's own buttons (the posts were
+curl's, the same routes); a press ending the ring (nobody at the
+buttons; the MQTT `silence` goes the same way through `ui.handle`).
+
 ## Checks still owed
 
 Built, and by its heading in `HISTORY.md` not yet seen, heard or run

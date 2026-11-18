@@ -249,6 +249,8 @@ into `OUT_DIR`.
 **`src/buzzer.rs`**: LEDC PWM on an open-drain pin; plays a melody on
 command, looped or once, and stops within a note.
 
+- `preview` and `stop_preview`, the pages' and the bus's, do nothing
+  while the alarm rings; `ring` and `stop` are the display task's.
 - A clip goes to `clip::play`, which hands it to the clip task on the
   same pin.
 - For a ringing alarm a clip is asked to loop with no gap if
