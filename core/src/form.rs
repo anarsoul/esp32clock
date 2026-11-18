@@ -625,6 +625,15 @@ fn write_tz_script(out: &mut impl core::fmt::Write, st: &Status) -> core::fmt::R
     write!(out, "<script src=\"/tz.js?v={}\"></script>", HtmlStr(st.version))
 }
 
+/// The longest `write_json` writes, which the MQTT task's state buffer
+/// is sized from; the test builds the worst case against it (1467
+/// bytes: every string full of control characters, six bytes each in
+/// JSON, which today's rules let into the SSID alone). `/api` answers
+/// from the response buffer, a page's, which is far larger.
+pub const JSON_MAX: usize = 1536;
+
+const _: () = assert!(JSON_MAX <= crate::http::PAGE_MAX);
+
 /// The settings as JSON (the SSID, then whether a password and a token
 /// are set, never their values), followed by the read-only status keys
 /// `version`, `slot`, `clips` (`pack` when the clips are the `clips`
@@ -1872,6 +1881,59 @@ mod tests {
         s.mqtt.port = 65535;
         s.mqtt.user = Text::new(&"\"".repeat(BROKER_USER_MAX)).unwrap(); // escaped into the field
         s
+    }
+
+    /// The JSON at its longest, for `JSON_MAX`: every string full and
+    /// of the bytes that escape longest (a control character is six),
+    /// whether or not a rule lets them into that field, the longest
+    /// name of every choice, a full pack's longest clip name, and a
+    /// status of extremes.
+    #[test]
+    fn the_json_fits_the_state_buffer() {
+        melody::install(Some(crate::pack::fullest()));
+        let mut st = status(true);
+        st.slot = "factory";
+        st.uptime_secs = u64::MAX;
+        st.heals = u32::MAX;
+        st.watchdog = u32::MAX;
+        st.clips_paused = false;
+        st.temp_dc = Some(i16::MIN);
+        st.rssi = Some(i8::MIN);
+        st.ringing = false;
+        st.last_heal = Some(HealStamp { unix_secs: i64::MIN, weekday: 2, hour: 23, minute: 59, ago_secs: None });
+        st.local = Some(LocalNow { weekday: 4, hour: 14, minute: 32, offset_secs: i32::MIN, dst: false });
+        let len = |s: &Settings, st: &Status| {
+            let mut out = String::new();
+            write_json(&mut out, s, st).unwrap();
+            out.len()
+        };
+        let mut s = worst_settings();
+        let control = |n: usize| "\u{1}".repeat(n);
+        s.tz = Text::new(&control(TZ_MAX)).unwrap();
+        s.wifi.ssid = Text::new(&control(SSID_MAX)).unwrap();
+        s.mqtt.user = Text::new(&control(BROKER_USER_MAX)).unwrap();
+        s.alarm_armed = false;
+        s.skip_next = false;
+        s.twelve_hour = false;
+        s.temp_offset_dc = i16::MIN;
+        // Each choice at its longest name, one field at a time.
+        let mut pick = |set: &dyn Fn(&mut Settings, usize), n: usize| {
+            let best = (0..n).max_by_key(|i| { let mut t = s; set(&mut t, *i); len(&t, &st) }).unwrap();
+            set(&mut s, best);
+        };
+        pick(&|s, i| s.color = i, PALETTE_NAMES.len());
+        pick(&|s, i| s.alarm_days = i as u8, 128);
+        pick(&|s, i| s.melody = i, melody::count());
+        pick(&|s, i| s.temp_show = [TempShow::Off, TempShow::Celsius, TempShow::Fahrenheit][i], 3);
+        for link in [Link::Off, Link::Connected, Link::Connecting { last_error: None }] {
+            let mut other = st;
+            other.mqtt = link;
+            assert!(len(&s, &other) <= len(&s, &st));
+        }
+        let n = len(&s, &st);
+        melody::install(None);
+        println!("the JSON at its longest: {n} bytes of {JSON_MAX}");
+        assert!(n <= JSON_MAX, "{n} bytes");
     }
 
     /// The five pages as served, in `Page::ALL`'s order.

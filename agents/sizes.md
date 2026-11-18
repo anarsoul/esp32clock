@@ -104,7 +104,9 @@ What takes it:
   same loop was not overlapped by the compiler and cost 6 KB per
   listener until it was hoisted (2026-11-07).
 - The MQTT task's future holds its socket buffers (1 KB receive, 2 KB
-  send), the 1 KB `BumpBuffer`, the state JSON (1 KB) and the
+  send), the 1 KB `BumpBuffer`, the state JSON (`form::JSON_MAX`,
+  1536; the worst case is 1467, printed by the `form` test, about 640
+  on a clock) and the
   discovery payload (`mqtt::DISCOVERY_MAX`, 5120; the worst case is
   4771, printed by the `mqtt` test): about 15 KB in all.
 - The clip ring is 16 KB in every build, since any build may meet a

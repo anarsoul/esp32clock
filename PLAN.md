@@ -606,6 +606,30 @@ aside for `display::silence`. The alarm was put back again.
 curl's, the same routes); a press ending the ring (nobody at the
 buttons; the MQTT `silence` goes the same way through `ui.handle`).
 
+## The state JSON's worst case — a review's finding, fixed 2026-11-17
+
+The MQTT task formatted `form::write_json` into a 1024-byte buffer
+that nothing tested. At its worst the JSON is 1467 bytes: over the
+buffer the state would stop updating in Home Assistant with only
+"state JSON does not fit" in the log. On a clock it is about 640
+bytes, so no clock was near it; a 32-byte SSID of control characters
+(six bytes each in JSON) with long names elsewhere would have been.
+
+The limit is `form::JSON_MAX` in core now, 1536, and the MQTT task's
+buffer is sized from it. `the_json_fits_the_state_buffer` builds the
+worst case: a full pack's longest clip name, every choice at its
+longest name, a status of extremes (the longest version and slot,
+`u64::MAX` of uptime, the counters full, a heal stamp), and the tz,
+the SSID and the broker user full of control characters whether or
+not a rule lets them in (today only the SSID's does), so a rule
+relaxed later cannot pass it unseen. `/api` answers from the response
+buffer, a page's 8 KB: a `const` assert holds `JSON_MAX` under
+`PAGE_MAX`, and another the state and its topic under the socket's
+send buffer. `.stack` went from 41448 to 40936 bytes. 183 host tests.
+
+Run on test-clock: the session connected and the state published
+after the update. The worst case itself is the host test's.
+
 ## Checks still owed
 
 Built, and by its heading in `HISTORY.md` not yet seen, heard or run

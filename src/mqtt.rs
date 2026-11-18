@@ -93,8 +93,12 @@ const TX_BUF: usize = 2048;
 /// bytes, a retained state message the broker may replay is under 1 KB.
 const BUMP_BUF: usize = 1024;
 
-/// The state JSON; `/api` is about 600 bytes.
-const STATE_BUF: usize = 1024;
+/// The state JSON at its longest, which `core::form` holds to this
+/// under test; it is about 800 bytes with real values.
+const STATE_BUF: usize = form::JSON_MAX;
+
+// The state and its topic go out through the socket's send buffer.
+const _: () = assert!(STATE_BUF + 64 <= TX_BUF);
 
 /// What the task is doing, for the page and the JSON.
 static LINK: CsMutex<Cell<Link>> = CsMutex::new(Cell::new(Link::Off));

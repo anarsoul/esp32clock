@@ -344,7 +344,9 @@ Each with its figures in `agents/sizes.md`.
 - `config::WIFI_MTU` bounds every frame the clock sends and the probe
   is sized from it; a ping larger than the probe gets no reply.
 - The discovery payload must fit `mqtt::DISCOVERY_MAX`; the `mqtt`
-  test prints the worst case.
+  test prints the worst case. The JSON of `/api`, which is also the
+  MQTT state, must fit `form::JSON_MAX`; the `form` test builds the
+  worst case, so run it after adding a key.
 - The clip ring is ahead of the DMA by a fraction of a second, which
   is why the clip task is on the interrupt executor; keep it there.
 
