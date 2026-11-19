@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 # Copyright (c) 2026 Vasily Khoruzhick
 # Make the default clip pack for a clock with a speaker in the buzzer's
-# place (speaker-mod/README.md): the four clips of clips/, the two
+# place (speaker-mod/README.md): the seven clips of clips/, the
 # XM modules converted again from mods/ with the bass left in (a high-pass
 # at 100 Hz, once) and the limiter letting go over 128 ms and not 16:
 # as hard a drive as the buzzer's clips have, but a gain that follows
@@ -29,4 +29,5 @@ cd "$(dirname "$0")/.."
 pack=packs/clips-default-speaker.bin
 cargo pack -o "$pack" --sound-output speaker clips/trantor.bpr \
     "mods/Orion - Nero Burning ROM v5.5.7.8kg.xm:name=halftime" mods/Orion-Nero6.3.0.2.xm:name=keygen \
-    mods/nq-synchronization.pt3:restart,name=synchronization
+    mods/nq-synchronization.pt3:restart,name=synchronization \
+    mods/grieg-morning-bright.xm mods/grieg-morning-chip.xm mods/grieg-mountain-king-bright.xm

@@ -1092,6 +1092,269 @@ counts, `clips/README.md`, the release notes and the installer's page
 are as they were before it. `scripts/mod2xm.py` stays. What is owed of
 this section is the converter heard on a clock, with any module.
 
+## Two modules of our own: Grieg's Morning and In the Hall of the Mountain King — built 2026-11-19, heard in the page's player, reworked, three of them in the default pack; not yet heard on a clock
+
+The user asked for XMs made here, of two movements of the first Peer
+Gynt suite, Op. 46 (Grieg died in 1907; the music is in the public
+domain): the notes found online, the instruments public domain or
+under a permissive licence.
+
+**The notes.**
+
+- *In the Hall of the Mountain King* (No. 4): the Mutopia Project's
+  piano score, piece 1888, typeset by Coyau from The University
+  Society's edition of 1918 and placed in the public domain by the
+  typesetter (`copyright = "Public Domain"` in the `.ly`). Its MIDI
+  file is what the tune's file reads, `mods/src/mountain_king.mid`,
+  with the `.ly` beside it; both as Mutopia gives them.
+- *Morning* (No. 1): no score a program can read was found under a
+  free licence (Mutopia has Nos. 2, 3 and 4 only; IMSLP has scans; the
+  MIDI files about say nothing of their terms). So it was read off
+  the composer's own arrangement for piano four hands, Edition Peters
+  2432 (plate 7191), the scan the Sibley Music Library gives out
+  (`hdl.handle.net/1802/16617`), by eye from the pages rendered at
+  400 dpi, with a throwaway script that finds note heads and measures
+  their height against the staff where the print is dense. The script
+  caught one bar read a third too low; there may be others.
+  **Shortened**: bars 1 to 31 and then 56 to 87. The middle (32 to
+  55, two pages of chromatic arpeggios) is left out, the join is the
+  G sharp major of the sunrise straight into the E major of the
+  horn's return.
+
+**The instruments.** Versilian Studios' VSCO 2 Community Edition
+(`github.com/sgossner/VSCO-2-CE`, commit `4403009`), CC0. Morning:
+flute, oboe, horn, the violins bowed twice (two registers), the
+cellos twice. Mountain King: bassoon, oboe, trumpet, trombone, horn
+and the violins held, cello, bass and violin pizzicato, a kettledrum,
+cymbals. A note an instrument, mono, 8 bits (the player's samples are
+8 bits: `xmc.rs` cuts 16 to 8), the high ones at 22 or 32 kHz, the
+low at 11 or 16; a held one has a loop of 0.25 to 0.7 s found by
+correlation and crossfaded. The files' names are an octave off as
+often as not; the pitch is measured.
+
+**The tool.** `scripts/mkxm.py` (numpy and scipy): a tune's file
+defines `tune()`, which returns the module, and the script writes the
+XM. It fetches the VSCO files a tune names into the ignored
+`xm/vsco/`. The tunes are `mods/src/morning.py` and
+`mods/src/mountain_king.py`; the modules `mods/grieg-morning.xm`
+("Morning Mood": `morning` is a note melody's name already) and
+`mods/grieg-mountain-king.xm`. Only what `xm.rs` plays is written:
+notes, the volume column's set, the volume envelope with its sustain
+point, an instrument's vibrato, 3FF for a slur, ED for a note late in
+its row, K for a key-off late in its row, F for the tempo. `Voices`
+is a set of channels that share notes so that none is cut while it
+sounds.
+
+```
+scripts/mkxm.py mods/src/morning.py mods/grieg-morning.xm
+scripts/mkxm.py mods/src/mountain_king.py mods/grieg-mountain-king.xm
+```
+
+**The arrangements.** Morning: the tune between flute and oboe over
+held strings, the violins in octaves with everyone from bar 21, the
+horn with it under flute ripples when it returns, the trills and the
+bird calls, the cellos last. Mountain King: bassoons with the cellos
+and basses plucked, then plucked violins and oboes an octave or two
+up, then bowed violins and trumpets with trombones, kettledrum and
+cymbals, the tempo from 104 to 208 where the MIDI file has 138 and
+154; the left hand is an octave up throughout, the clock having no
+bass.
+
+**The user's ear, 2026-11-19**, on the first build in the pack
+maker's page: "Mountain King sounds like there is no sustain on notes
+at all. I don't think an actual musician would play it like this";
+"an audible click between some notes"; "instrument sample rate is
+rather low"; "Morning Mood also has abrupt notes ending". What was
+wrong, and what was done:
+
+- The first Mountain King was all staccato recordings cut to 0.3 to
+  0.45 s. The score does say staccato on every note (Mutopia's `.ly`:
+  `e sempre staccato`, an accent on the third beat) and the orchestra
+  is cellos and basses plucked with bassoons at first; but a bassoon's
+  staccato quaver has its tone and a plucked string rings on. Now the
+  winds, brass and bowed violins are held recordings, a quaver two
+  thirds of its length and a longer note nearly whole, and a plucked
+  note is the recording for 0.7 to 1 s.
+- **The player has no ramp** (`xm.rs`, `mix` and `trigger`): a note
+  that starts on a channel replaces what was sounding there within a
+  sample, and a level changes once a tick. FastTracker ramps both.
+  The first build reused a channel while its note was still sounding
+  or in its release, hundreds of times: the clicks, and the abrupt
+  ends (a chord's release was cut by the next chord). Now
+  `mkxm.Voices` gives a note a channel that has gone quiet, slurs a
+  chord's note on from one of its instrument that ends there, and
+  counts what it still has to cut: 4 in Morning, 46 in the Mountain
+  King, 23 of them the kettledrum's roll. Morning has twelve ticks a
+  row, so a release of 140 to 280 ms is ten to twenty steps.
+  A ramp in the player is the whole cure, for every module: the user
+  asked for it the same day, below.
+- A bug of the script's own, found by the two players disagreeing by
+  1.5 dB over twenty seconds: a note that ended in the row it began
+  on was never let go, so Morning's bird calls hung. Fixed, and tried
+  in both players row by row.
+- The samples were at 8 to 16 kHz to keep the clips small. They are
+  at 22 or 32 kHz where the instrument is high; the modules are 1.6
+  and 2 times the size for it.
+
+**Measured on the host, 2026-11-19**, the second build.
+
+| | Morning Mood | Mountain King |
+| --- | --- | --- |
+| the module | 139 964 bytes | 197 685 bytes |
+| the clip (`cargo pack --clip`, defaults) | 138 067 bytes | 194 884 bytes |
+| length | 129.5 s | 139.6 s |
+| channels with the tempo's | 20 | 18 |
+| the player lacks | nothing named | nothing named |
+| the clock's mix against openmpt123's | 2.4 to 2.7 dB over, 8 s at a time | 2.2 to 2.5 dB over, 10 s at a time |
+
+- Each instrument alone in openmpt123's render is within 11 cents of
+  the note asked for (the horn and the trumpet the furthest; the
+  kettledrum and the cymbals have no pitch to measure).
+- The loudest pitch a quaver in Morning's first four bars and bars 9
+  to 12 is the flute's line as written (the first build).
+- No note is left without a channel.
+- With the buzzer's defaults the limiter flattens both: the shaped
+  output is at -5 to -8 dBFS throughout, the crescendos gone (the mix
+  before it runs from -29 to -14 dB in Morning and -25 to -18 in the
+  Mountain King). That is the buzzer's 20 dB of drive; a speaker's
+  defaults were not measured.
+- `packs/grieg.bin` and `packs/grieg-speaker.bin`: the default four
+  and these two, 438 235 bytes, 37 % of the partition.
+- Morning is at the player's twenty channels. The processor's share
+  is not known: Crush's eighteen were 57 %.
+
+**A ramp in the player, 2026-11-19** (the user: "add the ramp to the
+player"). In `xm.rs`, two things, neither of which softens a note's
+own attack:
+
+- A channel's gain is no longer the tick's level but moves to it over
+  a 512th of a second (`RAMP_PER_SECOND`; 62 mixed samples at 32 kHz,
+  122 at 62.5), a step a sample; a note that has just begun starts at
+  its level. A key-off with no envelope, EC, the volume column and an
+  envelope's steps all go through it.
+- When a note, or E9, starts on a channel that is sounding, what the
+  channel was adding to the mix at that sample goes into `Tune::cut`,
+  one sum for the tune, which loses a 64th of itself a mixed sample
+  (`CUT_DECAY`; half in 0.7 ms at 62.5 kHz, gone in about 5). The new
+  note's first sample is not taken out of it: a square wave still
+  starts with its edge.
+- The cost: a test and at most an add for each sounding voice a mixed
+  sample, and one for the tune. `Channel` is 16 bytes longer; `.stack`
+  is 39 208 bytes (39 880 before).
+- It changes every module's sound, Halftime and Keygen among them:
+  their note cuts and volume steps are rounded off, their attacks are
+  not. The clips are the same files.
+- Checked: the new test `a_level_is_ramped_to_and_a_cut_note_dies_away`
+  (a level is reached in steps over the ramp, a fresh note is at its
+  level in its first sample, a cut note falls a 64th a sample to
+  nothing); the 186 host tests, both clippys, the pack maker's tests
+  and the release build pass. Against openmpt123, which ramps too, the
+  two tunes are as before, within 0.3 dB.
+- The pack maker's page was rebuilt with it (`cargo pack-wasm`) for
+  the user to hear.
+
+Owed for the ramp: the user's ear in the page and on a clock, Halftime
+and Keygen included, and the processor's share with it (Crush's 57 %
+was without).
+
+**The instruments again, 2026-11-19.** The user, with the ramp in:
+"The clicks are gone. I still don't like instruments you chose for
+Grieg. They sound dull compared e.g. to dualtrax tunes. Is there
+anything better under permissive license? But arrangements are good,
+especially Morning Mood."
+
+- Measured, openmpt123's renders, the share of the power over 2 kHz:
+  Halftime 5.3 %, Morning 5.0 % (0.7 % over 4 kHz, Halftime 2.6 %),
+  the Mountain King 8.4 % (1.7 % over 4 kHz). Not so far apart in
+  sum; what Halftime has and these lack is over 4 kHz, where a square
+  wave still has partials and a flute, a horn or a bassoon has next
+  to none. The first choice made it worse: the softest recorded
+  layers, in a room.
+- MuseScore General (FluidR3's descendant, MIT; fetched into the
+  ignored `xm/sf2/`) was looked at as the other permissive source:
+  its flute, bassoon, horns and oboe have 0 to 5 % over 2 kHz, no
+  brighter. `mkxm.py` reads a SoundFont now (`Sample.soundfont`); no
+  kit was made of it. Its licence asks for its notices in a
+  derivative work.
+- Two kits beside the first, chosen by a third argument to the script
+  (`scripts/mkxm.py tune.py out.xm bright`), for the user's ear, in
+  the ignored `xm/ab/`:
+
+| kit | what | Morning: module, over 2 kHz, over 4 kHz | Mountain King |
+| --- | --- | --- | --- |
+| (none) | VSCO, soft layers | 139 964 bytes, 5.0 %, 0.7 % | 197 685 bytes, 8.4 %, 1.7 % |
+| `bright` | VSCO's loud layers where it has them, 10 dB more of what is over 2 kHz, the violins at 32 kHz | 150 242, 7.9 %, 1.4 % | 206 266, 13.5 %, 3.1 % |
+| `chip` | waves made in the script: square, narrow pulse, saws, a triangle drum, noise for the cymbals | 23 321, 7.2 %, 2.6 % | 83 623, 8.9 %, 3.0 % |
+
+  Every instrument of each kit is within 12 cents in openmpt123's
+  render, and the converter names nothing missing in any.
+
+**Decided, 2026-11-19** (the user, having heard the kits in the page:
+"Keep bright and chiptune variants. Default pack should have Morning
+bright and chiptune, and Mountain king bright."):
+
+- The soft kit is gone from the tunes' files and its two modules from
+  `mods/`. The kits are `bright` (the default) and `chip`; the modules
+  `mods/grieg-morning-bright.xm` ("Morning Mood"),
+  `grieg-morning-chip.xm` ("Morning Mood Chip"),
+  `grieg-mountain-king-bright.xm` ("Mountain King") and
+  `grieg-mountain-king-chip.xm` ("Mountain King Chip", in no pack).
+- `clips/morning_mood.xmc` (144 787 bytes), `morning_mood_chip.xmc`
+  (17 866) and `mountain_king.xmc` (203 465), the pack maker's
+  defaults, are the default pack's fifth to seventh, after the four so
+  those keep their places: `scripts/clips.sh`,
+  `scripts/speaker-clips.sh` (from the modules), the CI's and the
+  release's lists, `core/build.rs`'s comment, the pack maker's tests
+  (the clips byte for byte from the modules, the pack's names and
+  labels). `clips/README.md` has their sources and licences, the
+  changelog, the manual, the readme and `AGENTS.md` say seven.
+- The default pack is 471 466 bytes, 39 % of the partition, for a
+  buzzer and for a speaker; the parser's test reads it, and the 186
+  host tests pass with the seven built in.
+
+**Morning ends at its rest, 2026-11-19.** The user, of the pack's
+Morning: "Morning mood has a long rest at ~1:42-1:43, let's cut it
+short there - I mean the tune should end there. The rest likely
+sounds good with orchestra, not so good in mod". That is the score's
+silent bar 76. The tune is bars 1 to 31 and 56 to 76 now, 104.0 s,
+ending on the trill over the dominant with the silent bar before a
+ringing alarm starts it over; the flute's last statement, the cellos'
+and the closing chords (77 to 87) are gone from `mods/src/morning.py`.
+The figures above for the two Morning clips and the pack are after
+the cut; the tables further up are from before it. `mkxm.py` writes a
+short last pattern now and no longer pads the tune to whole ones.
+
+**On the bare bench board, 2026-11-19** (`another-bench`, on
+`/dev/ttyACM0`; no panel, speaker or sensors, so this is the log and
+not the ear. Updated over the LAN from `v0.4-95` to this tree,
+`v0.4-111-g0d83913-dirty` in `ota_1`, in 9 s;
+`packs/clips-default-speaker.bin` posted to `/clips`, 471 466 bytes
+in 5 s, checked at boot in 325 ms; `output` on the line; each clip by
+`POST /play` to its end; the serial log a `cat` of the port):
+
+| clip | channels | filling | share |
+| --- | --- | --- | --- |
+| Morning Mood | 20 | 68 997 of 104 040 ms | 66 % |
+| Morning Mood Chip | 20 | 66 313 of 104 045 ms | 64 % |
+| Mountain King | 18 | 67 128 of 139 599 ms | 48 % |
+| Halftime | | 10 462 of 43 571 ms | 24 % |
+| Keygen | | 13 318 of 57 639 ms | 23 % |
+
+- No underruns and no stray positions in any of the five; the
+  watchdog's longest feed gap 1259 ms, no reset; the heap at 54 080
+  bytes throughout; no gateway probe failed; `/` in 98 ms and `/api`
+  in 24 ms while Keygen played.
+- Morning is the dearest clip there has been (Crush's eighteen
+  channels were 57 % before the ramp). What the ramp costs is in
+  these figures and not apart from them: none of the five was
+  measured on this board without it.
+- The board was left on this build with the new pack, `output` back
+  on the buzzer, its other settings as found.
+
+Owed: the three heard on a clock, buzzer and speaker (with the
+buzzer's defaults the limiter flattens their crescendos, measured on
+the first kit); Halftime and Keygen heard with the ramp.
+
 ## Checks still owed
 
 - The pack maker (2026-11-19): the release workflow's three builds of

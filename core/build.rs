@@ -16,8 +16,8 @@ fn main() {
 /// clips are its clip pack, in the `clips` partition (`pack.rs`,
 /// `onebitdawn-pack`); building them into the firmware is the older
 /// way, still here for a clock whose partition table has no such
-/// partition. The four of the default pack that way:
-/// `ALARM_CLIP=clips/trantor.bpr,clips/halftime.xmc,clips/keygen.xmc,clips/synchronization.pt3c`.
+/// partition. The seven of the default pack that way:
+/// `ALARM_CLIP=clips/trantor.bpr,clips/halftime.xmc,clips/keygen.xmc,clips/synchronization.pt3c,clips/morning_mood.xmc,clips/morning_mood_chip.xmc,clips/mountain_king.xmc`.
 const DEFAULT_CLIPS: &str = "";
 
 /// `ALARM_CLIP` names the clips to build in as the last melodies, files

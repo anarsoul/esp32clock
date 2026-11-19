@@ -142,6 +142,41 @@ has must come out the same.
 - `knee` is kept in the flags' top four bits as one of fifteen steps
   2 dB apart (`core::pt3::KNEES`).
 
+## Modules made here (`scripts/mkxm.py`)
+
+```
+scripts/mkxm.py mods/src/morning.py mods/grieg-morning-bright.xm bright
+scripts/mkxm.py mods/src/mountain_king.py mods/grieg-mountain-king-chip.xm chip
+```
+
+- Writes an XM from a tune written down as Python (`mods/src/`): a
+  `tune()` that makes a `Module`, its instruments from recorded notes
+  and its notes on a grid of rows (`Voices.phrase` takes them as
+  `B5/2 G#5/2 …`, `read_midi` gives a MIDI file's). Needs numpy and
+  scipy. Only what `xm.rs` plays is written.
+- `xm.rs` starts a note with no ramp, so a note on a channel that is
+  still sounding is a click. `Voices`, a set of channels, gives each
+  note one that has gone quiet (a held note's release and a struck
+  one's ring counted) and the script says how many notes it had to
+  cut all the same. Give a part channels enough.
+- The recorded notes are VSCO 2 Community Edition's (CC0), fetched by
+  name at a pinned commit into the ignored `xm/vsco/` and cut down:
+  mono, 8 bits, a new rate, a crossfaded loop for a held note. The
+  pitch is measured, and a file more than 60 cents from the note it
+  is said to hold is refused.
+- A tune may have kits of instruments, named by a third argument:
+  the two Grieg tunes have `bright` (the default) and `chip`. Besides
+  a VSCO file a sample can be one of a SoundFont's by its name
+  (`Sample.soundfont`), a period of a wave made there (`Sample.wave`
+  over `pulse`, `saw`, `triangle`), a wave struck and dying
+  (`Sample.pluck`) or noise (`Sample.noise`); `bright=` lifts what is
+  over 2 kHz.
+- It reports a note that found no channel; there should be none.
+- The two there are Grieg's Morning (shortened; read off a scan) and
+  In the Hall of the Mountain King (Mutopia's MIDI file). Morning in
+  both kits and the Mountain King in `bright` are in the default
+  pack; `clips/README.md` has the commands and the sources.
+
 ## Beeper (`scripts/zxbeeper.py`)
 
 ```

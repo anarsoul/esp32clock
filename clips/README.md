@@ -4,14 +4,14 @@ The clips of the default clip pack, the extra alarm melodies a clock
 has in its `clips` partition (see "Clip packs" in `MANUAL.md`):
 
 ```
-scripts/clips.sh                                       # packs/clips-default.bin, these four
+scripts/clips.sh                                       # packs/clips-default.bin, these seven
 cargo pack -o packs/one.bin clips/trantor.bpr          # a pack of one of them
 ALARM_CLIP=clips/trantor.bpr cargo build --release     # or built into the firmware, the older way
 ```
 
-They are other people's music and are **not** covered by the project's
-MIT OR Apache-2.0 licence; each is credited below, and copyright stays
-with its author.
+The first four are other people's music and are **not** covered by
+the project's MIT OR Apache-2.0 licence; each is credited below, and
+copyright stays with its author. The last three were made here.
 
 ## `trantor.bpr`
 
@@ -63,4 +63,42 @@ go over 128 ms, and a high-pass at 100 Hz.
 
 ```
 cargo pack --clip clips/synchronization.pt3c mods/nq-synchronization.pt3:restart,name=synchronization
+```
+
+## `morning_mood.xmc`, `morning_mood_chip.xmc` and `mountain_king.xmc`
+
+Two movements of **Edvard Grieg**'s first *Peer Gynt* suite, Op. 46
+(1888; he died in 1907 and the music is in the public domain), as
+tracker modules made for this project: *Morning Mood* (No. 1) twice,
+with an orchestra's recorded instruments and with plain waves as a
+chiptune has them, and *In the Hall of the Mountain King* (No. 4) with
+the orchestra's. A fourth, the Mountain King with plain waves, is in
+`mods/` and not in the pack.
+
+- **The notes.** The Mountain King's are the Mutopia Project's piano
+  score, [piece 1888](https://www.mutopiaproject.org/cgibin/piece-info.cgi?id=1888),
+  typeset by Coyau and placed in the public domain; its MIDI file and
+  LilyPond source are in `mods/src/` as Mutopia gives them. Morning's
+  were read here off the composer's own arrangement for piano four
+  hands, Edition Peters 2432, in the Sibley Music Library's
+  [scan](https://hdl.handle.net/1802/16617). It is shortened: bars 1
+  to 31 and 56 to 76, where a bar's rest ends it.
+- **The instruments.** The orchestra's are recordings from Versilian
+  Studios' [VSCO 2 Community Edition](https://github.com/sgossner/VSCO-2-CE),
+  which is CC0, cut down to a note an instrument. The plain waves are
+  made by the script.
+- **The arrangements and the modules** are this project's, under its
+  licence, MIT OR Apache-2.0.
+
+The modules are written by `scripts/mkxm.py` from the tunes in
+`mods/src/`, and the clips are the pack maker's defaults of them:
+
+```
+scripts/mkxm.py mods/src/morning.py mods/grieg-morning-bright.xm bright
+scripts/mkxm.py mods/src/morning.py mods/grieg-morning-chip.xm chip
+scripts/mkxm.py mods/src/mountain_king.py mods/grieg-mountain-king-bright.xm bright
+scripts/mkxm.py mods/src/mountain_king.py mods/grieg-mountain-king-chip.xm chip
+cargo pack --clip clips/morning_mood.xmc mods/grieg-morning-bright.xm
+cargo pack --clip clips/morning_mood_chip.xmc mods/grieg-morning-chip.xm
+cargo pack --clip clips/mountain_king.xmc mods/grieg-mountain-king-bright.xm
 ```
