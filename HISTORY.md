@@ -10447,3 +10447,11 @@ played by this session on either.
 martin-clock: "Heard on a buzzer and a speaker. All good." The
 processor's share on a clock was not measured (ten channels; the
 Mountain King's eighteen were 48 %).
+
+**The terms, 2026-11-19.** The user, later the same day: "may be
+copied and distributed, unmodified, as part of onebitdawn clip packs,
+including commercially; all other rights reserved". These replace
+"not to be distributed apart from onebitdawn's clip pack" above, for
+the tune, its MIDI file, the module and the clip: `clips/README.md`,
+`AGENTS.md`, `agents/clips.md` and the script's docstring say so. The
+module and the clip are the same bytes.

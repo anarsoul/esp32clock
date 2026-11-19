@@ -4,8 +4,9 @@
 piano, for `scripts/mkxm.py`.
 
 The tune is not under the project's licence, which covers this script
-only: its copyright is the composer's, and it may not be distributed
-apart from onebitdawn's clip pack. `suspended_seconds.mid` beside this
+only: its copyright is the composer's, and it may be copied and
+distributed, unmodified, as part of onebitdawn clip packs, including
+commercially; all other rights reserved. `suspended_seconds.mid` beside this
 file is the tune as he wrote and played it, one piano track, 96 beats
 at 120 to the minute, and the same holds for it and for the module
 made of it.

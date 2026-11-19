@@ -58,8 +58,9 @@ host and the browser, over `core`. `CLAUDE.md` is a symlink to this file; edit t
   are other people's music, not under the project's licence;
   `clips/README.md` credits each and must go on doing so.
   "Suspended Seconds" is the user's own piano tune and not under the
-  project's licence either: his copyright, not to be distributed
-  apart from onebitdawn's clip pack. The other
+  project's licence either: his copyright, and it "may be copied and
+  distributed, unmodified, as part of onebitdawn clip packs,
+  including commercially; all other rights reserved". The other
   three are ours, Grieg's Morning (twice) and In the Hall of the
   Mountain King as modules `scripts/mkxm.py` writes from `mods/src/`,
   with CC0 recordings in them (`agents/clips.md`). A clip

@@ -193,8 +193,9 @@ scripts/mkxm.py mods/src/mountain_king.py mods/grieg-mountain-king-chip.xm chip
   `knee=12,release=10` for the buzzer and `knee=12,release=13` for a
   speaker (the user's ear again), a limiter that lets go over a
   second and rides a passage's level. The tune is the user's and not
-  under the project's licence: not to be distributed apart from
-  onebitdawn's clip pack.
+  under the project's licence: it may be copied and distributed,
+  unmodified, as part of onebitdawn clip packs, including
+  commercially; all other rights reserved (`clips/README.md`).
 - The other two there are Grieg's Morning (shortened; read off a scan) and
   In the Hall of the Mountain King (Mutopia's MIDI file). Morning in
   both kits and the Mountain King in `bright` are in the default
