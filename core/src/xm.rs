@@ -69,8 +69,10 @@ const PATTERN_ENTRY: usize = 6;
 const INSTRUMENT_ENTRY: usize = 80;
 /// Points of a volume envelope.
 const ENVELOPE_POINTS: usize = 12;
-/// Channels played; the converter refuses a module with more.
-pub const MAX_CHANNELS: usize = 8;
+/// Channels played; the converter refuses a module with more. A
+/// channel that is not sounding costs the mixer nothing, one that is
+/// about as much as any other, so a module's cost follows its voices.
+pub const MAX_CHANNELS: usize = 16;
 
 /// The mixing rate: four times the PCM clips' 8 kHz, and twice the
 /// 16 kHz a clip may ask for instead.

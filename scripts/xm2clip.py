@@ -30,11 +30,11 @@ import sys
 from collections import Counter
 
 MAGIC = b"XMC2"  # xm::MAGIC
-MAX_CHANNELS = 8  # xm::MAX_CHANNELS
+MAX_CHANNELS = 16  # xm::MAX_CHANNELS
 ENVELOPE_POINTS = 12
 # What xm.rs plays: effects by number (E's by its first digit too) and
 # the volume column by its high nibble.
-EFFECTS = {0, 1, 2, 3, 4, 5, 6, 9, 0xA, 0xB, 0xC, 0xD, 0xF, 0x10, 0x14}
+EFFECTS = {0, 1, 2, 3, 4, 5, 6, 9, 0xA, 0xB, 0xC, 0xD, 0xE, 0xF, 0x10, 0x14}
 E_EFFECTS = {1, 2, 9, 0xA, 0xB, 0xC, 0xD}
 VOLUMES = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0xA, 0xB, 0xF}
 # Panning does nothing on one buzzer; not worth a warning.

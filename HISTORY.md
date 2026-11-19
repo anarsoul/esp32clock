@@ -9806,3 +9806,89 @@ through the converter: "No issues."
 
 Not tried: the half-rate fault of `agents/hardware.md` with the 8-bit
 setup and this sequence in.
+
+## Sixteen channels for the module player — built and measured on test-clock 2026-11-18, heard and kept the same day
+
+The user had a ScreamTracker 3 module, "Children - Classic Version"
+(Nightbeat, 1996; 16 channels, 14 samples of 8 bits, 275 KB), and
+asked for it in the local packs. Two things were in the way.
+
+**S3M.** `scripts/s3m2xm.py` makes an XM of one: a sample becomes an
+instrument of one sample, C2Spd the relative note and finetune, on
+the linear table; A, B, C, D, O and T are converted, D00's memory
+resolved in playing order, any other effect named and left out; no
+panning. Checked with libopenmpt playing both files: 165 s each, the
+same order and row at every tick, fourteen channels' levels
+correlating at 0.9996 or better, and the other two differing only by
+the S3M's pan table (which reads as text, in a module flagged mono).
+
+**Channels.** `xm::MAX_CHANNELS` was 8 and the converter refused the
+module. It is 16 now, in `xm.rs` and `scripts/xm2clip.py`; nothing
+else was sized by it. The clip's format is the same `XMC2`: the
+clips of `clips/` come out byte for byte as before. A firmware older
+than this reads a clip of more than eight channels wrongly (eight
+cells a row where there are more) and plays nonsense, with no harm;
+none such is released.
+
+- The stack: 39.9 → 39.3 KB, 640 bytes.
+- The mix against the references, on the host (`CLIP_RAW`, the
+  16 kHz clip, openmpt123 at 16 kHz): each pattern's level within
+  0.3 dB of the S3M's, seven bands from 50 Hz to 8 kHz within 0.3 dB
+  but the top one, 0.9 dB under.
+- The cost, on the host only: the player takes 2.4 times as long a
+  second of Children as a second of Halftime, at either rate.
+  Halftime at 16 kHz measured 12 % of the processor on test-clock, so
+  Children at 16 kHz should be near 29 %, the SID's share, and at
+  31 250 somewhere over 50 %, which nothing has run at. An estimate
+  from a debug build, not a measurement.
+- `xm2clip.py` said "not played" of every E effect, though the player
+  plays seven of them: 0xE was missing from its list. Fixed; a
+  warning only, no clip changes.
+
+The packs, with both rates so the clock can say which it can afford
+(`packs/` is ignored; the module is somebody's music, not ours to
+give out):
+
+```
+scripts/s3m2xm.py mods/children.s3m mods/children.xm 'Children - Classic'
+scripts/xm2clip.py mods/children.xm packs/local/children.xmc --rate 16000
+scripts/xm2clip.py mods/children.xm packs/local/children_fast.xmc
+scripts/xm2clip.py mods/children.xm packs/speaker/children.xmc --rate 16000 --highpass 100 --passes 1 --release 10
+scripts/xm2clip.py mods/children.xm packs/speaker/children_fast.xmc --highpass 100 --passes 1 --release 10
+```
+
+`packs/clips-local-children.bin` and
+`packs/clips-local-speaker-children.bin` are the local packs' eight
+clips and these two after them, Children and Children 31k, 932 902
+bytes of the partition's 1 179 648.
+
+**On test-clock, 2026-11-18** (flashed over USB, the speaker pack,
+`output` on the line so nothing is heard; `/play`, the serial log's
+`clip:` line; white-clock has the build over the air and the buzzer's
+pack):
+
+| clip | filling | share |
+| --- | --- | --- |
+| Halftime, four channels, 31 250 | 6732 of 30 131 ms | 22 % |
+| Children, 16 kHz, played through | 43 203 of 164 832 ms | 26 % |
+| Children, 31 250, its first 151 s | 73 532 of 151 330 ms | 49 % |
+
+No underruns or stray positions in any. The first 30 s of Children,
+which are thin, were 21 % and 41 %. `/api` was asked every four
+seconds through both: 32 to 76 ms with the 16 kHz clip playing, 36 to
+130 ms with the other but for six answers of 180 to 360 ms; none
+failed. The watchdog's longest feed gap stayed where it was before
+the clips, 1420 ms. So the host's estimate was a little high, and a
+sixteen-channel module at 31 250 is half the processor and plays.
+
+**Heard, 2026-11-18** (the user, white-clock's buzzer and test-clock's
+speaker): "Buzzer variant is good. So is speaker. Keep 31k variant."
+The 16 kHz clips are gone; `children.xmc` in `packs/local/` and
+`packs/speaker/` is the one at 31 250 (the second and fourth commands
+above, under that name), and the two packs are made again with it as
+their ninth clip, 641 964 bytes each. The clocks have the packs of
+ten until the new ones are uploaded.
+
+Not done: the clip as a ringing alarm, round and round for five
+minutes at half the processor; the version line, which says
+`v0.4-95-gb7cb573` with no `-dirty` for a build of a changed tree.

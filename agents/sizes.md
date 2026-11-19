@@ -94,6 +94,7 @@ What the statics leave of DRAM is the main stack. Check `.stack` in
 | 2026-11-14 | 49.9 KB | the clip ring, 16 KB, in every build |
 | 2026-11-15 | 43.7 KB | `RESPONSE_BUF` at 8 KB |
 | 2026-11-17 | 42.2 KB | the settings map's scratch at 1 KB |
+| 2026-11-18 | 39.9 → 39.3 KB | `xm::MAX_CHANNELS` from 8 to 16, 640 bytes of the clip task's future (both figures with the line output's setting in the tree) |
 
 What takes it:
 

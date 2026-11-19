@@ -735,6 +735,7 @@ is made or is no longer wanted, and put the result in the section.
 - **A clip of a version no player reads is refused** — 2026-11-17, built and tested on the host; no upload of such a pack tried on a clock.
 - **A watchdog** — built and every reset path run on test-clock 2026-11-17; a soak, and the longest feed gap after a clip, a save and the two uploads, not yet.
 - **Forward compatibility before the first public release** — 2026-11-17, built, tested on the host and on test-clock; not committed, not tagged.
+- **Sixteen channels for the module player** — built, measured on test-clock and heard 2026-11-18; the 31 250 clip as a ringing alarm for five minutes not run, and the version line of a changed tree's build lacks `-dirty`.
 
 Headings that still say planned or not run, though the work is in
 the tree or was overtaken; nothing is owed but the heading's wording,

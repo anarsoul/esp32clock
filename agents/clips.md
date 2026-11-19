@@ -50,8 +50,12 @@ scripts/zxbeeper.py old.bpr new.bpr
 scripts/xm2clip.py tune.xm mods/tune.xmc [--highpass 900 --passes 2] [--raise 1:2] [--drive 160 --release 5] [--knee 100] [--rate 16000] [--bits 8]
 ```
 
-A FastTracker 2 module for the clock's own player. It lists what the
-module uses that the player lacks.
+A FastTracker 2 module for the clock's own player, of up to sixteen
+channels. It lists what the module uses that the player lacks.
+
+`scripts/s3m2xm.py tune.s3m tune.xm ['Title']` makes an XM of a
+ScreamTracker 3 module first: samples, notes, volumes and the effects
+A, B, C, D, O and T, naming any other it leaves out; no panning.
 
 - The bass cut, an instrument's octave and the limiter are the clip's.
 - `--knee` is the level the limiter starts at, in 1024s of the mix
