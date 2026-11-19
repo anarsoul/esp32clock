@@ -233,7 +233,9 @@ scripts/speaker-clips.sh
 - `espflash write-bin` is the pack over USB.
 - `scripts/speaker-clips.sh` makes the default pack for a clock with a
   speaker in the buzzer's place (`speaker-mod/`),
-  `packs/clips-default-speaker.bin`, under the default pack's names.
+  `packs/clips-default-speaker.bin` (or the path it is given), under
+  the default pack's names. The CI makes and checks it, and a release
+  has it as `onebitdawn-clips-speaker-<tag>.bin`.
 
 ## Build variables
 

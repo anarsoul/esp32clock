@@ -26,12 +26,14 @@
 # pack is the default one's sources through it: packs/clips-default-speaker.bin,
 # under the default pack's names, so a clock's melody setting means the
 # same tune after it.
-# Usage: scripts/speaker-clips.sh
+# Usage: scripts/speaker-clips.sh [pack.bin]    the pack's path, from the
+#                                               repository's root; the
+#                                               release names its own
 #        API_TOKEN=… scripts/clips.sh <ip> packs/clips-default-speaker.bin
 set -eu
 
 cd "$(dirname "$0")/.."
-pack=packs/clips-default-speaker.bin
+pack=${1:-packs/clips-default-speaker.bin}
 cargo pack -o "$pack" --sound-output speaker clips/trantor.bpr \
     "mods/Orion - Nero Burning ROM v5.5.7.8kg.xm:name=halftime" mods/Orion-Nero6.3.0.2.xm:name=keygen \
     mods/nq-synchronization.pt3:restart,name=synchronization \

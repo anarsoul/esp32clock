@@ -575,8 +575,12 @@ switches back. A power cut clears the count.
    without `--tags`, so a lightweight tag would not reach the version)
    runs `.github/workflows/release.yml`.
 3. The workflow builds with the CI's prebuilt settings, tests, and
-   attaches two files to the GitHub release:
+   attaches to the GitHub release:
    - `onebitdawn-ota-<tag>.bin`, the `/update` image;
+   - `onebitdawn-clips-<tag>.bin`, the default clip pack, and
+     `onebitdawn-clips-speaker-<tag>.bin`, the same for a speaker
+     (`scripts/speaker-clips.sh`), which the installer does not write;
+   - `onebitdawn-pack-<tag>-…`, the pack maker for three systems;
    - `onebitdawn-<tag>.bin` (`save-image --merge`): the whole flash
      from 0, contiguous, so it covers `nvs` with erased bytes and
      clears the settings; `write-bin` then needs an `espflash reset`.

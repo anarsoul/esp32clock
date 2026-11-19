@@ -46,6 +46,11 @@ jobs:
         run: |
           scripts/clips.sh
           CLIP_PACK_FILE=packs/clips-default.bin cargo host-test the_pack_file_parses -- --nocapture
+      # The same for a speaker, from the modules, as the release makes it.
+      - name: Make the speaker's clip pack and check it
+        run: |
+          scripts/speaker-clips.sh
+          CLIP_PACK_FILE=packs/clips-default-speaker.bin cargo host-test the_pack_file_parses -- --nocapture
       # The older way, the clips built into the firmware: the players'
       # tests over the repository's clips run only with clips built in.
       - name: Test with the clips built in
@@ -53,7 +58,9 @@ jobs:
       - uses: actions/upload-artifact@v6
         with:
           name: onebitdawn-clips-${{ github.sha }}
-          path: packs/clips-default.bin
+          path: |
+            packs/clips-default.bin
+            packs/clips-default-speaker.bin
           if-no-files-found: error
       - name: Clippy on the core crate and its tests
         run: cargo clippy -p onebitdawn-core --target host-tuple --tests -- -D warnings

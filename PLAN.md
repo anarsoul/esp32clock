@@ -1355,6 +1355,18 @@ Owed: the three heard on a clock, buzzer and speaker (with the
 buzzer's defaults the limiter flattens their crescendos, measured on
 the first kit); Halftime and Keygen heard with the ramp.
 
+## The speaker's pack in a release — built 2026-11-19, the workflow not yet run
+
+v0.5-rc2 had the buzzer's pack only (the user). The release workflow
+now runs `scripts/speaker-clips.sh` (which takes the pack's path) and
+attaches `onebitdawn-clips-speaker-<tag>.bin`, read back by
+`the_pack_file_parses`; the CI makes and checks the same pack on every
+push, so a tag is not the first time it is built. The web installer
+still writes the buzzer's pack: a choice there is a second manifest a
+tag and a control on the page, not built.
+
+Owed: the next tag's release having the file.
+
 ## Checks still owed
 
 - "Suspended Seconds" (2026-11-19, in `HISTORY.md`): the processor's

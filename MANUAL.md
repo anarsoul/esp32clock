@@ -121,7 +121,10 @@ and a clock's clips are a *clip pack* in a flash partition of their
 own, `clips`, 1152 KB, so they can be changed without a new
 firmware. The default pack is the eight clips in `clips/`; a release
 has it as `onebitdawn-clips-<tag>.bin` and the web installer writes
-it.
+it. `onebitdawn-clips-speaker-<tag>.bin` is the same eight made for a
+clock with a speaker (in the buzzer's place, or on the line output's
+amplifier): the bass left in and a gentler limiter. Upload it in the
+other's place.
 
 A pack of your own is made of tracker modules (`.xm`, `.mod`, `.s3m`),
 Commodore 64 tunes (`.sid`), ZX Spectrum ones (`.pt3`) and sound files
@@ -199,7 +202,8 @@ has `onebitdawn-<tag>.bin`, the whole flash from offset 0 for
 this one covers the settings partition too and clears it), next to
 `onebitdawn-ota-<tag>.bin`, the update image for `/system` and
 `scripts/ota.sh`, and `onebitdawn-clips-<tag>.bin`, the default clip
-pack (see above; the whole-flash image does not include it). A release is made by pushing an annotated tag `v*`
+pack (see above; the whole-flash image does not include it), with
+`onebitdawn-clips-speaker-<tag>.bin`, the same for a speaker. A release is made by pushing an annotated tag `v*`
 (`.github/workflows/release.yml`).
 
 Between releases, every push is built on GitHub Actions

@@ -179,7 +179,8 @@ from `http://<ip>/update`; its settings survive the update.
   limiting is heard as overdrive.
 - For the same speaker: `scripts/speaker-clips.sh` makes the default
   clip pack with the modules' bass left in and a slower limiter, which
-  is the pack maker's `--sound-output speaker`; its `flat` option
+  is the pack maker's `--sound-output speaker`, and a release has
+  that pack as `onebitdawn-clips-speaker-<tag>.bin`; its `flat` option
   makes a SID tune without the limiter (a firmware older than this
   plays such a clip limited).
 

@@ -1,6 +1,6 @@
 # A release from a `v*` tag: the firmware with the prebuilt settings
 # (the same as ci.yml), the OTA image for `/update`, the merged image
-# for espflash, the default clip pack and the pack maker (tools/pack)
+# for espflash, the default clip pack, the same for a speaker, and the pack maker (tools/pack)
 # as a command for Linux, Windows and macOS, attached to the GitHub release; then the flasher
 # page in docs/ and the pack maker's page in docs/pack/ with its
 # WebAssembly, with the release's manifest and images, deployed to the
@@ -90,6 +90,13 @@ jobs:
             clips/suspended_seconds.xmc
           CLIP_PACK_FILE="images/onebitdawn-clips-${GITHUB_REF_NAME}.bin" \
             cargo host-test the_pack_file_parses -- --nocapture
+          # The same eight for a clock with a speaker, converted again
+          # from mods/ (scripts/speaker-clips.sh): for the Clips page
+          # or `espflash write-bin 0x2e0000`; the web installer writes
+          # the buzzer's.
+          scripts/speaker-clips.sh "images/onebitdawn-clips-speaker-${GITHUB_REF_NAME}.bin"
+          CLIP_PACK_FILE="images/onebitdawn-clips-speaker-${GITHUB_REF_NAME}.bin" \
+            cargo host-test the_pack_file_parses -- --nocapture
           # The pack maker for its page, docs/pack/.
           cargo pack-wasm
           cp target/wasm32-unknown-unknown/tool/onebitdawn_pack.wasm images/
@@ -173,6 +180,12 @@ jobs:
 
                 espflash write-bin 0x2e0000 onebitdawn-clips-${{ github.ref_name }}.bin
                 espflash reset
+
+            `onebitdawn-clips-speaker-${{ github.ref_name }}.bin` is
+            the same eight tunes for a clock with a speaker (in the
+            buzzer's place, or on the line output's amplifier), with
+            the bass left in and a gentler limiter; it goes on the same
+            way, in the other's place.
 
             A pack of your own tunes (tracker modules, Commodore 64
             and ZX Spectrum tunes, sound files) is made in the browser
