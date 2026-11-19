@@ -97,7 +97,7 @@ use static_cell::ConstStaticCell;
 
 use crate::buzzer::Pins;
 use crate::melody;
-use crate::settings::{self, AudioOut};
+use crate::settings::{self, SoundPin};
 use crate::watchdog::{self, Party};
 
 /// The ring's bytes. In every build, with clips built in or not: the
@@ -379,11 +379,11 @@ impl Sampler {
         // The stream is under way and at zeros: connect the line. The
         // buzzer's through the inverter, a 1 pulling it low; the line
         // output's as it is, a 1 high.
-        let out = settings::get().output;
-        let line = pins.at_rest(out).into_peripheral_output().with_output_inverter(out == AudioOut::Buzzer);
+        let out = settings::get().output.clips();
+        let line = pins.at_rest(out).into_peripheral_output().with_output_inverter(out == SoundPin::Buzzer);
         OutputSignal::I2SO_SD.connect_to(&line);
         // The hold is for the buzzer's transistor.
-        CONVERTING.store(converter.is_some() && out == AudioOut::Buzzer, Ordering::Relaxed);
+        CONVERTING.store(converter.is_some() && out == SoundPin::Buzzer, Ordering::Relaxed);
 
         let mut pacer = Pacer::new();
         let mut chunks = 0;
@@ -408,7 +408,7 @@ impl Sampler {
         // Cut short on the line output: down to the rest by a ramp
         // before the pin is taken, in the first chunk the pacer would
         // write after an underrun, which the DMA is clear of.
-        if cancelled.is_some() && converter.is_some() && out == AudioOut::Line {
+        if cancelled.is_some() && converter.is_some() && out == SoundPin::Line {
             let at = pacer.played(position(first), chunks_in(started.elapsed().as_micros(), bit_rate)) + 2;
             let before = slot(at - 1);
             let from = i16::from_le_bytes([before[CHUNK - 2], before[CHUNK - 1]]);

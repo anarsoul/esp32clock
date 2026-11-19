@@ -220,6 +220,39 @@ and a bit stream's are as they were. Heard by the user the same
 evening on test-clock, the PAM8403 and the breadboard: no click at
 Stop any more, on a quiet clip (PPK) either.
 
+A third value, `split`, the user's of 2026-11-18: "note melodies on
+buzzer, clips on speaker", for a clock that has the amplifier and
+still has its buzzer on Q1. Built the same day (the build, clippy and
+the host tests pass) and flashed to white-clock over the air; the
+user, the same evening: "works as expected".
+
+- `AudioOut::Split` is record byte 2, with no new record version:
+  widening a field's values is what the record allows, and an image
+  that knows two values reads the third as `buzzer` (the test that
+  stood for "an output of a later image" now writes a 3).
+- The setting no longer names a pin. `settings::SoundPin` does
+  (`Buzzer`, `Line`), and the setting answers one for each kind of
+  sound: `AudioOut::tones()` and `AudioOut::clips()`. `buzzer::Pins`,
+  the tone and the clip take a `SoundPin`, so there is still no way
+  to ask for GPIO5 push-pull.
+- A tone reads `output.tones()`, a clip `output.clips()`; everything
+  that hung on the pin follows by itself: the inverter and the
+  thermometer's hold on the buzzer's pin only, the ramp at a cut on
+  the line's only. LEDC stays on the buzzer's pin, silent and
+  released, while a clip plays on the other, which is what it does
+  during a clip on `buzzer` too.
+- GPIO20 is driven low at boot when the stored setting's clips go
+  there, `line` or `split`.
+- On `/settings` the third option reads "Notes: buzzer, clips: amp"
+  (first "Notes on the buzzer, clips on the amplifier", too long for
+  the user, then "Buzzer + amplifier", "confusing"); `/api` takes
+  `output=split`.
+
+To check for `split`: a note melody's preview on the buzzer with
+GPIO20 quiet, a clip's on GPIO20 with the buzzer silent, the alarm
+ringing with each, and the thermometer not held during a converter
+clip.
+
 To check, on a board with the filter and the amplifier (or a scope on
 the filter's output, `bench/pdm-amp.md`):
 
@@ -709,6 +742,32 @@ pack upload".
 Not covered: a panel (the ring runs into no drivers), a speaker, the
 buttons, the access point, the sensors.
 
+## The soak again, 24 h of `v0.4-95-gb7cb573` on the bare bench board — started 2026-11-18
+
+The run above was stopped at 9 h 13 min and found Trantor's stray
+positions; this is the same soak, same board, load and pass criteria,
+on the image with the I2S divider written in the IDF's sequence. It
+still owes the watchdog's 24 h and the feed gap after the two uploads.
+
+Differences from the first run: the image went in over the air
+(`ota_1`, confirmed at 5 s), and that reboot is the start, reset
+reason `CoreSw`, the serial log a `cat` of the port attached before
+it; the default pack was already in flash (4 clips, 105156 bytes,
+checked in 73 ms at boot), so no pack upload before the start. The
+update's one `WARN` (`boot 1 of 2, rolled back if not confirmed`) is
+expected and not counted. The first run's logs are in
+`target/soak/run-2026-11-17/`; `watcher.sh` there is the watcher.
+
+Started 2026-11-18 12:09:25 MST, to end 2026-11-19 12:09. The feed
+gap before the upload, at 1140 s of the build before: 1184 ms.
+
+The serial capture's `cat` was gone at 15:50 (uptime 13250 s; not
+the clock: no reset, `/api` answering throughout, the port free and
+not re-enumerated). Another session, working on test-clock on
+`/dev/ttyACM1`, stopped its own capture with a `pkill` that matched
+every `cat` and took this one too. Restarted appending at 15:51 with no reset;
+the log lacks about a minute, the heartbeat of 13260 s among it.
+
 ## Twenty channels for the module player, and Crush tried in the default pack — built and measured on test-clock 2026-11-18; Crush heard and dropped the same day
 
 The user asked for `xm::MAX_CHANNELS` at 20, after sixteen the same
@@ -767,9 +826,10 @@ output before and after the player's two fixes (the next section):
 "It sounds a bit weird", then "It doesn't sound good. Keep the fixes,
 but drop Crush from default pack." The default pack is the four clips
 again, everywhere it was five; `clips/crush.xmc` went to the ignored
-`xm/`, the speaker's stays in `packs/speaker/`, and the module is
-still in `mods/`, untracked, the user's to keep or remove. test-clock
-still holds the pack of five. The twenty channels stay.
+`xm/`, the speaker's stays in `packs/speaker/`, and the module went
+there too, as `xm/drozerix-crush.xm` (the user, later the same day).
+test-clock held the pack of five until Elysium's replaced it. The
+twenty channels stay.
 
 ## The module player against openmpt123: vibrato's direction, a memory for each portamento — fixed 2026-11-18, heard on test-clock with Crush only
 

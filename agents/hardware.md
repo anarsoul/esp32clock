@@ -116,8 +116,10 @@ and its figures are `bench/pdm-amp.md` until it is built and heard.
   zeros the bottom rail.
 - GPIO20 is UART0's RX, which nothing uses: an input with a pull-up
   while the ROM runs. The firmware drives it only once the setting is
-  `line`: at boot if stored so, else at the first sound after the
-  change.
+  `line` or `split`: at boot if stored so, else at the first sound
+  that goes there after the change.
+- `split` is for a clock with the amplifier and its buzzer both: the
+  note melodies on GPIO5 as on `buzzer`, the clips here as on `line`.
 - Why this pin and not 2, 10, 18, 19 or 21 is in the work's section
   (`PLAN.md`, "A line output on the adapter").
 

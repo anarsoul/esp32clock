@@ -31,7 +31,7 @@ use static_cell::StaticCell;
 
 use onebitdawn::buzzer;
 use onebitdawn::clip;
-use onebitdawn::settings::{AudioOut, Settings};
+use onebitdawn::settings::{Settings, SoundPin};
 use onebitdawn::net::Mode;
 use onebitdawn::{buttons, carry, clock, dhcpd, display, dnsd, heal, http, mqtt, net, ota, pack, scan, sensors, settings, storage, watchdog};
 
@@ -113,7 +113,7 @@ async fn main(spawner: Spawner) -> ! {
     // for a clock with an amplifier: left as the ROM had it (UART0's
     // RX, an input) until the settings say it is in use.
     let mut sound_pins = buzzer::Pins::new(peripherals.GPIO5.degrade(), peripherals.GPIO20.degrade());
-    sound_pins.rest(AudioOut::Buzzer);
+    sound_pins.rest(SoundPin::Buzzer);
 
     // Buttons switch to ground and the board has no pull-ups. GPIO4 is the
     // upper button on this board, GPIO3 the lower one.
@@ -190,8 +190,8 @@ async fn main(spawner: Spawner) -> ! {
     // The line output at its rest, low, from here on, so the filter
     // behind it settles once and not at the first sound. A clock
     // switched to it later gets this at that sound.
-    if boot_settings.output == AudioOut::Line {
-        sound_pins.rest(AudioOut::Line);
+    if boot_settings.output.clips() == SoundPin::Line {
+        sound_pins.rest(SoundPin::Line);
     }
 
     // The drivers discard anything sent in the first 200 us after power-up.

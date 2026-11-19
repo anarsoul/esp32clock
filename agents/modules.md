@@ -251,7 +251,7 @@ command, looped or once, and stops within a note.
 
 - `Pins` is the two pins a sound can go out of, GPIO5 and GPIO20, and
   how each is driven and rests (`at_rest`, `rest`). A tone goes to the
-  one `settings::get().output` names at its start; the pin of the
+  one `settings::get().output.tones()` names at its start; the pin of the
   tone before is taken back to its rest first when that differs,
   since LEDC stays connected to it.
 
@@ -326,7 +326,7 @@ command, looped or once, and stops within a note.
   ring ahead of the DMA. It connects GPIO5 as a frozen open-drain
   signal through the GPIO matrix's inverter once the stream runs, and
   hands it back released before stopping; with the `output` setting
-  at `line` it is GPIO20, push-pull, no inverter, back to low, and a
+  at `line` or `split` (`AudioOut::clips()`) it is GPIO20, push-pull, no inverter, back to low, and a
   converter clip cut short there ends on a ramp (`clip::fade`) before
   the pin is taken back. It logs the clip's chunks,
   underruns and the time spent filling the ring (the player's share of

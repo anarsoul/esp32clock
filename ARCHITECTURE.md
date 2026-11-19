@@ -142,7 +142,8 @@ One pin, two sources. The buzzer's transistor is on at any driven
 level, so the pin is open drain throughout and released means silent.
 A clock with an amplifier has a second pin, the line output, push-pull
 and low at rest; the `output` setting says which of the two a sound
-goes out of, read at each tone and each clip (`buzzer::Pins`).
+goes out of, or the note melodies on the one and the clips on the
+other, read at each tone and each clip (`buzzer::Pins`).
 
 - **Note melodies**: `buzzer_task` plays pitch-and-length tables from
   `core::melody` as LEDC PWM.

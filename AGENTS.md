@@ -234,7 +234,9 @@ Each with its measurements in `agents/hardware.md`.
   assumes neither of the user's buzzer mods.
 - **Line output (GPIO20)** is the other pin a sound can go out of,
   for a clock with an amplifier: push-pull, low at rest, no inverter.
-  The `output` setting chooses, read at each tone and each clip. Every
+  The `output` setting chooses, read at each tone and each clip, as
+  `AudioOut::tones()` and `AudioOut::clips()`: `split` is the notes on
+  the buzzer and the clips here. Every
   pin configuration for sound goes through `buzzer::Pins`, so GPIO5 is
   never built push-pull by a path meant for GPIO20; a tone takes the
   last tone's pin back to its rest before LEDC goes to the other.

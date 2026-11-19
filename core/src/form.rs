@@ -1677,6 +1677,7 @@ mod tests {
         assert_eq!(try_body(b"tx_power=12"), Err(FormError::BadValue), "not a level the driver has");
         assert_eq!(try_body(b"tx_power=68"), Err(FormError::BadValue), "dBm, not quarters");
         assert_eq!(try_body(b"output=buzzer"), Ok(()));
+        assert_eq!(try_body(b"output=split"), Ok(()));
         assert_eq!(try_body(b"output=gpio20"), Err(FormError::BadValue));
         assert_eq!(try_body(b"%zz=1"), Err(FormError::UnknownKey));
         assert_eq!(try_body(b"hostname=-bad"), Err(FormError::BadValue));

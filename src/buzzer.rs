@@ -19,12 +19,13 @@
 //! its own, and hands the pin back released, with the GPIO matrix's inverter cleared, which the
 //! `Output` each tone builds would do as well.
 //!
-//! The line output (`settings::AudioOut::Line`) is the other pin a
+//! The line output (`settings::SoundPin::Line`) is the other pin a
 //! sound can go out of: GPIO20, push-pull, into an RC filter and an
 //! amplifier's input. It rests driven low, so a tone there is silent at
 //! a duty of 0 %, where the buzzer's is 100 %. Which pin is the
-//! `output` setting, read at every tone here and at every clip in
-//! `clip.rs`, so it changes with no reset; `Pins` is the two pins and
+//! `output` setting, read at every tone here (`AudioOut::tones`) and at
+//! every clip in `clip.rs` (`AudioOut::clips`), which need not be the
+//! same pin, so it changes with no reset; `Pins` is the two pins and
 //! the one place that knows how each is driven and what its rest is.
 //! LEDC stays connected to the pin of the last tone, silent, so the
 //! task takes that pin back before a tone goes to the other one.
@@ -50,7 +51,7 @@ use log::{info, warn};
 use crate::clip;
 use crate::display;
 use crate::melody::{self, Melody};
-use crate::settings::{self, AudioOut};
+use crate::settings::{self, SoundPin};
 use crate::watchdog;
 
 /// The two pins a sound can go out of.
@@ -76,10 +77,10 @@ impl Pins {
     }
 
     /// How the pin of `out` is driven.
-    pub fn drive_mode(out: AudioOut) -> DriveMode {
+    pub fn drive_mode(out: SoundPin) -> DriveMode {
         match out {
-            AudioOut::Buzzer => DriveMode::OpenDrain,
-            AudioOut::Line => DriveMode::PushPull,
+            SoundPin::Buzzer => DriveMode::OpenDrain,
+            SoundPin::Line => DriveMode::PushPull,
         }
     }
 
@@ -87,27 +88,27 @@ impl Pins {
     /// whatever it was connected to: the buzzer's open-drain and
     /// released, the line's push-pull and low. The inverter of the GPIO
     /// matrix is cleared with it.
-    pub fn at_rest(&mut self, out: AudioOut) -> Output<'_> {
+    pub fn at_rest(&mut self, out: SoundPin) -> Output<'_> {
         let (pin, level) = match out {
-            AudioOut::Buzzer => (&mut self.buzzer, Level::High),
-            AudioOut::Line => (&mut self.line, Level::Low),
+            SoundPin::Buzzer => (&mut self.buzzer, Level::High),
+            SoundPin::Line => (&mut self.line, Level::Low),
         };
         Output::new(pin.reborrow(), level, OutputConfig::default().with_drive_mode(Self::drive_mode(out)))
     }
 
     /// Leave the pin of `out` at its rest. The pad keeps it after the
     /// `Output` is dropped.
-    pub fn rest(&mut self, out: AudioOut) {
+    pub fn rest(&mut self, out: SoundPin) {
         let _ = self.at_rest(out);
     }
 }
 
 /// The duty a tone is silent at on `out`, the pin at its rest: the
 /// buzzer's line high all the period, the line output low.
-const fn silent_pct(out: AudioOut) -> u8 {
+const fn silent_pct(out: SoundPin) -> u8 {
     match out {
-        AudioOut::Buzzer => 100,
-        AudioOut::Line => 0,
+        SoundPin::Buzzer => 100,
+        SoundPin::Line => 0,
     }
 }
 
@@ -185,7 +186,7 @@ fn resolve(index: usize, last: &mut Option<usize>, what: &str) -> Melody {
 /// clip asked to go `round` that is made to (`melody::clip_loops`) does
 /// not end by itself: it loops with no gap, as its tune is written to,
 /// until a command arrives.
-async fn play_once(ledc: &Ledc<'static>, pins: &mut Pins, on: &mut AudioOut, m: &Melody, round: bool) -> Option<Command> {
+async fn play_once(ledc: &Ledc<'static>, pins: &mut Pins, on: &mut SoundPin, m: &Melody, round: bool) -> Option<Command> {
     if let Some(k) = m.clip {
         // The clip task has the pins until this returns.
         return clip::play(k, round && melody::clip_loops(k), &COMMAND).await;
@@ -218,7 +219,7 @@ pub async fn buzzer_task(ledc: Ledc<'static>, pins: Pins) -> ! {
     let mut ledc = ledc;
     let mut pins = pins;
     // The pin LEDC was last connected to.
-    let mut on = AudioOut::Buzzer;
+    let mut on = SoundPin::Buzzer;
     ledc.set_global_slow_clock(esp_hal::ledc::LSGlobalClkSource::APBClk);
 
     let mut last_random = None;
@@ -267,8 +268,8 @@ impl Drop for Sounding<'_> {
 /// goes to the pin the `output` setting names now; `on` is the pin of
 /// the tone before, which LEDC is still connected to and is taken off
 /// when this one goes elsewhere, or both would sound.
-async fn tone(ledc: &Ledc<'static>, pins: &mut Pins, on: &mut AudioOut, freq_hz: u32, ms: u64) {
-    let out = settings::get().output;
+async fn tone(ledc: &Ledc<'static>, pins: &mut Pins, on: &mut SoundPin, freq_hz: u32, ms: u64) {
+    let out = settings::get().output.tones();
     if *on != out {
         pins.rest(*on);
         *on = out;

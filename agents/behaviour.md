@@ -87,7 +87,7 @@ Saved in the `nvs` partition; editable from the buttons, the pages and
 | `temp_show` | `off`, `c` or `f`, default `c`. With a reading in hand the UI shows ` 23C` with the degree mark for seconds 30 to 34 of every minute in clock mode (`ui::TEMP_SHOW_AT`, `TEMP_SHOW_SECS`). |
 | hostname | the DHCP hostname |
 | `tx_power` | dBm: `2`, `5`, `7`, `8.5`, `11`, `13`, `14`, `15` or `16`; see "Wi-Fi power" in `agents/hardware.md` |
-| `output` | `buzzer` (the default) or `line`: the pin the tones and the clips go out of, GPIO5 or GPIO20. Read at every tone and every clip, so it changes with no reset. Not an MQTT `set/` key. See "Line output" in `agents/hardware.md` |
+| `output` | `buzzer` (the default), `line` or `split`: the pin the tones and the clips go out of, GPIO5 or GPIO20; `split` is the note melodies on GPIO5 and the clips on GPIO20. Read at every tone and every clip, so it changes with no reset. Not an MQTT `set/` key. See "Line output" in `agents/hardware.md` |
 | Wi-Fi network, API token | `ssid`, `password`; the token through `POST /token` |
 | `mqtt_host`, `mqtt_port`, `mqtt_user`, `mqtt_password` | see "Home Assistant" |
 | `skip_next` (page checkbox, key `skip`) | the one setting the record does not store: it skips one alarm and is cleared by it or by a power cut. A software reset (self-heal, panic) carries it over in RTC RAM, `src/carry.rs`. |

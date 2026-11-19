@@ -415,23 +415,51 @@ impl TempShow {
     }
 }
 
-/// Which pin the sound goes out of: the buzzer's, or the line output a
-/// clock with an amplifier has its filter on.
+/// A pin a sound can go out of.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SoundPin {
+    /// GPIO5, open-drain, into the buzzer's transistor.
+    Buzzer,
+    /// GPIO20, push-pull, into an RC filter and an amplifier.
+    Line,
+}
+
+/// Where the sound goes: the buzzer's pin, the line output a clock
+/// with an amplifier has its filter on, or each kind of sound to its
+/// own.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u8)]
 pub enum AudioOut {
-    /// GPIO5, open-drain, into the buzzer's transistor.
+    /// Everything on the buzzer's pin.
     Buzzer = 0,
-    /// GPIO20, push-pull, into an RC filter and an amplifier.
+    /// Everything on the line output.
     Line = 1,
+    /// The note melodies on the buzzer, the clips on the line output.
+    Split = 2,
 }
 
 impl AudioOut {
     /// The form and API names, in record-byte order.
-    pub const NAMES: [&str; 2] = ["buzzer", "line"];
+    pub const NAMES: [&str; 3] = ["buzzer", "line", "split"];
     /// The page's labels, in the same order.
-    pub const LABELS: [&str; 2] = ["Buzzer (GPIO5)", "Amplifier (GPIO20)"];
-    pub const ALL: [AudioOut; 2] = [AudioOut::Buzzer, AudioOut::Line];
+    pub const LABELS: [&str; 3] = ["Buzzer (GPIO5)", "Amplifier (GPIO20)", "Notes: buzzer, clips: amp"];
+    pub const ALL: [AudioOut; 3] = [AudioOut::Buzzer, AudioOut::Line, AudioOut::Split];
+
+    /// The pin a note melody's tones go out of.
+    pub const fn tones(self) -> SoundPin {
+        match self {
+            AudioOut::Buzzer | AudioOut::Split => SoundPin::Buzzer,
+            AudioOut::Line => SoundPin::Line,
+        }
+    }
+
+    /// The pin a clip goes out of.
+    pub const fn clips(self) -> SoundPin {
+        match self {
+            AudioOut::Buzzer => SoundPin::Buzzer,
+            AudioOut::Line | AudioOut::Split => SoundPin::Line,
+        }
+    }
 
     pub fn from_byte(b: u8) -> Option<Self> {
         Self::ALL.get(b as usize).copied()
@@ -1194,7 +1222,7 @@ mod tests {
         but("a hostname past its field", &|r| r[RECORD_HOSTNAME_LEN] = HOSTNAME_MAX as u8 + 1, Settings { hostname: d.hostname, ..s });
         but("another face for the temperature", &|r| r[RECORD_TEMP_SHOW] = 9, Settings { temp_show: d.temp_show, ..s });
         but("a transmit power that is no level", &|r| r[RECORD_TX_POWER] = 69, Settings { tx_power_qdbm: d.tx_power_qdbm, ..s });
-        but("an output of a later image", &|r| r[RECORD_OUTPUT] = 2, Settings { output: d.output, ..s });
+        but("an output of a later image", &|r| r[RECORD_OUTPUT] = 3, Settings { output: d.output, ..s });
         but(
             "an offset past the limit",
             &|r| r[RECORD_TEMP_OFFSET..RECORD_TEMP_OFFSET + 2].copy_from_slice(&(TEMP_OFFSET_LIMIT_DC + 1).to_le_bytes()),
@@ -1394,12 +1422,21 @@ mod tests {
         assert_eq!(Settings::from_record(&bad).map(|s| s.tx_power_qdbm), Some(Settings::DEFAULT.tx_power_qdbm), "a power above the ceiling is the default");
         assert_eq!(AudioOut::from_name("line"), Some(AudioOut::Line));
         assert_eq!(AudioOut::from_name("Line"), None);
-        assert_eq!(AudioOut::from_byte(2), None);
+        assert_eq!(AudioOut::from_byte(3), None);
         for o in AudioOut::ALL {
             assert_eq!(AudioOut::from_name(o.name()), Some(o));
             assert_eq!(AudioOut::from_byte(o as u8), Some(o));
         }
         assert_eq!(Settings::DEFAULT.output, AudioOut::Buzzer, "what a stock clock has");
+        for (out, tones, clips) in [
+            (AudioOut::Buzzer, SoundPin::Buzzer, SoundPin::Buzzer),
+            (AudioOut::Line, SoundPin::Line, SoundPin::Line),
+            (AudioOut::Split, SoundPin::Buzzer, SoundPin::Line),
+        ] {
+            assert_eq!((out.tones(), out.clips()), (tones, clips), "{out:?}");
+            assert_eq!(AudioOut::from_byte(out as u8), Some(out));
+            assert_eq!(AudioOut::from_name(out.name()), Some(out));
+        }
         assert!(Settings { alarm_days: DAYS_WEEKEND, ..ok }.alarm_on(5));
         assert!(!Settings { alarm_days: DAYS_WEEKEND, ..ok }.alarm_on(4));
         assert_eq!(RECORD_LEN, ok.to_record().len());
