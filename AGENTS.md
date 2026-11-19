@@ -404,7 +404,7 @@ release from that one on, with the newer one's data in flash:
   Widening a field's values is therefore allowed, and costs a
   rolled-back clock that setting.
 - **No item in the settings map is longer than `storage::ITEM_MAX`**
-  (1000 bytes, key included; the record is 387). `sequential-storage`
+  (1000 bytes, key included; the record is 408). `sequential-storage`
   reads every item it passes into the scratch, so one item too long
   for an older image fails its read of all of them: it then runs on
   the defaults and erases the map at its first save (seen on

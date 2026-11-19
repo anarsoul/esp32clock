@@ -163,9 +163,10 @@ an upload. A pack with a clip in a version of its format the firmware
 does not play (made by a newer converter, or a very old one) is
 refused, by `onebitdawn-pack` and by the clock, which finds it only
 after writing the pack and is left with the note melodies until the
-next upload: update the firmware, or convert the clip again. The alarm sound is stored by its place in the list, so
-check it after changing packs; a sound that is no longer there is the
-beeps.
+next upload: update the firmware, or convert the clip again. The alarm sound is stored by its name (the one `/api` has, which the
+pack maker shows as Name), so an alarm keeps its sound through a new
+pack that still has that clip, wherever in the list; a sound that is
+no longer there is the beeps.
 
 <p align="center">
   <img src="screenshots/clips.png" width="320" alt="The Clips page: the pack in use, its clips and the upload">

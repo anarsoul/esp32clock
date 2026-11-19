@@ -133,6 +133,9 @@ pub struct Store {
     scratch: Scratch,
     /// The map holds an item longer than the scratch: see `load`.
     oversized: bool,
+    /// The record `load` read is of a layout before this firmware's
+    /// (`settings::record_is_older`): the persist task writes it again.
+    outdated: bool,
 }
 
 impl Store {
@@ -170,7 +173,7 @@ impl Store {
                 return None;
             }
         };
-        Some(Store { map: Map::new(AsyncFlash, config, NoCache::new_uncached()), scratch: Scratch([0; SCRATCH]), oversized: false })
+        Some(Store { map: Map::new(AsyncFlash, config, NoCache::new_uncached()), scratch: Scratch([0; SCRATCH]), oversized: false, outdated: false })
     }
 
     /// The stored settings, if there is a valid record. A map that cannot
@@ -181,6 +184,7 @@ impl Store {
             Ok(Some(record)) => match Settings::from_record(record) {
                 Some(s) => {
                     info!("settings: loaded from flash");
+                    self.outdated = settings::record_is_older(record);
                     Some(s)
                 }
                 None => {
@@ -256,6 +260,23 @@ pub async fn persist_task(mut store: Store, mut stored: Option<Settings>) -> ! {
     // The boot value is already in flash (or is the default); do not
     // rewrite it.
     let _ = rx.try_changed();
+    // But a record an older firmware wrote is written again in this
+    // one's layout, once, at the first boot after the update: what was
+    // loaded and nothing else (not the build's seeds, which wait for a
+    // change as they did). It gives the record the alarm sound's name
+    // before a new pack can move the clip. A write that fails is left
+    // for the next change, or the next boot.
+    if store.outdated
+        && let Some(old) = stored
+    {
+        match store.save(&old).await {
+            Ok(()) => {
+                info!("settings: an older firmware's record, saved again in this one's layout");
+                store.outdated = false;
+            }
+            Err(e) => warn!("settings: an older record not saved again: {e:?}"),
+        }
+    }
     loop {
         let mut s = rx.changed().await;
         loop {

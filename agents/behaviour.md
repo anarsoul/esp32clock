@@ -82,7 +82,7 @@ Saved in the `nvs` partition; editable from the buttons, the pages and
 | --- | --- |
 | timezone (`tz`) | a POSIX TZ rule such as `PST8PDT,M3.2.0,M11.1.0`, parsed by `core/src/tz.rs` and evaluated on the chip from the NTP time, so daylight saving needs nothing from the network. The key also takes minutes east of UTC, stored as the fixed rule `<-07>7`. Default: `TZ_RULE` from the build, checked by a `const` assert so a bad rule fails the build, else `TZ_OFFSET_MINUTES` as a fixed rule (the CI's `<-07>7` is Vancouver without daylight saving). The page's `Use this browser's zone` button fills it in through `/tz.js` (`src/tz.js`). |
 | 12/24 hour, colour, brightness | |
-| alarm, alarm days, alarm melody | the melody is an index into the table, see "Clip packs" |
+| alarm, alarm days, alarm melody | the melody is an index into the table, kept in the record by its name, see "Clip packs" |
 | `temp_offset` | tenths of a degree Celsius added to the NTC's reading, ±10.0, for the warm air at the sensor's spot in the case. Default −2.5 (`config::DEFAULT_TEMP_OFFSET_DC`, what the user's clocks typically need) for a clock with no record or one older than version 8; a stored value, 0 included, stays. |
 | `temp_show` | `off`, `c` or `f`, default `c`. With a reading in hand the UI shows ` 23C` with the degree mark for seconds 30 to 34 of every minute in clock mode (`ui::TEMP_SHOW_AT`, `TEMP_SHOW_SECS`). |
 | hostname | the DHCP hostname |
@@ -232,10 +232,21 @@ Read-only keys; posting one is refused as an unknown key:
   refused before anything is erased and the pack in use stays. A hash
   mismatch after the write leaves the clock without a pack until the
   next upload. A good one restarts the clock (`heal::reboot`).
-- The melody setting is an index: after another pack it names whatever
-  is at that place, and a place past the table's end is read as
-  `beeps` (`Settings::from_record`), which is what a clock updated
-  over the air onto the old table gets for a clip.
+- The melody setting is an index, and the record keeps the melody's
+  API name beside it (version 14): read back, it is the melody of that
+  name wherever the table in force has it, so an alarm keeps its clip
+  through a new pack that still has it, and `beeps` if no melody has
+  the name (`Settings::from_record`), which is what a clock updated
+  over the air onto the old table gets for a clip. A record with no
+  name (an older firmware's, or one saved while an upload had the pack
+  out of the table) goes by the index, a place past the table's end
+  being `beeps`. An image rolled back to reads the index.
+- A record an older firmware wrote is written again in this one's
+  layout at the first boot that finds it (`settings::record_is_older`,
+  the persist task's start), once: what was loaded, not the build's
+  seeds. So the name is in the record before a pack can move the clip.
+  A newer firmware's record, after a rollback, is never rewritten for
+  its version.
 
 ## The system page and the PIN
 

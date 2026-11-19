@@ -85,6 +85,13 @@ from `http://<ip>/update`; its settings survive the update.
 
 ### Added
 
+- The alarm sound is stored by its name and no longer by its place in
+  the list: an alarm keeps its clip through a new clip pack that still
+  has it, in whatever order, and through a firmware with more note
+  melodies. A sound no pack has any more is the beeps, as before. A
+  firmware rolled back to goes by the place, as it always did. The
+  stored settings are written once in the new layout at the first
+  boot after an update, so this holds from the update on.
 - A watchdog. A clock whose firmware hangs resets itself within a
   minute, where it used to stay dark or frozen until the power was
   cut, and an update that hangs is rolled back like one that never

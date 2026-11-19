@@ -60,6 +60,92 @@ The user's, and what the readiness check of the same day left open.
 
 ## Planned, not built
 
+### The alarm sound is kept by its name, and an older record written again at the first boot — built 2026-11-19, run on test-clock the same day
+
+The record keeps the alarm sound as its place in the melody table
+(byte 35), and a pack's clips are places in that table: a new pack
+with the same clip somewhere else, or a clip more before it, and the
+alarm is another tune or the beeps. Now that a user makes packs
+(`tools/pack`), wanted (the user, 2026-11-19): the sound kept by its
+API name, so that an alarm whose clip the new pack still has does not
+fall to the beeps.
+
+**Design.** The record only; `Settings::melody` stays the index it is,
+and nothing that reads it changes.
+
+- Record version 14 appends the name: a length byte and
+  `pack::NAME_MAX` bytes, 21 in all, the record 408 (`ITEM_MAX` is
+  1000). `to_record` writes `melody::name` of the index, `random`
+  included, and nothing (length 0) for an index the table in force
+  has no melody at, as it is while an upload has the pack out of the
+  table: a save in that window must not turn the alarm into the
+  beeps by name.
+- `from_record`, version 14 and a name there: the melody of that name
+  in the table in force, wherever it is; no such melody (the new pack
+  has not the clip) is the beeps, as an index past the table was. No
+  name: the index, as before.
+- Byte 35 is written as before, so an image rolled back to reads what
+  it always did.
+- A firmware update that adds a note melody moves every clip's index;
+  the name covers that too.
+
+**Built** as designed, in `core/src/settings.rs` alone
+(`RECORD_VERSION` 14, `RECORD_MELODY_NAME`); the firmware builds, 184
+host tests, `the_alarm_sound_is_kept_by_its_name` among them: the clip
+found at another place in another pack, the beeps for a pack without
+it, a version 13 record by its index, a save with the pack out of the
+table.
+
+**Run on test-clock** (the board on `/dev/ttyACM1`, over the air,
+its output `line` and so silent; 2026-11-19), `/api`'s `melody` read
+after each restart. Packs of the default clips in three orders, made
+by `cargo pack`:
+
+| step | pack in flash | melody |
+| --- | --- | --- |
+| `v0.4-100-gcb0f77f`, the alarm set to `halftime` | trantor, halftime, keygen, synchronization | halftime |
+| updated to `v0.4-107-gb810c42-dirty`, this change | the same | halftime |
+| a pack uploaded, nothing saved since the update | keygen, synchronization, trantor, halftime | synchronization |
+| `melody=halftime` posted: the first save by this firmware | the same | halftime |
+| a pack uploaded | trantor, halftime, keygen, synchronization | halftime |
+| a pack uploaded | keygen, synchronization, trantor, halftime | halftime |
+| a pack uploaded | trantor, keygen | beeps |
+| the clock's own pack put back, nothing saved since | ten clips, Halftime the second | halftime |
+
+**Learned.** The record gets its name at the first save by this
+firmware and not at the update: the third row is the old firmware's
+record read by its index, as the design says, and it is what a clock
+gets whose first act after the update is a new pack. No clock outside
+the user's has a pack before this firmware. A save at the first boot
+of a record older than the firmware's would close it, for a flash
+write at that boot; not done, the user's to say. And the last row: a
+clip that comes back is the alarm's again as long as nothing was saved
+while it was gone.
+
+**The record written again at the first boot** (the user, the same
+day: "let's update the record at the first boot after an update if
+the stored record is older than the firmware's").
+`settings::record_is_older` is the rule, the record's version under
+this image's and never over it; `Store::load` notes it and the persist
+task, as it starts, saves what was loaded, once, before it waits for a
+change. Not the seeds: they go in with the first change as they did.
+One flash write at that boot, the scan stalled for it as for any save.
+
+Run on test-clock: back to `v0.4-105-g9ff705e` by `/ota` (it read the
+new record by its index, the fourth of the ten clips, `donkey_kong`:
+the rollback the design promises), the first test pack and
+`melody=halftime` there, an old record; then this build by `/ota` and
+nothing posted; then the pack with Halftime moved from second to
+fourth: `halftime`, where the run above had `synchronization`. The
+clock's own pack back: `halftime`.
+
+The clock was left as found: its ten clips, `halftime`, `line`, on
+this build in `ota_1`.
+
+**Not covered.** A clip that goes and comes back in a later pack: once
+the clock has saved with the beeps, the beeps are what it has.
+
+
 ### Dim in the dark (M11b, second half) — planned 2026-11-01, not built
 
 The rest of M11 in `HISTORY.md`: the sensors are read and the

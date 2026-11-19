@@ -532,6 +532,9 @@ pub struct Settings {
     /// Days the alarm rings on: bit 0 Monday to bit 6 Sunday.
     pub alarm_days: u8,
     /// Index into the melody table (`melody::get`), or `melody::RANDOM`.
+    /// The record keeps it by the melody's name as well, which is what
+    /// counts when it is read back: the table is another after a new
+    /// pack.
     pub melody: usize,
     /// Skip the next alarm that would ring, then clear. Not stored: a
     /// reboot clears it, and `to_record` leaves it out so toggling it
@@ -561,7 +564,7 @@ pub struct Settings {
 }
 
 /// Bytes in a stored record.
-pub const RECORD_LEN: usize = 387;
+pub const RECORD_LEN: usize = 408;
 
 /// The thermometer offset's bound, tenths of a degree either way.
 pub const TEMP_OFFSET_LIMIT_DC: i16 = 100;
@@ -575,8 +578,19 @@ pub const TEMP_OFFSET_LIMIT_DC: i16 = 100;
 /// only (`from_record`), and the record with its key stays within
 /// `storage::ITEM_MAX` bytes (1000), which that image's map can read; a
 /// record that outgrows it goes on in a second item. Version 13 appends
-/// the sound output.
-const RECORD_VERSION: u8 = 13;
+/// the sound output, version 14 the alarm sound's name.
+const RECORD_VERSION: u8 = 14;
+
+/// Whether a stored record is of a layout before this image's: one an
+/// older firmware wrote, which the store writes again in this layout at
+/// the boot that finds it, so that what a later version added (the alarm
+/// sound's name, above all: the next pack may move its clip) is there
+/// before anything else changes. Never a newer one's: that is the
+/// record of an image this one was rolled back from, and is that
+/// image's to keep.
+pub fn record_is_older(record: &[u8]) -> bool {
+    record.first().is_some_and(|&version| version < RECORD_VERSION)
+}
 
 /// Where the hostname sits in a version 3 record.
 const RECORD_HOSTNAME_LEN: usize = 9;
@@ -636,7 +650,14 @@ const RECORD_TX_POWER: usize = RECORD_TZ + TZ_MAX;
 
 /// Where the sound output sits in a version 13 record.
 const RECORD_OUTPUT: usize = RECORD_TX_POWER + 1;
-const _: () = assert!(RECORD_OUTPUT + 1 == RECORD_LEN, "RECORD_LEN does not match the layout");
+
+/// Where the alarm sound's API name sits in a version 14 record: a
+/// length byte and its field. It is what the sound is kept by; the
+/// index at `RECORD_MELODY` stays for an older image, and for a record
+/// with no name.
+const RECORD_MELODY_NAME_LEN: usize = RECORD_OUTPUT + 1;
+const RECORD_MELODY_NAME: usize = RECORD_MELODY_NAME_LEN + 1;
+const _: () = assert!(RECORD_MELODY_NAME + crate::pack::NAME_MAX == RECORD_LEN, "RECORD_LEN does not match the layout");
 
 /// The timezone at boot until the user sets it: `TZ_RULE` from the build,
 /// checked here so a bad rule fails the build, or else `TZ_OFFSET_MINUTES`
@@ -751,7 +772,7 @@ impl Settings {
     /// each a length byte and a padded field, then the flags byte, the
     /// thermometer offset, the temperature-on-the-panel byte, and the
     /// broker: host, port, user and password; then the timezone rule,
-    /// the transmit power and the sound output.
+    /// the transmit power, the sound output and the alarm sound's name.
     pub fn to_record(&self) -> [u8; RECORD_LEN] {
         // The old minute field, for an image before version 11, which
         // checks it against `TZ_LIMIT_MINUTES`; a rule's standard offset
@@ -773,6 +794,17 @@ impl Settings {
         r[RECORD_HOSTNAME..RECORD_HOSTNAME + HOSTNAME_MAX].copy_from_slice(&self.hostname.bytes);
         r[RECORD_ALARM_DAYS] = self.alarm_days;
         r[RECORD_MELODY] = if self.melody == melody::RANDOM { RECORD_MELODY_RANDOM } else { self.melody as u8 };
+        // The name of the melody the index is in the table in force.
+        // An index the table has nothing at gets none, and is read back
+        // as the index: the pack is out of the table while an upload
+        // writes over it, and a save then must not name the beeps.
+        if self.melody == melody::RANDOM || self.melody < melody::count() {
+            let name = melody::name(self.melody).as_bytes();
+            if name.len() <= crate::pack::NAME_MAX {
+                r[RECORD_MELODY_NAME_LEN] = name.len() as u8;
+                r[RECORD_MELODY_NAME..RECORD_MELODY_NAME + name.len()].copy_from_slice(name);
+            }
+        }
         r[RECORD_SSID_LEN] = self.wifi.ssid.len;
         r[RECORD_SSID..RECORD_SSID + SSID_MAX].copy_from_slice(&self.wifi.ssid.bytes);
         r[RECORD_PASSWORD_LEN] = self.wifi.password.0.len;
@@ -809,7 +841,9 @@ impl Settings {
     /// 10 stored minutes there; version 11 appends the rule and keeps the
     /// minutes as its standard offset), version 11 after the rule, so the
     /// transmit power is the build's, and version 12 after the power, so
-    /// the sound goes to the buzzer. Versions are append-only, so a record
+    /// the sound goes to the buzzer, and version 13 after the output, so
+    /// the alarm sound is the one at the index and not the one of a
+    /// name. Versions are append-only, so a record
     /// from a newer image is read by the prefix this one knows, and a
     /// colour, brightness or melody index past this image's table (an
     /// entry a newer image added, or a higher current ceiling) lands on
@@ -925,6 +959,20 @@ impl Settings {
         // clock has.
         if version >= 13 {
             s.output = AudioOut::from_byte(*r.get(RECORD_OUTPUT)?).unwrap_or(d.output);
+        }
+        // The alarm sound by its name, wherever the table in force has
+        // it: another pack may have the clip at another place, and a
+        // later image more note melodies before the clips. A name the
+        // table has not is a clip that is gone: the beeps, as an index
+        // past the table is. No name, or none that reads: the index.
+        if version >= 14
+            && let Some(name) = Text::<{ crate::pack::NAME_MAX }>::from_record(
+                *r.get(RECORD_MELODY_NAME_LEN)?,
+                r.get(RECORD_MELODY_NAME..RECORD_MELODY_NAME + crate::pack::NAME_MAX)?,
+            )
+            && !name.as_str().is_empty()
+        {
+            s.melody = melody::index_of(name.as_str()).unwrap_or(0);
         }
         s.color = s.color.min(PALETTE.len() - 1);
         // A record saved by a build with a higher ceiling, or by a later
@@ -1115,8 +1163,63 @@ mod tests {
             10 => RECORD_TZ_LEN,
             11 => RECORD_TX_POWER,
             12 => RECORD_OUTPUT,
+            13 => RECORD_MELODY_NAME_LEN,
             _ => RECORD_LEN,
         }
+    }
+
+    #[test]
+    fn only_an_older_record_is_to_be_written_again() {
+        let mut r = full().to_record();
+        assert!(!record_is_older(&r) && !record_is_older(&[]));
+        r[0] = RECORD_VERSION - 1;
+        assert!(record_is_older(&r));
+        r[0] = RECORD_VERSION + 1;
+        assert!(!record_is_older(&r), "a newer image's record is left to it");
+    }
+
+    /// A pack of these clips, in the table.
+    fn install(names: &[&str]) {
+        let clips: Vec<(&str, &str, bool, &[u8])> = names.iter().map(|&n| (n, "Label", true, &crate::pack::tests::SECOND[..])).collect();
+        melody::install(Some(crate::pack::Pack::parse(Vec::leak(crate::pack::build(&clips))).unwrap()));
+    }
+
+    #[test]
+    fn the_alarm_sound_is_kept_by_its_name() {
+        let notes = melody::count() - melody::clip_count();
+        install(&["alpha", "beta", "gamma"]);
+        let saved = Settings { melody: notes + 1, ..full() }.to_record();
+        assert_eq!(saved[RECORD_MELODY], notes as u8 + 1, "the index, for an image before the name");
+        assert_eq!(&saved[RECORD_MELODY_NAME_LEN..RECORD_MELODY_NAME + 5], b"\x04beta\0");
+        let read = |r: &[u8]| Settings::from_record(r).unwrap().melody;
+        assert_eq!(read(&saved), notes + 1);
+        // Another pack with the clip at another place: the clip still,
+        // where the index alone would name its neighbour.
+        install(&["gamma", "delta", "alpha", "beta"]);
+        assert_eq!(read(&saved), notes + 3);
+        let mut old = saved[..prefix_len(13)].to_vec();
+        old[0] = 13;
+        assert_eq!(read(&old), notes + 1, "a record before the name goes by the index");
+        // A pack without it, or no pack: the beeps, though the index
+        // has a clip at it.
+        install(&["gamma", "delta", "alpha"]);
+        assert_eq!(read(&saved), 0);
+        melody::install(None);
+        assert_eq!(read(&saved), 0);
+        // A note melody and the random draw have names as well.
+        for melody in [0, 3, melody::RANDOM] {
+            let r = Settings { melody, ..full() }.to_record();
+            assert_eq!(read(&r), melody);
+            assert_eq!(&r[RECORD_MELODY_NAME..RECORD_MELODY_NAME + melody::name(melody).len()], melody::name(melody).as_bytes());
+        }
+        // While an upload has the pack out of the table the index has
+        // no melody at it: saved with no name, and read back with the
+        // pack there again as the index it is, not as the beeps.
+        let adrift = Settings { melody: notes + melody::clip_count() + 2, ..full() }.to_record();
+        assert_eq!(adrift[RECORD_MELODY_NAME_LEN], 0);
+        install(&["alpha", "beta", "gamma"]);
+        assert_eq!(read(&adrift), notes + melody::clip_count() - 1);
+        melody::install(None);
     }
 
     #[test]
@@ -1153,7 +1256,7 @@ mod tests {
             assert_eq!(got.mqtt, if version >= 10 { s.mqtt } else { Broker::NONE }, "v{version} broker");
             assert!(!got.mqtt_cleared);
             assert_eq!(got.tx_power_qdbm, if version >= 12 { s.tx_power_qdbm } else { d.tx_power_qdbm }, "v{version} transmit power");
-            assert_eq!(got.output, d.output, "v{version} has no sound output");
+            assert_eq!(got.output, if version >= 13 { s.output } else { d.output }, "v{version} sound output");
         }
     }
 
@@ -1262,16 +1365,30 @@ mod tests {
         // Indexes a newer image may have added land on the last entry.
         assert_eq!(with(&|r| r[1] = 200).map(|s| s.color), Some(PALETTE.len() - 1));
         // A melody that is not in the table is the beeps: a clip of a
-        // pack that is gone, or of another build.
-        assert_eq!(with(&|r| r[RECORD_MELODY] = 200).map(|s| s.melody), Some(0));
-        assert_eq!(with(&|r| r[RECORD_MELODY] = melody::count() as u8).map(|s| s.melody), Some(0));
-        assert_eq!(with(&|r| r[RECORD_MELODY] = melody::count() as u8 - 1).map(|s| s.melody), Some(melody::count() - 1));
+        // pack that is gone, or of another build. By the index, in a
+        // record with no name.
+        let index = |m: u8| {
+            with(&|r| {
+                r[RECORD_MELODY] = m;
+                r[RECORD_MELODY_NAME_LEN] = 0;
+            })
+            .map(|s| s.melody)
+        };
+        assert_eq!(index(200), Some(0));
+        assert_eq!(index(melody::count() as u8), Some(0));
+        assert_eq!(index(melody::count() as u8 - 1), Some(melody::count() - 1));
         // With a pack in the table its clips are there to be named.
         let last = melody::count() - melody::clip_count() + crate::pack::MAX_CLIPS - 1;
         melody::install(Some(crate::pack::fullest()));
-        assert_eq!(with(&|r| r[RECORD_MELODY] = last as u8).map(|s| s.melody), Some(last));
-        assert_eq!(with(&|r| r[RECORD_MELODY] = last as u8 + 1).map(|s| s.melody), Some(0));
+        assert_eq!(index(last as u8), Some(last));
+        assert_eq!(index(last as u8 + 1), Some(0));
         melody::install(None);
+        // A name that does not read is no name: the index.
+        let odd = with(&|r| {
+            r[RECORD_MELODY] = 2;
+            r[RECORD_MELODY_NAME_LEN] = crate::pack::NAME_MAX as u8 + 1;
+        });
+        assert_eq!(odd.map(|s| s.melody), Some(2));
         // A record from a build with a higher current ceiling.
         if BRIGHTNESS_STEPS.len() < BRIGHTNESS_CHOICES.len() {
             assert_eq!(with(&|r| r[2] = BRIGHTNESS_CHOICES.len() as u8 - 1).map(|s| s.brightness), Some(BRIGHTNESS_STEPS.len() - 1));
