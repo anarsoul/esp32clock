@@ -1,7 +1,9 @@
 # A PDM output on GPIO20 into a class D amplifier module
 
-Design on paper, 2026-11-18. Nothing here is built or heard yet; when
-it is, this moves to where the speaker work is recorded.
+Design on paper, 2026-11-18. One of its filters was built and heard
+the same day, on a breadboard: "As built and heard" below. The rest
+is still paper; when the work is done this moves to where the speaker
+work is recorded.
 
 GPIO20 is push-pull at 3.3 V and carries the PDM stream at 4 or 8 MHz.
 A two-stage RC filter takes it to the input of a PAM8302A (the
@@ -121,6 +123,58 @@ divider that was not asked for, should the pot prove too touchy: R3
   behind its coupling capacitor, never at the chip's pin, which sits
   at VDD/2.
 - The outputs are bridged: neither speaker wire to ground.
+
+## As built and heard
+
+2026-11-18, on a breadboard with 10 cm jumper wires, test-clock, the
+`output` setting at `line`, an 8 Ω 0.25 W speaker of the kind the
+speaker mod has. The PAM8302s had not arrived, so the CJMCU-832's
+filter went into the PAM8403 module, whose pot is 50 kΩ, the unused
+input to ground:
+
+```
+GPIO20 ──R1 2k2──┬──R2 10k──┬──────┬── L in (the 50k pot)
+                 │          │      │
+              C1 4n7     C2 2n   R3 3k3
+                 │          │      │
+GND ─────────────┴──────────┴──────┴── GND
+```
+
+C2 is two 1 nF in parallel. R3 stays with this amplifier: it brings
+a full-scale PDM to the PAM8403's clipping threshold, so the whole of
+the pot's travel is of use, and without it C2 would see tens of kΩ
+and the corner would fall to 3 to 5 kHz.
+
+With the pot at its maximum, the amplifier's 18 kΩ across the wiper:
+
+| | C2 4.7n, as first built | C2 2n, as kept |
+| --- | --- | --- |
+| division | 0.178 | 0.178 |
+| at the input, full-scale PDM | 0.59 V peak to peak | the same |
+| −3 dB | 10.7 kHz | 15.1 kHz |
+| at 8 kHz | −1.8 dB | −1.0 dB |
+| at 15 kHz | −5.1 dB | −3.0 dB |
+| at 260 kHz | −47 dB | −40 dB |
+
+What the user heard:
+
+- Against the S8550's stage, the same clips, the output switched at
+  run time, the loudness matched with the pot: noticeably cleaner,
+  "as if the dynamic range it passes is wider".
+- C2 at 2 nF against 4.7 nF: liked better, more treble. The values
+  came from what was in the drawer (4.7 nF and 1 nF); a pair of
+  3.3 nF computes the same, 15.2 kHz and −41 dB.
+- A slight background noise, taken for pickup on the jumper wires
+  and not traced.
+- On a scope at the filter's output, before the amplifier went on:
+  the clips an audio wave, the beeps a square wave.
+
+The speaker is 0.25 W, ±2 V across it, and the amplifier gives five
+times that power at the top of the pot: the pot stays below half.
+
+`pdm-pam8403.svg` is this circuit. The filter first worked out for
+the module, without R3, is "Filter for the PAM8403 module" above and
+was not built.
 
 ## How the figures were reached
 
