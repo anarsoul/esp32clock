@@ -1,7 +1,9 @@
 # A release from a `v*` tag: the firmware with the prebuilt settings
 # (the same as ci.yml), the OTA image for `/update`, the merged image
-# for espflash and the default clip pack, attached to the GitHub release; then the flasher
-# page in docs/ with the release's manifest and images deployed to the
+# for espflash, the default clip pack and the pack maker (tools/pack)
+# as a command for Linux, Windows and macOS, attached to the GitHub release; then the flasher
+# page in docs/ and the pack maker's page in docs/pack/ with its
+# WebAssembly, with the release's manifest and images, deployed to the
 # gh-pages branch, keeping earlier releases, which the page offers in a
 # list. The firmware version comes from `git describe`, which sees
 # annotated tags only, so a release tag is made with `git tag -a`.
@@ -33,7 +35,7 @@ jobs:
           fetch-depth: 0 # build.rs puts `git describe` into the firmware version
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: riscv32imc-unknown-none-elf
+          targets: riscv32imc-unknown-none-elf, wasm32-unknown-unknown
           components: rust-src, clippy
       - uses: Swatinem/rust-cache@v2
       - name: Install espflash
@@ -48,6 +50,8 @@ jobs:
       # A tag never publishes a build the CI would have failed.
       - name: Test the core crate on the host
         run: cargo host-test
+      - name: Test the pack maker
+        run: cargo pack-test
       - name: Test with the clips built in
         run: ALARM_CLIP=clips/trantor.bpr,clips/halftime.xmc,clips/keygen.xmc,clips/synchronization.pt3c cargo host-test
       - name: Build
@@ -79,11 +83,14 @@ jobs:
           # page, scripts/clips.sh or `espflash write-bin 0x2e0000`. The
           # firmware has no clips built in, so the web installer writes
           # it too. Checked by the parser the clock reads it with.
-          scripts/mkpack.py "images/onebitdawn-clips-${GITHUB_REF_NAME}.bin" \
+          cargo pack -o "images/onebitdawn-clips-${GITHUB_REF_NAME}.bin" \
             clips/trantor.bpr clips/halftime.xmc clips/keygen.xmc \
             clips/synchronization.pt3c
           CLIP_PACK_FILE="images/onebitdawn-clips-${GITHUB_REF_NAME}.bin" \
             cargo host-test the_pack_file_parses -- --nocapture
+          # The pack maker for its page, docs/pack/.
+          cargo pack-wasm
+          cp target/wasm32-unknown-unknown/tool/onebitdawn_pack.wasm images/
           ls -l images
       - uses: actions/upload-artifact@v6
         with:
@@ -91,18 +98,58 @@ jobs:
           path: images/
           if-no-files-found: error
 
+  # The pack maker as a command, for those with no Rust: one file a
+  # system, named after it.
+  tools:
+    name: Pack maker (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu, name: linux-x86_64, exe: "" }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc, name: windows-x86_64, exe: ".exe" }
+          - { os: macos-latest, target: aarch64-apple-darwin, name: macos-arm64, exe: "" }
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        shell: bash
+        run: |
+          cargo build --profile tool -p onebitdawn-pack --bin onebitdawn-pack --target ${{ matrix.target }}
+          mkdir -p tools-out
+          cp "target/${{ matrix.target }}/tool/onebitdawn-pack${{ matrix.exe }}" \
+            "tools-out/onebitdawn-pack-${GITHUB_REF_NAME}-${{ matrix.name }}${{ matrix.exe }}"
+          "tools-out/onebitdawn-pack-${GITHUB_REF_NAME}-${{ matrix.name }}${{ matrix.exe }}" \
+            -o tools-out/check.bin clips/trantor.bpr mods/Orion-Nero6.3.0.2.xm:name=keygen
+          rm tools-out/check.bin
+      - uses: actions/upload-artifact@v6
+        with:
+          name: pack-${{ matrix.name }}
+          path: tools-out/
+          if-no-files-found: error
+
   release:
     name: GitHub release
-    needs: build
+    needs: [build, tools]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v6
         with:
           name: images
           path: images
+      - uses: actions/download-artifact@v6
+        with:
+          pattern: pack-*
+          path: tools-out
+          merge-multiple: true
       - uses: softprops/action-gh-release@v3
         with:
-          files: images/onebitdawn-*.bin
+          files: |
+            images/onebitdawn-*.bin
+            tools-out/onebitdawn-pack-*
           body: |
             Flash a clock from the browser at https://anarsoul.github.io/onebitdawn/
             (Chrome or Edge, the clock on USB), or with espflash, which also
@@ -123,6 +170,12 @@ jobs:
 
                 espflash write-bin 0x2e0000 onebitdawn-clips-${{ github.ref_name }}.bin
                 espflash reset
+
+            A pack of your own tunes (tracker modules, Commodore 64
+            and ZX Spectrum tunes, sound files) is made in the browser
+            at https://anarsoul.github.io/onebitdawn/pack/ or with
+            `onebitdawn-pack-${{ github.ref_name }}-*`, the same as a
+            command; `--help` says how.
 
             A clock flashed before this release has no such partition
             until it is flashed again over USB or from the web installer:
@@ -180,6 +233,8 @@ jobs:
           cp "images/onebitdawn-clips-$TAG.bin" docs/latest/onebitdawn-clips.bin
           manifest "onebitdawn-ota.bin" "onebitdawn-clips.bin" > docs/latest/manifest.json
           cat "docs/$TAG/manifest.json"
+          # The pack maker's page, with the converters of this release.
+          cp images/onebitdawn_pack.wasm docs/pack/
       - uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}

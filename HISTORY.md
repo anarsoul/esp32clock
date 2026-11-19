@@ -9901,3 +9901,157 @@ packs are made by `packs/local.sh` (ignored, like all of `packs/`):
 it converts Children again and makes `packs/clips-local.bin` and
 `packs/clips-local-speaker.bin` of the nine clips, which take the
 place of the two `-children` packs; both clocks hold exactly these.
+
+## A pack maker for users: one command and one web page — built 2026-11-19 and verified by the user the same day on white-clock with a speaker; the release workflow not run
+
+What a user has today is nine scripts (Python, bash, sox), one a
+format, and `mkpack.py` after them. Wanted before the project is
+announced (the user, 2026-11-19): one command that takes `.pt3`,
+`.sid`, `.wav`, `.mod`, `.xm` and `.s3m` files and writes a pack, and
+a web page that does the same.
+
+**Design.** Rust for both, one library compiled twice.
+
+- `tools/pack/`, a third workspace member, `onebitdawn-pack`: a
+  library (`std`, depends on `onebitdawn-core`) and a binary of the
+  same name. The library is the converters, ported from the scripts,
+  and the pack writer; its constants (`pack::MAX_CLIPS`, the magics,
+  `xm::MAX_CHANNELS`, the melodies' names) are `core`'s and no longer
+  copies in Python. Every pack it writes goes through `Pack::parse`
+  before it is given out, and the size is checked against the
+  partition.
+- The command: `onebitdawn-pack -o mine.bin [--sound-output buzzer|speaker]
+  file[:option,…][=Label] …`. The kind is the file's, by its magic and
+  then its extension; a clip made already (`.xmc`, `.sidc`, `.pt3c`,
+  `.bpr`, `.pcm`, `.adp`) goes in as it is. The defaults are the ones
+  the default pack was made with, `--sound-output speaker` the ones of
+  `speaker-clips.sh`; the options after the colon are the scripts'
+  flags (`loop`, `once`, `song=2`, `seconds=90`, `highpass=100`, …).
+  It prints what `mkpack.py` prints, and what a module uses that the
+  player lacks.
+- `.wav` without sox: a RIFF reader (8, 16, 24 bits and float), the
+  mix to mono, a windowed-sinc resampler, then the high-pass and the
+  limiter of `core::shape`, the ones the players have; ADPCM at 16 kHz
+  by default. Not sox's bytes: judged by ear against `wav2pcm.sh`.
+- The page: the same library as a `cdylib` for
+  `wasm32-unknown-unknown`, with a C ABI of a handful of functions
+  written by hand (give memory, add a file, build, the result and the
+  messages) and plain JavaScript over it. No wasm-bindgen, no npm, no
+  bundler: `cargo build --target wasm32-unknown-unknown` is the whole
+  build. `docs/pack/` beside the installer, deployed by the release
+  workflow. Files are dropped on it, each gets its label, its loop and
+  its options, a bar shows the partition filling, and "Download" gives
+  the `.bin`, which goes to the clock from its own Clips page.
+  Nothing leaves the browser.
+- A preview on the page: `core`'s players are in the wasm, so the
+  page plays a clip through the clock's own decoder into WebAudio,
+  what the clock will play less the buzzer.
+- The page does not upload to the clock: a page on https cannot post
+  to `http://<ip>`, and `http::admit` refuses a foreign `Origin`,
+  which stays.
+- Releases carry the command built for Linux, Windows and macOS, so a
+  user needs no Rust.
+
+**Order.** Each step ends with the bytes compared.
+
+1. The crate, the pack writer, clips made already; `core` built for
+   `wasm32-unknown-unknown` (its embassy and critical-section
+   dependencies are the question; a feature that leaves `settings`'s
+   `Watch` out if they do not link).
+2. `xm2clip`, `mod2xm`, `s3m2xm`. The test: the default pack's three
+   modules from `mods/`, byte for byte what is in `clips/`.
+3. `pt32clip`, then `sid2clip` with its 6502 and `packrefs`; the same
+   test over `clips/synchronization.pt3c` and the tunes in the ignored
+   `sid/` against the Python's output.
+4. `.wav`.
+5. The wasm, the page, the preview; headless Chromium over it.
+6. `clips.sh` and `speaker-clips.sh` call the command; the CI builds
+   it and the wasm and makes the default pack with it; the release's
+   binaries and the page; `MANUAL.md`, `agents/clips.md`,
+   `agents/modules.md`, `ARCHITECTURE.md`.
+
+**Decided** (the user, 2026-11-19).
+
+- The Python converters go once the Rust gives the same bytes.
+- `.tap` (the beeper clip) needs a Z80 and SkoolKit: left to
+  `zxbeeper.py`, which stays; a `.bpr` goes into a pack as it is.
+- Other sound files on the page (mp3, ogg, flac) through the
+  browser's own decoder: later, after the first version.
+- The name is `onebitdawn-pack`; the option is `--sound-output`, not
+  `--for`.
+
+**Built**, 2026-11-19, all six steps.
+
+- `tools/pack/`: `kind` (what a file is), `xmc`, `modxm`, `s3mxm`,
+  `pt3c`, `sidc` with its 6502 and `packrefs`, `wav` and `adpcm`,
+  `pack` the writer, `spec` the argument, `main` the command, `web`
+  and `wasm` the page's side; `docs/pack/index.html` the page.
+  `cargo pack`, `pack-test` and `pack-wasm` are aliases; the profile
+  `tool` is the release's without debug information.
+- Beyond the plan: `name=` for a file whose name is too long or a
+  melody's (the default pack's own modules need it), `--clip` for one
+  file's clip with no pack, `flat` in the limiter's place as an option
+  since the default pack's PT3 clip has the limiter.
+- The Python converters are gone but `zxbeeper.py` and the
+  `packrefs.py` it imports. `clips.sh` and `speaker-clips.sh` call the
+  command; the CI tests, lints and builds it and its wasm; the release
+  attaches it for three systems and deploys the page with its wasm.
+
+- After the user's first runs of the page (2026-11-19): the options,
+  the converter's details and the options' reference are behind an
+  "Advanced" box, off by default ("would scare an unexperienced
+  user"); what the clock will not play, and an option that is set,
+  show either way. A clip's label and name are the tune's title's
+  where the file has one, the file's name's where it has not.
+
+**Measured.**
+
+- Byte for byte the Python's: the default pack and the speaker pack's
+  clips; `clips/halftime.xmc`, `keygen.xmc`, `synchronization.pt3c`
+  from `mods/`; local modules with every option of the XM converter,
+  an S3M, three PT3 modules with every option; a SID tune with every
+  option, cut and looped, packed and plain. In the tests: the three
+  clips of `clips/`, and a MOD, an S3M and a SID written for the tests
+  (`tests/data/`) against the Python's output for them.
+- The 6502 against the Python one: 4000 programs of random bytes, the
+  whole machine's state hashed after each, the same (decimal mode and
+  the undocumented instructions among them). The ADPCM encoder's codes
+  the same, plain and searched.
+- Elysium, while it was in the pack: the committed clip was not what
+  the Python of the same commit made of the module (the finetune, 16
+  bytes: the clip was made before the PAL pitch went into
+  `mod2xm.py`). Gone with the clip.
+- `.wav` against sox's chain for one file: the same peak and level
+  (rms within 0.2 %), the difference 28 to 34 dB under the signal at 8
+  bits. sox's `gain -l` is `g x / (1 + (g - 1)|x|)`, to 3e-8.
+- `core` builds for `wasm32-unknown-unknown` as it is, with no imports;
+  the wasm is 298 KB.
+- The page in headless Chromium, seven files of every kind: its pack
+  is the command's, byte for byte; an option typed, one refused, the
+  speaker chosen, each clip through the preview, Play.
+- `tests/local.rs` over the ignored folders: 66 clips made and played,
+  three refused in words (beeper clips of the first format).
+
+**Learned.**
+
+- The line's stream (`clip::Stream`) is no preview: its rest is the
+  lower rail, a click in a browser. The page reads each kind's player.
+- A speaker's defaults for a SID tune were a guess, a module's (the
+  limiter, 128 ms), and wrong: "SID seems to be clipping on a
+  speaker" (the user, white-clock, 2026-11-19, with PT3, the modules
+  and WAV good). They are `flat` now, `sid::FLAT`, which was made for
+  a speaker on 2026-11-15 and never heard; `limiter` is the option
+  back. Flat with the 100 Hz high-pass once: "almost good, but a bit
+  bass-heavy"; then, of the candidates tried from the page's Options
+  field, "`highpass=150,passes=2` seem to be good defaults for SID on
+  Speaker" (the user, the same day), which they are.
+
+**Verified** (the user, 2026-11-19, packs made on the page and played
+on white-clock with a speaker): "PT3 and MODs (XM, S3M, MOD), WAV is
+good"; SID after the two changes above; of the page with the Advanced
+box and the titles, "Looks great". What it still owes is a line under
+"Checks still owed" in `PLAN.md`.
+
+A note of the same day: the buzzer's packs were heard too ("Buzzer was
+heard as well"). white-clock has both, its buzzer and an amplifier
+with a speaker, so the user's runs were of either output.

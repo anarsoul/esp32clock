@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Vasily Khoruzhick
 
 //! What a player on the chip does to its mix before the modulator, and
-//! `scripts/wav2pcm.sh` does to a PCM clip on the host, since the
+//! `tools/pack/src/wav.rs` does to a PCM clip on the host, since the
 //! buzzer is the same: the bass cut by a high-pass and the level pushed
 //! hard into a limiter. How much bass and how hard are the clip's to
 //! say, in its header; a tune whose melody sits under 900 Hz wants a

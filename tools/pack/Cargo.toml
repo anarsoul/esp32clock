@@ -1,0 +1,24 @@
+[package]
+edition      = "2024"
+name         = "onebitdawn-pack"
+rust-version = "1.95"
+license      = "MIT OR Apache-2.0"
+version      = "0.1.0"
+publish      = false
+description  = "Makes a clip pack for a onebitdawn clock out of tracker modules, SID and PT3 tunes and sound files."
+
+# The library is the converters and the pack writer; the binary is the
+# command, and the `cdylib` is the same library for the web page
+# (`cargo pack-wasm`, see `src/wasm.rs`).
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[[bin]]
+name = "onebitdawn-pack"
+path = "src/main.rs"
+
+[dependencies]
+# The pack's layout and its parser, the clips' magics and the players,
+# which are what a pack is checked with before it is given out.
+onebitdawn-core = { path = "../../core" }
+sha2 = { version = "0.10", default-features = false }

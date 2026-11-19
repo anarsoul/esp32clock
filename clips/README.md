@@ -5,7 +5,7 @@ has in its `clips` partition (see "Clip packs" in `MANUAL.md`):
 
 ```
 scripts/clips.sh                                       # packs/clips-default.bin, these four
-scripts/mkpack.py packs/one.bin clips/trantor.bpr      # a pack of one of them
+cargo pack -o packs/one.bin clips/trantor.bpr          # a pack of one of them
 ALARM_CLIP=clips/trantor.bpr cargo build --release     # or built into the firmware, the older way
 ```
 
@@ -38,13 +38,13 @@ The music is Dualtrax's; copyright remains with its author, and
 nothing here grants any right to it.
 
 The modules themselves are in `mods/` as they were found, and these
-two files are what `scripts/xm2clip.py` makes of them for the clock's
+two files are what the pack maker (`tools/pack`) makes of them for the clock's
 own player (`core/src/xm.rs`), with its defaults: the same patterns
 and samples rearranged, nothing rendered.
 
 ```
-scripts/xm2clip.py "mods/Orion - Nero Burning ROM v5.5.7.8kg.xm" clips/halftime.xmc
-scripts/xm2clip.py mods/Orion-Nero6.3.0.2.xm clips/keygen.xmc
+cargo pack --clip clips/halftime.xmc "mods/Orion - Nero Burning ROM v5.5.7.8kg.xm:name=halftime"
+cargo pack --clip clips/keygen.xmc mods/Orion-Nero6.3.0.2.xm
 ```
 
 ## `synchronization.pt3c`
@@ -56,12 +56,11 @@ signed `nq`. It is here with his permission, given to this project
 its author, and nothing here grants any right to it beyond that.
 
 The module is in `mods/` as it was found, and this file is the module
-as it is behind the header `scripts/pt32clip.py` gives it for the
+as it is behind the header the pack maker gives it for the
 clock's own player and AY (`core/src/pt3.rs`, `core/src/ay.rs`):
 nothing rendered. The header asks the player for its limiter, letting
 go over 128 ms, and a high-pass at 100 Hz.
 
 ```
-scripts/pt32clip.py mods/nq-synchronization.pt3 clips/synchronization.pt3c --restart \
-    --limiter --noise 16 --highpass 100 --passes 1 --release 10
+cargo pack --clip clips/synchronization.pt3c mods/nq-synchronization.pt3:restart,name=synchronization
 ```

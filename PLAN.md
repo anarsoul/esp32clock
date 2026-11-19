@@ -50,6 +50,10 @@ The user's, and what the readiness check of the same day left open.
   workflow, so this is live with the next tag. Checked under Node
   against GitHub's list as it is today, which leaves nothing, the
   page's fallback to `latest/`.
+- [x] A pack maker a user can use, one command and one web page
+  (the user, 2026-11-19), before the project is announced: built and
+  tried by the user on white-clock the same day ("A pack maker for
+  users" in `HISTORY.md`). Its release builds run with the tag.
 - [ ] The annotated tag; then the release's three files and one
   install from the live page, since the workflow has not run with the
   pack and the new names.
@@ -880,6 +884,14 @@ not re-enumerated). Another session, working on test-clock on
 every `cat` and took this one too. Restarted appending at 15:51 with no reset;
 the log lacks about a minute, the heartbeat of 13260 s among it.
 
+The heap rested at 54080 bytes for 9 h 24 min, took one 188-byte step
+to 53892 at the heartbeat of 33901 s (21:34) with nothing but the
+`/api` tick and the page fetches in the minute before, and has held
+there since (at 21 h). This is the step of the soak of 2026-11-08
+(`HISTORY.md`: 54 032 to 53 844 at 21:35, given back at the first
+rejoin 92 h later), so it is the association's, not a leak; that both
+fell at the same minute of the evening points at the access point.
+
 ## Twenty channels for the module player, and Crush tried in the default pack — built and measured on test-clock 2026-11-18; Crush heard and dropped the same day
 
 The user asked for `xm::MAX_CHANNELS` at 20, after sixteen the same
@@ -1054,6 +1066,11 @@ are as they were before it. `scripts/mod2xm.py` stays. What is owed of
 this section is the converter heard on a clock, with any module.
 
 ## Checks still owed
+
+- The pack maker (2026-11-19): the release workflow's three builds of
+  the command (Linux, Windows, macOS) and the deploy of `docs/pack/`
+  with its wasm, which run only with a tag; the command in a user's
+  hands.
 
 Built, and by its heading in `HISTORY.md` not yet seen, heard or run
 where it counts. Each line is that heading as it stood on 2026-11-17,

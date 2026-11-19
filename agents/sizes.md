@@ -68,7 +68,7 @@ The setup page's network list:
 | what | limit | figures |
 | --- | --- | --- |
 | an OTA image | a slot, 0x160000 = 1408 KB (`partitions.csv`) since the `clips` partition took half a megabyte of each, 2026-11-14; 1920 KB on a clock with the old table | the release image is 877 KB; 1045 KB with the first three clips of `clips/` built in, and Synchronization, the fourth since 2026-11-16, is 11 KB more. A build with Futurama in `ALARM_CLIP` as well no longer fits. |
-| a clip pack | its partition, 0x120000 = 1152 KB to the end of the 4 MB flash; `scripts/mkpack.py` refuses a larger one | its SHA-256 is checked in software at every boot before the settings load: 119 ms for the default pack's 172 KB, 482 ms for 700 KB (test-clock, 2026-11-14) |
+| a clip pack | its partition, 0x120000 = 1152 KB to the end of the 4 MB flash; `onebitdawn-pack` refuses a larger one | its SHA-256 is checked in software at every boot before the settings load: 119 ms for the default pack's 172 KB, 482 ms for 700 KB (test-clock, 2026-11-14) |
 | the settings record | `settings::RECORD_LEN`, 387 bytes | the map scratch in `storage.rs` is 1024 and must hold the item (record plus 9 bytes, padded to a word); `storage::ITEM_MAX`, 1000, is the longest item any firmware may write, see "Compatibility" in `AGENTS.md` |
 
 Clip sizes:

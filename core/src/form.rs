@@ -1233,7 +1233,7 @@ A pack needs the clock flashed once over USB or from the web installer.",
         return out.write_str("</fieldset></body></html>");
     }
     out.write_str(
-        "<label>Pack file (<code>onebitdawn-clips-*.bin</code> from the <a href=https://github.com/anarsoul/onebitdawn/releases target=_blank rel=noopener>releases</a>, or <code>scripts/mkpack.py</code> makes one)<input type=file id=f></label>\
+        "<label>Pack file (<code>onebitdawn-clips-*.bin</code> from the <a href=https://github.com/anarsoul/onebitdawn/releases target=_blank rel=noopener>releases</a>, or <a href=https://anarsoul.github.io/onebitdawn/pack/ target=_blank rel=noopener>make one</a>)<input type=file id=f></label>\
 <p><button id=b>Upload</button></p><progress id=p value=0 max=1 hidden></progress>\
 <p><b>A new pack replaces all the clips of the one in flash; it does not add to them.</b></p>\
 <p><small>Uploading asks for a PIN, which the clock then shows on its panel. The panel goes dark while the pack is written, and the clock restarts. Do not unplug.</small></p></fieldset>",

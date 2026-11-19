@@ -13,10 +13,11 @@ project is, how it differs from the original, how to build the clock,
 what the clips are. Everything else a user needs (building from
 source, updates, clip packs, the buttons, the pages, `/api`, Home
 Assistant) is `MANUAL.md`; document a user-visible change there.
-The repo is a two-member workspace: the firmware is the root package,
-and `core/` (`onebitdawn-core`) is the hardware-independent half, a
+The repo is a three-member workspace: the firmware is the root package,
+`core/` (`onebitdawn-core`) is the hardware-independent half, a
 `no_std` library the firmware re-exports and the host runs the tests
-of. `CLAUDE.md` is a symlink to this file; edit this one.
+of, and `tools/pack/` (`onebitdawn-pack`) is the pack maker, for the
+host and the browser, over `core`. `CLAUDE.md` is a symlink to this file; edit this one.
 
 ## Workflow
 
@@ -90,6 +91,10 @@ cargo build --release
 cargo clippy --release
 cargo host-test                          # the core crate's tests on the host; plain `cargo test` aims at the chip
 cargo clippy -p onebitdawn-core --target host-tuple --tests
+cargo pack-test                          # the pack maker's tests (tools/pack)
+cargo clippy -p onebitdawn-pack --target host-tuple --all-targets
+cargo pack -o packs/mine.bin tune.xm ring.wav   # a clip pack of your files; --help for the options
+cargo pack-wasm                          # the pack maker for its page, docs/pack/ (agents/clips.md)
 node scripts/tz-check.mjs                # src/tz.js against zones with known rules
 WIFI_SSID='…' WIFI_PASSWORD='…' TZ_RULE='<-07>7' API_TOKEN='…' cargo run --release   # flash over USB, open the monitor
 API_TOKEN='…' scripts/ota.sh <ip>        # update over the LAN; with no arguments just the image file
@@ -217,6 +222,8 @@ its `#[cfg(test)] mod tests`. The full account of each file is
 | `src/ota.rs`, `src/pack.rs` | the firmware upload and rollback; the `clips` partition and its upload |
 | `src/sensors.rs`, `src/buttons.rs` | the ADC task; the GPIO task |
 | `src/tz.js` | the page's browser-zone button, served as `/tz.js` |
+| `tools/pack/src/` | the pack maker: a converter a kind (`xmc`, `modxm`, `s3mxm`, `sidc`, `pt3c`, `wav`, `adpcm`), `pack` the writer, `main` the command, `web` and `wasm` the page's side |
+| `docs/index.html`, `docs/pack/index.html` | the web installer; the pack maker's page |
 
 ## Hardware facts that bite
 
@@ -366,7 +373,9 @@ Each with its figures in `agents/sizes.md`.
 
 `cargo host-test` runs the tests of `core/` on the host, and
 `cargo clippy -p onebitdawn-core --target host-tuple --tests` lints
-them; `node scripts/tz-check.mjs` checks `src/tz.js`. The players'
+them; `node scripts/tz-check.mjs` checks `src/tz.js`;
+`cargo pack-test` holds the pack maker to the clips there are, byte
+for byte, and runs it over whatever is in the ignored music folders. The players'
 tests over real clips run only with `ALARM_CLIP` naming some, which
 the CI does in a second run. Not under test: `scan.rs`'s
 `build_cycle`, `ring.rs` (its layout is `const`-asserted),

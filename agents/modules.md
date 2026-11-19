@@ -228,7 +228,7 @@ into `OUT_DIR`.
   (`PackError`); `clip(k)`.
 - A clip whose magic is one of the kinds' with a version digit no
   player reads, older or newer, is refused (`clip::is_unsupported`),
-  as the `ALARM_CLIP` assert and `scripts/mkpack.py` do.
+  as the `ALARM_CLIP` assert and `onebitdawn-pack` do.
 - The test `the_pack_file_parses` reads the file `CLIP_PACK_FILE`
   names.
 
@@ -346,7 +346,7 @@ command, looped or once, and stops within a note.
 as `PCM1`'s), the codes two a byte with the high nibble first, as
 sox's raw `ima`; the state starts over when a looping clip goes round.
 It gives 16-bit samples in `xm::STEP`ths of PCM's step to
-`clip::Player`, as a tune does. The encoder is `scripts/adpcm.py`,
+`clip::Player`, as a tune does. The encoder is `tools/pack/src/adpcm.rs`,
 which keeps the four best paths through the coder's states. LZ does
 nothing for PCM (HISTORY.md, 2026-11-16).
 
@@ -354,12 +354,12 @@ nothing for PCM (HISTORY.md, 2026-11-16).
 
 - `Tune` is a player for the part of FastTracker 2's XM that chiptunes
   use (see its header for the effects). It reads in place the `XMC2`
-  file `scripts/xm2clip.py` makes of a module; no heap, twenty
+  file `tools/pack/src/xmc.rs` makes of a module; no heap, twenty
   channels (`xm::MAX_CHANNELS`; eight, then sixteen, then this,
   all on 2026-11-18).
 - It mixes at 32 kHz and averages to 16 kHz (8 if the clip asks; at
   62.5 kHz to 31.25 for a clip at `clip::FAST_HZ`).
-- Then a high-pass and a hard limiter, as `scripts/wav2pcm.sh` gives
+- Then a high-pass and a hard limiter, as `tools/pack/src/wav.rs` gives
   PCM (`shape.rs`), their settings read from the clip's header; the
   converter works out the filter's coefficients.
 - Its samples go through `shape::Shaper` to `clip::Player` as `i16` in
@@ -368,7 +368,7 @@ nothing for PCM (HISTORY.md, 2026-11-16).
 
 **`core/src/sid.rs`**: a Commodore 64 tune as a clip, pure.
 
-- `Tune` plays the `SID1` record `scripts/sid2clip.py` makes: the
+- `Tune` plays the `SID1` record `tools/pack/src/sidc.rs` makes: the
   register writes of each frame, then a byte for the frames to the
   next, with a loop offset in the header. `SID2` is the same with
   references in it to writes and waits it has had before (`refs`).
@@ -398,7 +398,7 @@ nothing for PCM (HISTORY.md, 2026-11-16).
 - `set_noise_level`, the clock's own, mixes a channel that has the
   noise in it at so many sixteenths, for a buzzer that makes more of
   white noise than of notes (a clip's header byte 38,
-  `scripts/pt32clip.py --noise N`, 11 by default, chosen by ear).
+  `onebitdawn-pack`'s `noise=N`, 11 by default, chosen by ear).
 - `run_parts` answers the output as `Parts`, the noisy channels apart
   with their tones and the noise's share each by itself, for the
   player's optional low-pass over the noise alone (header byte 39,
@@ -410,7 +410,7 @@ nothing for PCM (HISTORY.md, 2026-11-16).
 **`core/src/pt3.rs`**: a ZX Spectrum tune as a clip, pure.
 
 - `Tune` plays a Pro Tracker 3 / Vortex Tracker II module in place
-  behind the `PT31` header `scripts/pt32clip.py` gives it: clock,
+  behind the `PT31` header `tools/pack/src/pt3c.rs` gives it: clock,
   cycles a frame, length, flags for a YM2149 and for starting afresh
   at the end.
 - It handles the pattern codes, the effects (tone slide, portamento,
@@ -572,6 +572,17 @@ pull-downs, executors, task spawning, the panic reset hook, log
 timestamps, the watchdog's start, the reset reason and carried time
 at boot and the OTA rollback check (before the clip pack and the
 settings, so a hang there is counted), the minute heartbeat log.
+
+## The pack maker
+
+`tools/pack/` is not firmware: a `std` crate for the host and
+`wasm32-unknown-unknown`, which uses `core` for the formats (`pack`,
+the clips' magics, `pt3::KNEES`, `adpcm::STEPS`), for the check of
+what it wrote (`Pack::parse`, `clip::is_unsupported`) and for the
+page's preview (the tunes' players, `adpcm::Decoder`, `clip::Stream`
+for a beeper clip). Its modules, its two faces and its tests are in
+`agents/clips.md`. Nothing in `core` may come to need the chip, or the
+page stops building: `cargo pack-wasm` is the check.
 
 ## What the host tests cover
 

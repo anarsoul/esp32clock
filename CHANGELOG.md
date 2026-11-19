@@ -46,7 +46,7 @@ from `http://<ip>/update`; its settings survive the update.
 - The clips (the alarm melodies that are not notes) are no longer
   part of the firmware: they are a *clip pack* in a new 1152 KB flash
   partition, `clips`: half a megabyte from each of the two firmware
-  slots and the 128 KB at the end of the flash that nothing used. A pack is made with `scripts/mkpack.py` (up to
+  slots and the 128 KB at the end of the flash that nothing used. A pack is made with `onebitdawn-pack` or on its web page (up to
   16 clips), checked by a SHA-256 at upload and at every boot, and
   played in place from the flash. The default pack, the four clips
   below, is `onebitdawn-clips-<tag>.bin` on a release, and the web
@@ -97,8 +97,7 @@ from `http://<ip>/update`; its settings survive the update.
   Assistant a "Clips paused" binary sensor.
 - A sampled clip can be IMA ADPCM, four bits a sample: half the flash
   of the same clip as PCM, 8 KB a second at 16 kHz.
-  `scripts/wav2pcm.sh in.wav out.adp` makes one from a sound file and
-  `scripts/adpcm.py` from a PCM clip. A firmware before this one plays
+  It is what the pack maker makes of a sound file. A firmware before this one plays
   such a clip as noise.
 - The Wi-Fi transmit power is a setting (`tx_power` in `/api`, a
   select on `/settings`): the driver's levels from 2 to 16 dBm, 16
@@ -133,30 +132,34 @@ from `http://<ip>/update`; its settings survive the update.
   the line. `scripts/zxbeeper.py` writes it, and packs an older clip
   given in a tape's place; the older format still plays.
 - A SID tune's record is packed the same way (`SID2`,
-  `scripts/sid2clip.py`): a tune of 62 KB is 12.
-- `ALARM_CLIP` at build time chooses other clips, or none: raw PCM
-  (`scripts/wav2pcm.sh`), a ZX Spectrum beeper recording
-  (`scripts/zxbeeper.py`), a FastTracker 2 module
-  (`scripts/xm2clip.py`), a Commodore 64 tune (`scripts/sid2clip.py`,
-  from a PSID file: the firmware has a SID chip of its own to play the
-  tune's register writes through) or a ZX Spectrum one
-  (`scripts/pt32clip.py`, from a Pro Tracker 3 or Vortex Tracker II
-  module: the firmware has the player and an AY-3-8910 of its own).
+  the pack maker's): a tune of 62 KB is 12.
+- A pack maker for your own tunes, `onebitdawn-pack` (`tools/pack`):
+  one command, built for Linux, Windows and macOS on a release, and
+  one web page, <https://anarsoul.github.io/onebitdawn/pack/>, the
+  same converters as WebAssembly, with a preview through the clock's
+  own players. Tracker modules (`.xm`, `.mod`, `.s3m`), Commodore 64
+  tunes (`.sid`, PSID: the firmware has a SID chip of its own to play
+  the tune's register writes through), ZX Spectrum ones (`.pt3`, Pro
+  Tracker 3 or Vortex Tracker II: the firmware has the player and an
+  AY-3-8910 of its own) and sound files (`.wav`), each shaped for the
+  buzzer or, with `--sound-output speaker`, for a speaker. A ZX
+  Spectrum beeper recording is `scripts/zxbeeper.py`'s still.
+- `ALARM_CLIP` at build time chooses clips built into the firmware,
+  any that a pack takes (`onebitdawn-pack --clip` makes one alone).
 - A Stop button beside Play on the clock page (`POST /stop`): it
   ends a preview.
 - The MQTT `silence` command, and its button in Home Assistant, stops
   a preview as well as a ringing alarm.
 - `CLIP_PDM_BITS` at build time (128, 256, the default, or 384) sets
   how many bits the PDM converter makes of a sample, and
-  `scripts/xm2clip.py --knee` where a module's limiter starts, up to
+  a module's `knee` option where its limiter starts, up to
   off: for a speaker in the buzzer's place, where the buzzer's hard
   limiting is heard as overdrive.
 - For the same speaker: `scripts/speaker-clips.sh` makes the default
-  clip pack with the modules' bass left in and a slower limiter,
-  `scripts/sid2clip.py --flat` a SID tune without the limiter (a
-  firmware older than this plays such a clip limited), and
-  `CLIP_HIGHPASS` and `CLIP_DRIVE` set `scripts/wav2pcm.sh`'s bass
-  cut and drive.
+  clip pack with the modules' bass left in and a slower limiter, which
+  is the pack maker's `--sound-output speaker`; its `flat` option
+  makes a SID tune without the limiter (a firmware older than this
+  plays such a clip limited).
 
 ## [0.4] - 2026-11-10
 

@@ -17,22 +17,16 @@
 # full scale, the user's choice by ear of 2026-11-16 over the hard
 # limiter, which the buzzer's pack has. The knee wants a firmware of
 # that day or later; an older one limits hard.
-# The clips go to packs/speaker/ and the pack to
-# packs/clips-default-speaker.bin, under the default pack's names, so
-# a clock's melody setting means the same tune after it.
+# The pack maker's `--sound-output speaker` is these settings, so the
+# pack is the default one's sources through it: packs/clips-default-speaker.bin,
+# under the default pack's names, so a clock's melody setting means the
+# same tune after it.
 # Usage: scripts/speaker-clips.sh
 #        API_TOKEN=… scripts/clips.sh <ip> packs/clips-default-speaker.bin
 set -eu
 
 cd "$(dirname "$0")/.."
-mkdir -p packs/speaker
-scripts/xm2clip.py "mods/Orion - Nero Burning ROM v5.5.7.8kg.xm" packs/speaker/halftime.xmc \
-    --highpass 100 --passes 1 --release 10
-scripts/xm2clip.py mods/Orion-Nero6.3.0.2.xm packs/speaker/keygen.xmc \
-    --highpass 100 --passes 1 --release 10
-scripts/pt32clip.py mods/nq-synchronization.pt3 packs/speaker/synchronization.pt3c --restart \
-    --limiter --noise 16 --highpass 100 --passes 1 --release 10 --knee 37 --drive 150
 pack=packs/clips-default-speaker.bin
-scripts/mkpack.py "$pack" clips/trantor.bpr packs/speaker/halftime.xmc packs/speaker/keygen.xmc \
-    packs/speaker/synchronization.pt3c
-printf '%s (%s bytes)\n' "$pack" "$(stat -c %s "$pack")"
+cargo pack -o "$pack" --sound-output speaker clips/trantor.bpr \
+    "mods/Orion - Nero Burning ROM v5.5.7.8kg.xm:name=halftime" mods/Orion-Nero6.3.0.2.xm:name=keygen \
+    mods/nq-synchronization.pt3:restart,name=synchronization

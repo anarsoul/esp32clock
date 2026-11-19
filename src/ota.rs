@@ -233,7 +233,7 @@ pub async fn install(first: &[u8], total: usize, body: &mut impl Read) -> Result
 /// at a time, each erased, written and read back: `sector` holds the
 /// first `filled` bytes already, the rest comes from `first` and then
 /// `body`. The last 32 bytes are the SHA-256 of all before them, as
-/// espflash ends an image and `scripts/mkpack.py` a clip pack; a
+/// espflash ends an image and `onebitdawn-pack` a clip pack; a
 /// mismatch is an error, with the flash written all the same. Returns
 /// the bytes written. The caller has stopped the scan.
 pub(crate) async fn write_hashed(

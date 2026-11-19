@@ -60,7 +60,7 @@ pt3/
 # Tracker modules for the XM player, and the clips made from them
 xm/
 
-# Clip packs made by scripts/mkpack.py: the default one is built by the
+# Clip packs made by the pack maker (tools/pack): the default one is built by the
 # CI, a local one holds music that may not be redistributed
 packs/
 
@@ -75,3 +75,7 @@ lid/pics/
 
 # Python's bytecode cache, left by the scripts and the bench simulations
 __pycache__/
+
+# The pack maker as WebAssembly for its page, built by `cargo pack-wasm`
+# and by the release
+docs/pack/onebitdawn_pack.wasm

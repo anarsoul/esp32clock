@@ -13,7 +13,7 @@
 //! instead and the tests run whatever the build.
 //!
 //! The clip is raw PCM, 8 bits unsigned, mono, `PCM_HZ` samples a
-//! second (`scripts/wav2pcm.sh`). The line carries `BIT_RATE` bits a
+//! second (`tools/pack/src/wav.rs`). The line carries `BIT_RATE` bits a
 //! second, a 1 for the buzzer on, in periods of `PERIOD_BITS` at
 //! `CARRIER_HZ`: each period is one pulse, a run of ones in its
 //! middle, as long as the level at mid-period asks for (a pulse that

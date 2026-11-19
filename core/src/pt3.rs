@@ -12,7 +12,7 @@
 //! Spectrum's player read it once a frame and wrote the chip's
 //! registers; `Tune` is that player, written for the clock from the
 //! format's behaviour, reading the module in place. The clip
-//! (`MAGIC`, `scripts/pt32clip.py`) is the module as it is behind a
+//! (`MAGIC`, `tools/pack/src/pt3c.rs`) is the module as it is behind a
 //! header that says what the module cannot: the machine's clock and
 //! frame, the length, and how the clock is to shape it.
 //!
@@ -68,7 +68,7 @@ const FLAT_KNEE: u8 = 96;
 /// higher knee is a limiter heard less, for a speaker. The header had
 /// no byte left for it; a firmware older than this (2026-11-16) reads
 /// past the bits and limits hard.
-const KNEES: [u8; 16] = [0, 4, 5, 6, 7, 9, 12, 15, 18, 23, 29, 37, 46, 58, 74, 93];
+pub const KNEES: [u8; 16] = [0, 4, 5, 6, 7, 9, 12, 15, 18, 23, 29, 37, 46, 58, 74, 93];
 /// The mean of a `FLAT` clip's output moves by 1/2^9 of the way a
 /// sample at `RATE`, a corner of 5 Hz; a shift more at `FAST_HZ`.
 const MEAN_SHIFT: u32 = 9;

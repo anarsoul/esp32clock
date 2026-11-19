@@ -16,6 +16,11 @@ ESP_RADIO_CONFIG_WIFI_MTU="540"
 [alias]
 # The host-testable half; `build.target` above would otherwise aim the tests at the chip.
 host-test = "test -p onebitdawn-core --target host-tuple"
+# The pack maker (`tools/pack`): the command on the host, its tests, and
+# the library as WebAssembly for the page in `docs/pack/`.
+pack      = "run -q --release -p onebitdawn-pack --target host-tuple --"
+pack-test = "test -p onebitdawn-pack --target host-tuple"
+pack-wasm = "build --profile tool -p onebitdawn-pack --lib --target wasm32-unknown-unknown"
 
 [build]
 rustflags = [

@@ -12,7 +12,7 @@
 //! and not after any other: no heap, the module read in place from
 //! flash, a fixed number of channels.
 //!
-//! The file is not the XM itself but what `scripts/xm2clip.py` makes
+//! The file is not the XM itself but what `tools/pack/src/xmc.rs` makes
 //! of one (`MAGIC`): the same patterns, still packed, behind tables of
 //! where each pattern and each instrument's sample is, with the samples
 //! as plain signed bytes (an XM stores them as differences, which
@@ -32,7 +32,7 @@
 //!
 //! The channels are mixed at four times the output rate with linear
 //! interpolation and averaged down. Then the tune gets what the PCM
-//! clips get on the host in `scripts/wav2pcm.sh`, since the buzzer is
+//! clips get on the host in `tools/pack/src/wav.rs`, since the buzzer is
 //! the same: the bass cut by a high-pass and the level pushed hard into
 //! a limiter. How much bass and how hard are the clip's to say, in its
 //! header; a tune whose melody sits under 900 Hz wants a lower cut than
@@ -840,7 +840,7 @@ mod tests {
     /// A cell and the row it goes on.
     type At = (usize, Cell5);
 
-    /// A converted module, as `scripts/xm2clip.py` lays one out.
+    /// A converted module, as `tools/pack/src/xmc.rs` lays one out.
     fn module(channels: u8, speed: u8, tempo: u8, orders: &[u8], patterns: &[Vec<Row>], instruments: &[Ins]) -> Vec<u8> {
         let mut d = MAGIC.to_vec();
         d.extend([channels, speed, tempo, orders.len() as u8, patterns.len() as u8, instruments.len() as u8, 0, 0]);

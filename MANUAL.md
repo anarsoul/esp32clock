@@ -123,18 +123,45 @@ firmware. The default pack is the four clips in `clips/`; a release
 has it as `onebitdawn-clips-<tag>.bin` and the web installer writes
 it.
 
+A pack of your own is made of tracker modules (`.xm`, `.mod`, `.s3m`),
+Commodore 64 tunes (`.sid`), ZX Spectrum ones (`.pt3`) and sound files
+(`.wav`), up to 16 clips:
+
+- in a browser, at <https://anarsoul.github.io/onebitdawn/pack/>: drop
+  the files, set each one's label, hear it as the clock will play it,
+  and download the pack. Nothing leaves the browser;
+- or with `onebitdawn-pack`, the same converters as a command, which a
+  release has built for Linux, Windows and macOS
+  (`onebitdawn-pack-<tag>-…`) and `cargo pack` runs from the source:
+
 ```
-scripts/mkpack.py packs/mine.bin clips/trantor.bpr wav/tune.pcm=My\ Tune   # up to 16 clips; see the script's head
-API_TOKEN='…' scripts/clips.sh <ip> packs/mine.bin    # upload; without a file, the default pack is made and sent
-espflash write-bin 0x2e0000 packs/mine.bin && espflash reset   # or over USB
+onebitdawn-pack -o mine.bin tune.xm 'game.sid:song=2,seconds=90=The Game' ring.wav:seconds=20
+onebitdawn-pack -o mine.bin --sound-output speaker clips/trantor.bpr tune.mod   # for a clock with a speaker
+onebitdawn-pack --help                                 # every kind's options
 ```
 
-or open `http://<ip>/clips`, which shows the pack in use and uploads
-one with the PIN from the panel. The clock checks a pack (a SHA-256
+Both shape the clips for what the clock plays through, its buzzer or a
+speaker (in the buzzer's place, or on the line output's amplifier),
+and take options for each file: which song of a SID file, how many
+seconds of a sound file, the bass cut and the limiter; the page lists
+them and `--help` does. A clip made already (the files in `clips/`)
+goes into a pack as it is. A clip is labelled with the title its
+file carries (a module's, a SID tune's) or else with the file's name,
+unless you give it a label. A pack replaces the one the clock had,
+so the default clips go into yours if you want to keep them.
+
+The pack goes to the clock from `http://<ip>/clips`, which shows the
+pack in use and uploads one with the PIN from the panel, or:
+
+```
+API_TOKEN='…' scripts/clips.sh <ip> mine.bin          # upload; without a file, the default pack is made and sent
+espflash write-bin 0x2e0000 mine.bin && espflash reset   # or over USB
+```
+ The clock checks a pack (a SHA-256
 at its end) when it is uploaded and at every boot, and restarts after
 an upload. A pack with a clip in a version of its format the firmware
 does not play (made by a newer converter, or a very old one) is
-refused, by `scripts/mkpack.py` and by the clock, which finds it only
+refused, by `onebitdawn-pack` and by the clock, which finds it only
 after writing the pack and is left with the note melodies until the
 next upload: update the firmware, or convert the clip again. The alarm sound is stored by its place in the list, so
 check it after changing packs; a sound that is no longer there is the
@@ -144,9 +171,11 @@ beeps.
   <img src="screenshots/clips.png" width="320" alt="The Clips page: the pack in use, its clips and the upload">
 </p>
 
-Sampled sound is made with `scripts/wav2pcm.sh in.wav wav/tune.pcm`
-(16 KB of flash a second), or with the output named `wav/tune.adp` as
-IMA ADPCM at half that, with a little noise added.
+Sampled sound takes the most room: 8 KB of the pack a second as IMA
+ADPCM, which is what a `.wav` becomes, or 16 KB as PCM
+(`format=pcm`), a little cleaner. A ZX Spectrum beeper tune is
+recorded from a tape with `scripts/zxbeeper.py` (it needs SkoolKit)
+and its `.bpr` goes into a pack as it is.
 
 A clock flashed before the partition existed keeps its old partition
 table through updates over the LAN: it runs the new firmware, with the

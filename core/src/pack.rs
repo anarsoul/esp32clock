@@ -4,7 +4,7 @@
 //! A clip pack: the clips of the `clips` partition, which a clock takes
 //! in place of the ones built into its firmware. Pure: the layout and
 //! the checks; `src/pack.rs` finds the partition, maps it and takes an
-//! upload. `scripts/mkpack.py` makes one.
+//! upload. `onebitdawn-pack` makes one.
 //!
 //! | at | what |
 //! | --- | --- |
@@ -46,6 +46,9 @@ pub const ENTRY_LEN: usize = 64;
 pub const NAME_MAX: usize = 20;
 pub const LABEL_MAX: usize = 32;
 pub const HASH_LEN: usize = 32;
+/// The `clips` partition's size in `partitions.csv`, which no update
+/// changes: the longest pack there is.
+pub const ROOM: usize = 0x12_0000;
 
 const ENTRY_NAME: usize = 12;
 const ENTRY_LABEL: usize = ENTRY_NAME + NAME_MAX;
@@ -229,7 +232,7 @@ impl<'a> Pack<'a> {
 }
 
 /// A pack of these clips (name, label, loops, data), as
-/// `scripts/mkpack.py` lays one out: for the tests here and in the
+/// `onebitdawn-pack` lays one out: for the tests here and in the
 /// modules that list the melodies.
 #[cfg(test)]
 pub(crate) fn build(clips: &[(&str, &str, bool, &[u8])]) -> Vec<u8> {
@@ -385,7 +388,7 @@ pub(crate) mod tests {
         assert_eq!((last.name.len(), last.label.len()), (NAME_MAX, LABEL_MAX));
     }
 
-    /// With `CLIP_PACK_FILE=file`, the pack `scripts/mkpack.py` made is
+    /// With `CLIP_PACK_FILE=file`, the pack `onebitdawn-pack` made is
     /// read by the parser the clock reads it with, and each clip is
     /// started. Passes with nothing to check when the variable is unset.
     /// (The variable is not in `build.rs`'s list: change the file and

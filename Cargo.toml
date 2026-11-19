@@ -12,7 +12,7 @@ path = "./src/bin/main.rs"
 # The firmware is the root package, so plain cargo commands build only
 # it; `core` is the host-testable half (`cargo host-test`).
 [workspace]
-members = ["core"]
+members = ["core", "tools/pack"]
 
 [dependencies]
 onebitdawn-core = { path = "core" }
@@ -96,6 +96,14 @@ codegen-units = 1     # LLVM can perform better optimizations using a single thr
 debug         = 2     # prefer slower builds but better debugging experience
 lto           = 'fat'
 opt-level     = 's'
+
+# The pack maker as a release gives it out, the command and the
+# WebAssembly for its page (`cargo pack-wasm`): no debug information,
+# which a browser would download.
+[profile.tool]
+inherits = "release"
+debug    = false
+strip    = true
 
 [features]
 # Hangs on purpose, for trying the watchdog on the bench (`watchdog::bench`):

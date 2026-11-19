@@ -6,7 +6,7 @@
 //!
 //! A `.sid` file is not notes but the program that played them, 6502
 //! code to be called once a frame, each call writing some of the
-//! chip's 25 registers. `scripts/sid2clip.py` runs that code on the
+//! chip's 25 registers. `tools/pack/src/sidc.rs` runs that code on the
 //! host and keeps the writes of each frame (`MAGIC`); the clock has the
 //! chip. A tune of a minute is ten or twenty kilobytes.
 //!

@@ -18,7 +18,8 @@
 //!
 //! The reader of a format keeps the place and knows the tokens; it
 //! calls `leave` before it reads a token, `enter` for a reference and
-//! `gave` for each item. `scripts/packrefs.py` is the packer.
+//! `gave` for each item. `tools/pack/src/packrefs.rs` is the packer, and
+//! `scripts/packrefs.py` the beeper converter's.
 
 /// How deep references may nest.
 pub const DEPTH: usize = 16;

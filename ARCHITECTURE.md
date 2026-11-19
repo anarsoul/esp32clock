@@ -28,11 +28,12 @@ shape everything else:
 3. **One shared settings value.** Buttons, pages, `/api` and MQTT all
    edit the same `Settings`; a change wakes whoever depends on it.
 
-## Two crates
+## Three crates
 
 | crate | what it holds |
 | --- | --- |
 | `core/` (`onebitdawn-core`) | hardware-independent logic: the driver's wire format, panel map and font, UI state machine, settings and their flash record, form parser and HTML pages, HTTP head parser, auth rules, timezone rules, MQTT topics and discovery payload, the sound players (PCM, ADPCM, beeper, XM, SID, AY/PT3), sensor tables. Builds for the host; each module ends with its tests |
+| `tools/pack/` (`onebitdawn-pack`) | the pack maker, for the host and the browser and never the chip: the converters from modules, tunes and sound files to clips, and the pack writer, over `core`'s formats, parser and players. A command (`main.rs`) and, as WebAssembly, the page in `docs/pack/` (`web.rs`, `wasm.rs`) |
 | root (`onebitdawn`) | the tasks and drivers around it: `src/*.rs` and `src/bin/main.rs`. Re-exports `core`'s modules from `src/lib.rs`, so both halves are `crate::…` |
 
 A module with both halves has the same name in each crate (`clock`,

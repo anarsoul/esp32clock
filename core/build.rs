@@ -14,18 +14,18 @@ fn main() {
 
 /// The clips a build has when `ALARM_CLIP` is not set: none. A clock's
 /// clips are its clip pack, in the `clips` partition (`pack.rs`,
-/// `scripts/mkpack.py`); building them into the firmware is the older
+/// `onebitdawn-pack`); building them into the firmware is the older
 /// way, still here for a clock whose partition table has no such
 /// partition. The four of the default pack that way:
 /// `ALARM_CLIP=clips/trantor.bpr,clips/halftime.xmc,clips/keygen.xmc,clips/synchronization.pt3c`.
 const DEFAULT_CLIPS: &str = "";
 
 /// `ALARM_CLIP` names the clips to build in as the last melodies, files
-/// separated by commas: raw PCM (`scripts/wav2pcm.sh`), as it is or as
-/// ADPCM (`scripts/adpcm.py`), a beeper clip
-/// (`scripts/zxbeeper.py`), a tracker module (`scripts/xm2clip.py`), a
-/// Commodore 64 tune (`scripts/sid2clip.py`) or a ZX Spectrum one
-/// (`scripts/pt32clip.py`).
+/// separated by commas: raw PCM (`tools/pack/src/wav.rs`), as it is or as
+/// ADPCM (`tools/pack/src/adpcm.rs`), a beeper clip
+/// (`scripts/zxbeeper.py`), a tracker module (`tools/pack/src/xmc.rs`), a
+/// Commodore 64 tune (`tools/pack/src/sidc.rs`) or a ZX Spectrum one
+/// (`tools/pack/src/pt3c.rs`).
 /// A relative path is taken from the workspace root, where cargo is run.
 /// A clip's API name is its file's name without the extension, in lower
 /// case with everything but letters turned into `_`; its label is the
