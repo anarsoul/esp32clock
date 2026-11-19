@@ -109,9 +109,9 @@ cargo pack --clip clips/mountain_king.xmc mods/grieg-mountain-king-bright.xm
 
 "Suspended Seconds" (2026) by **Vasily Khoruzhick**, a tune for
 piano, written for this clock. **Copyright (c) 2026 Vasily
-Khoruzhick. May be copied and distributed, unmodified, as part of
-onebitdawn clip packs, including commercially; all other rights
-reserved.** The tune, its MIDI file
+Khoruzhick. May be copied and distributed, unmodified or as converted
+from its module by onebitdawn's tools, as part of onebitdawn clip
+packs, including commercially; all other rights reserved.** The tune, its MIDI file
 (`mods/src/suspended_seconds.mid`), the module
 (`mods/suspended-seconds.xm`) and this clip are under these terms and
 not under the project's licence.

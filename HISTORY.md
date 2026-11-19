@@ -10455,3 +10455,12 @@ including commercially; all other rights reserved". These replace
 the tune, its MIDI file, the module and the clip: `clips/README.md`,
 `AGENTS.md`, `agents/clips.md` and the script's docstring say so. The
 module and the clip are the same bytes.
+
+**The terms again, 2026-11-19.** The user: "unmodified, or as
+converted from its module by onebitdawn's tools". A clip is the
+module converted, with a limiter's settings that differ between the
+buzzer's pack and a speaker's, so "unmodified" alone did not cover
+the packs themselves. The terms are now: may be copied and
+distributed, unmodified or as converted from its module by
+onebitdawn's tools, as part of onebitdawn clip packs, including
+commercially; all other rights reserved.
