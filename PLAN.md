@@ -892,6 +892,33 @@ there since (at 21 h). This is the step of the soak of 2026-11-08
 rejoin 92 h later), so it is the association's, not a leak; that both
 fell at the same minute of the evening points at the access point.
 
+**Passed, 2026-11-19 12:09**: 24 h on one boot (last heartbeat 86403 s,
+`/api` uptime 86419 s), heals and watchdog 0, no `WARN`, `ERROR` or
+panic past the update's own. Heap 54080 or 53892 in all but seven of
+1441 heartbeats, those one-minute dips (lowest 50672). Longest feed
+gap 1180 ms from the first heartbeat to the last, through 96 clips,
+the hourly saves and four rings (Trantor 12:32, Halftime 18:33, Keygen 00:34,
+Synchronization 06:36). All 96 `clip:` lines with 0 underruns and 0
+stray positions. One MQTT session (1470 published); the descriptor
+index moving; 2870 ticks with no `/api` failure (slowest 141 ms) and
+five lost pings, each alone; every page 200 and the page's time the
+host's 287 times of 287; one BSSID and channel throughout.
+
+The two uploads after it, the capture still attached. The image is
+`b7cb573` built again (the soak's file had been overwritten by a
+later build; the same 912480 bytes, not compared byte for byte):
+
+| upload | last heartbeat before | result | first heartbeat after |
+| --- | --- | --- | --- |
+| OTA, 912480 bytes, 9.0 s, into `ota_0` | 86463 s, feed gap 1180 ms | `CoreSw`, confirmed at 5 s, pack checked in 73 ms | heap 54080, feed gap 1262 ms |
+| the default pack, 105156 bytes, 1.1 s | 120 s, feed gap 1262 ms | `CoreSw`, 4 clips checked in 73 ms | heap 54080, feed gap 1341 ms |
+
+Neither upload tripped the watchdog (count 0 in the carry record both
+times). The gap during an upload itself is not in these figures: the
+clock resets before the next heartbeat, so what is read is the boot's.
+The heap was back at 54080 after the rejoin, as in the earlier soak.
+The driver left the alarm armed at 06:36 on Synchronization.
+
 ## Twenty channels for the module player, and Crush tried in the default pack — built and measured on test-clock 2026-11-18; Crush heard and dropped the same day
 
 The user asked for `xm::MAX_CHANNELS` at 20, after sixteen the same
@@ -1094,7 +1121,7 @@ is made or is no longer wanted, and put the result in the section.
 - **The pages after a UX review: PIN at the click, a saved notice, the bad field named** — built 2026-11-15, run on test-clock in headless Chromium; the setup form the user's, 2026-11-15; the setup form and a real upload from the page run on test-clock 2026-11-17 ("An install from nothing").
 - **PCM clips at half the flash: IMA ADPCM, `ADP1`** — the A/B heard on white-clock 2026-11-16 ("not bad", "way better than PCM 8k"); the format built 2026-11-16 and heard by the user on a speaker the same day ("audible, but acceptable"); the serial log's clip line read on test-clock; the buzzer through the clock's own decoder not yet.
 - **A clip of a version no player reads is refused** — 2026-11-17, built and tested on the host; no upload of such a pack tried on a clock.
-- **A watchdog** — built and every reset path run on test-clock 2026-11-17; a soak, and the longest feed gap after a clip, a save and the two uploads, not yet.
+- **A watchdog** — built and every reset path run on test-clock 2026-11-17; soaked 24 h on the bare bench board 2026-11-19 with the longest feed gap 1180 ms through clips, saves and rings, and no trip at either upload (the gap during an upload itself cannot be read: the clock resets). On a clock with a panel, not yet.
 - **Forward compatibility before the first public release** — 2026-11-17, built, tested on the host and on test-clock; not committed, not tagged.
 - **Sixteen channels for the module player** — built, measured on test-clock and heard 2026-11-18; the 31 250 clip as a ringing alarm for five minutes not run, and the version line of a changed tree's build lacks `-dirty`.
 
