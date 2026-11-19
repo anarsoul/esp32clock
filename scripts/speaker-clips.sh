@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 # Copyright (c) 2026 Vasily Khoruzhick
 # Make the default clip pack for a clock with a speaker in the buzzer's
-# place (speaker-mod/README.md): the four clips of clips/, the two
-# XM modules converted again from mods/ with the bass left in (a high-pass
+# place (speaker-mod/README.md): the five clips of clips/, the three
+# modules converted again from mods/ with the bass left in (a high-pass
 # at 100 Hz, once) and the limiter letting go over 128 ms and not 16:
 # as hard a drive as the buzzer's clips have, but a gain that follows
 # the tune's level and not its waveform, which on a speaker is heard
@@ -32,7 +32,10 @@ scripts/xm2clip.py mods/Orion-Nero6.3.0.2.xm packs/speaker/keygen.xmc \
     --highpass 100 --passes 1 --release 10
 scripts/pt32clip.py mods/nq-synchronization.pt3 packs/speaker/synchronization.pt3c --restart \
     --limiter --noise 16 --highpass 100 --passes 1 --release 10 --knee 37 --drive 150
+scripts/mod2xm.py mods/elysium.mod packs/speaker/elysium.xm
+scripts/xm2clip.py packs/speaker/elysium.xm packs/speaker/elysium.xmc \
+    --highpass 100 --passes 1 --release 10
 pack=packs/clips-default-speaker.bin
 scripts/mkpack.py "$pack" clips/trantor.bpr packs/speaker/halftime.xmc packs/speaker/keygen.xmc \
-    packs/speaker/synchronization.pt3c
+    packs/speaker/synchronization.pt3c packs/speaker/elysium.xmc
 printf '%s (%s bytes)\n' "$pack" "$(stat -c %s "$pack")"

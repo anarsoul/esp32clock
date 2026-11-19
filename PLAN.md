@@ -821,6 +821,57 @@ bytes, four a channel for the new memory and its padding).
 
 Not heard since the fixes: Halftime and Keygen, which they change.
 
+## A MOD converter, and Elysium the default pack's fifth clip — built 2026-11-18, not yet heard
+
+The user asked for a script that makes a clip of a `.mod`, and for
+`mods/elysium.mod` in the default pack: "Elysium" by Jester of Sanity
+(Volker Tripp, 1992; the module is signed in its sample names), four
+channels, from The Mod Archive, module 40475. The page (read with
+curl, 2026-11-18): `ELYSIUM.MOD`, MOD, 4 channels, "Licensed under
+the Attribution Non-commercial Share Alike license", linked to
+CC BY-NC-SA 4.0, "Registered Artist(s): Jester", and the MD5
+`45b205dd41fe63c2de0e77ae749322de`, which is that of the file in
+`mods/`.
+
+**The converter.** `scripts/mod2xm.py` makes an XM, as `s3m2xm.py`
+does, and `xm2clip.py` the clip; the player is untouched. A period is
+the nearest note with 428 as C-4, and every instrument's finetune is
+20 of 128 lower, a PAL Amiga's 8287 Hz at that period for FT2's 8363.
+The XM is on the linear table, the only one `xm.rs` plays, so a slide
+in periods (1, 2, 3, 5, E1, E2) is converted at the period the channel
+has when it is played, the song followed once in order. Elysium uses
+1, A, B, C, F and one E0 (the Amiga's filter, left out): four
+portamentos, `101` each, become `101`.
+
+**Checked on the host.** openmpt123's renders of the MOD and of the
+XM, one channel at a time: the envelopes correlate at 0.999, 0.999,
+0.986 and 0.998, no drift over the 222 s, the XM 2.5 dB lower on
+every channel alike (openmpt's level for the format). The samples do
+not line up wave for wave: the Amiga's periods are whole numbers, a
+few cents off the notes they stand for. The clock's own mix
+(`CLIP_RAW` dump) against openmpt's MOD: envelope 0.980.
+
+**The clip.** `clips/elysium.xmc`, the converter's defaults: 126 666
+bytes, 222.7 s, nothing the player lacks named. Fifth in the pack,
+after the four so those keep their places: `scripts/clips.sh`,
+`scripts/speaker-clips.sh`, the CI's and the release's lists,
+`core/build.rs`'s comment; `clips/README.md` credits Jester and
+states the licence, the changelog, the manual, the readme and
+`AGENTS.md` say five. The default pack is 231 886 bytes, 19 % of the
+partition; the parser's test reads it and the 183 host tests pass
+with the five built in.
+
+**The licence's cost.** CC BY-NC-SA is the first clip here with a
+condition on use: the default pack, and a release's
+`onebitdawn-clips-<tag>.bin`, may no longer be used commercially
+(someone selling clocks with it flashed, say), and the clip is under
+the same licence as the module. The firmware's own licence is
+untouched; the clip is data beside it.
+
+Owed: the user's ear on a clock (`melody=elysium`), the processor's
+share while it plays (four channels: under Halftime's, expected).
+The speaker pack of five is on test-clock since 2026-11-18.
+
 ## Checks still owed
 
 Built, and by its heading in `HISTORY.md` not yet seen, heard or run

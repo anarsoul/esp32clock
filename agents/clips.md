@@ -53,6 +53,12 @@ scripts/xm2clip.py tune.xm mods/tune.xmc [--highpass 900 --passes 2] [--raise 1:
 A FastTracker 2 module for the clock's own player, of up to twenty
 channels. It lists what the module uses that the player lacks.
 
+`scripts/mod2xm.py tune.mod tune.xm ['Title']` makes an XM of a
+ProTracker module first (31 samples, any channel count the tag
+names): the pitch a PAL Amiga's, the slides (1, 2, 3, 5, E1, E2)
+converted from periods to the linear table at the period each is
+played at, E0 (the filter) left out and named.
+
 `scripts/s3m2xm.py tune.s3m tune.xm ['Title']` makes an XM of a
 ScreamTracker 3 module first: samples, notes, volumes and the effects
 A, B, C, D, O and T, naming any other it leaves out; no panning.

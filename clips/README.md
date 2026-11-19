@@ -4,7 +4,7 @@ The clips of the default clip pack, the extra alarm melodies a clock
 has in its `clips` partition (see "Clip packs" in `MANUAL.md`):
 
 ```
-scripts/clips.sh                                       # packs/clips-default.bin, these four
+scripts/clips.sh                                       # packs/clips-default.bin, these five
 scripts/mkpack.py packs/one.bin clips/trantor.bpr      # a pack of one of them
 ALARM_CLIP=clips/trantor.bpr cargo build --release     # or built into the firmware, the older way
 ```
@@ -64,4 +64,31 @@ go over 128 ms, and a high-pass at 100 Hz.
 ```
 scripts/pt32clip.py mods/nq-synchronization.pt3 clips/synchronization.pt3c --restart \
     --limiter --noise 16 --highpass 100 --passes 1 --release 10
+```
+
+## `elysium.xmc`
+
+"Elysium" (1992) by **Jester** of Sanity (Volker Tripp), an Amiga
+ProTracker module of four channels; it is signed in its sample names,
+"composed by jester of sanity". It is from
+[The Mod Archive](https://modarchive.org/index.php?request=view_by_moduleid&query=40475),
+module 40475, where it is under the **Creative Commons
+Attribution-NonCommercial-ShareAlike** licence
+([CC BY-NC-SA](https://creativecommons.org/licenses/by-nc-sa/4.0/)).
+The music is Jester's; copyright remains with its author. This file
+is the module in another format, under the same licence, so it, and a
+clip pack that holds it, may be shared with this credit and not used
+commercially.
+
+The module is in `mods/` as it was found (MD5
+`45b205dd41fe63c2de0e77ae749322de`). `scripts/mod2xm.py` makes a
+FastTracker 2 module of it (the same patterns and samples, at a PAL
+Amiga's pitch; its four portamentos converted to the linear frequency
+table, the Amiga's filter switch left out), and this file is what
+`scripts/xm2clip.py` makes of that with its defaults: nothing
+rendered.
+
+```
+scripts/mod2xm.py mods/elysium.mod /tmp/elysium.xm
+scripts/xm2clip.py /tmp/elysium.xm clips/elysium.xmc
 ```
