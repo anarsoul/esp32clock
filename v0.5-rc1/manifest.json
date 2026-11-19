@@ -1,0 +1,33 @@
+{
+  "name": "onebitdawn",
+  "version": "0.5-rc1",
+  "new_install_prompt_erase": true,
+  "new_install_improv_wait_time": 0,
+  "builds": [
+    {
+      "chipFamily": "ESP32-C3",
+      "parts": [
+        {
+          "path": "bootloader.bin",
+          "offset": 0
+        },
+        {
+          "path": "partition-table.bin",
+          "offset": 32768
+        },
+        {
+          "path": "otadata.bin",
+          "offset": 65536
+        },
+        {
+          "path": "onebitdawn-ota-v0.5-rc1.bin",
+          "offset": 131072
+        },
+        {
+          "path": "onebitdawn-clips-v0.5-rc1.bin",
+          "offset": 3014656
+        }
+      ]
+    }
+  ]
+}
