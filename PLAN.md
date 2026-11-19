@@ -709,6 +709,68 @@ pack upload".
 Not covered: a panel (the ring runs into no drivers), a speaker, the
 buttons, the access point, the sensors.
 
+## Twenty channels for the module player, and Crush tried in the default pack — built and measured on test-clock 2026-11-18; Crush heard and dropped the same day
+
+The user asked for `xm::MAX_CHANNELS` at 20, after sixteen the same
+day (`HISTORY.md`, "Sixteen channels for the module player"). It is
+20 in `core/src/xm.rs` and in `scripts/xm2clip.py`, which refuses a
+module with more; nothing else is sized by it. The mixer's sum is an
+`i32` and a channel at full level is 32768 of it, the clip's channel
+count a byte, the format the same `XMC2`: a clip of sixteen channels
+or fewer is made and played as before. A firmware older than this
+takes the first sixteen cells of a row of a wider clip for the row
+and plays nonsense, with no harm, as an eight-channel one did of
+sixteen; none with sixteen is released.
+
+- The stack: 40 264 → 39 960 bytes (39.3 → 39.0 KB), 304 bytes.
+- The build, clippy and `cargo host-test` pass; no test has a module
+  of more than sixteen channels.
+
+**Crush.** What the twenty were for: "Crush" by Drozerix, eighteen
+channels, a MilkyTracker module the user took from The Mod Archive,
+where it is module 179581, "Licensed under the Public Domain
+license", by Drozerix, its MD5 that of the file in `mods/` (the
+page read 2026-11-18). `mods/drozerix-crush.xm` is
+the module, `clips/crush.xmc` the converter's defaults of it (31 250,
+16 bits, 121 820 bytes, 124.7 s, nothing the player lacks named), and
+it is the default pack's fifth clip, after the four so those keep
+their places: `scripts/clips.sh`, `scripts/speaker-clips.sh` (with
+the speaker's high-pass and release, as the other modules), the CI's
+and the release's lists. `clips/README.md` credits Drozerix, the
+changelog and `AGENTS.md` name the tune. The default pack is 227 040
+bytes, 19 % of the partition; the parser's test reads it and the
+players' tests pass with the five built in.
+
+A released firmware (v0.4 and before) has no clip packs, so no
+released player of eight channels meets this pack; a build of this
+tree from before today does, and plays Crush as nonsense.
+
+**On test-clock, 2026-11-18** (flashed over USB, `v0.4-100-gcb0f77f-dirty`;
+`packs/clips-default-speaker.bin` written to the partition with
+`espflash write-bin 0x2e0000`, in the local speaker pack's place;
+`output` on the line; `/play` with `melody=crush`, the serial log a
+`cat` of the port, which did not reset the clock):
+
+| clip | filling | share |
+| --- | --- | --- |
+| Crush, eighteen channels, 31 250, played through | 71 569 of 124 770 ms | 57 % |
+| Crush, a preview before it that this one cut short | 43 119 of 76 907 ms | 56 % |
+
+7615 chunks, no underruns, no stray positions in either. The
+watchdog's longest feed gap stayed at 1424 ms, the heap at 54 080
+bytes, no gateway probe failed, and `/` and `/api` were answered
+while it played. So the dearest clip there is: Children's sixteen
+channels were 49 %.
+
+**Dropped, 2026-11-18.** The user heard it on test-clock's line
+output before and after the player's two fixes (the next section):
+"It sounds a bit weird", then "It doesn't sound good. Keep the fixes,
+but drop Crush from default pack." The default pack is the four clips
+again, everywhere it was five; `clips/crush.xmc` went to the ignored
+`xm/`, the speaker's stays in `packs/speaker/`, and the module is
+still in `mods/`, untracked, the user's to keep or remove. test-clock
+still holds the pack of five. The twenty channels stay.
+
 ## The module player against openmpt123: vibrato's direction, a memory for each portamento — fixed 2026-11-18, heard on test-clock with Crush only
 
 The user, of Crush (eighteen channels, the section above) previewed

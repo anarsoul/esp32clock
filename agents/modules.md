@@ -349,8 +349,9 @@ nothing for PCM (HISTORY.md, 2026-11-16).
 
 - `Tune` is a player for the part of FastTracker 2's XM that chiptunes
   use (see its header for the effects). It reads in place the `XMC2`
-  file `scripts/xm2clip.py` makes of a module; no heap, sixteen
-  channels (`xm::MAX_CHANNELS`; eight until 2026-11-18).
+  file `scripts/xm2clip.py` makes of a module; no heap, twenty
+  channels (`xm::MAX_CHANNELS`; eight, then sixteen, then this,
+  all on 2026-11-18).
 - It mixes at 32 kHz and averages to 16 kHz (8 if the clip asks; at
   62.5 kHz to 31.25 for a clip at `clip::FAST_HZ`).
 - Then a high-pass and a hard limiter, as `scripts/wav2pcm.sh` gives

@@ -50,7 +50,7 @@ scripts/zxbeeper.py old.bpr new.bpr
 scripts/xm2clip.py tune.xm mods/tune.xmc [--highpass 900 --passes 2] [--raise 1:2] [--drive 160 --release 5] [--knee 100] [--rate 16000] [--bits 8]
 ```
 
-A FastTracker 2 module for the clock's own player, of up to sixteen
+A FastTracker 2 module for the clock's own player, of up to twenty
 channels. It lists what the module uses that the player lacks.
 
 `scripts/s3m2xm.py tune.s3m tune.xm ['Title']` makes an XM of a
