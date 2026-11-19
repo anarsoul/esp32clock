@@ -1215,10 +1215,14 @@ mod tests {
         // While an upload has the pack out of the table the index has
         // no melody at it: saved with no name, and read back with the
         // pack there again as the index it is, not as the beeps.
-        let adrift = Settings { melody: notes + melody::clip_count() + 2, ..full() }.to_record();
+        // (The place just past the table with no pack in it, which a
+        // build with clips of its own has further on.)
+        let place = melody::count();
+        let adrift = Settings { melody: place, ..full() }.to_record();
         assert_eq!(adrift[RECORD_MELODY_NAME_LEN], 0);
-        install(&["alpha", "beta", "gamma"]);
-        assert_eq!(read(&adrift), notes + melody::clip_count() - 1);
+        assert_eq!(read(&adrift), 0, "and with no pack it is past the table");
+        melody::install(Some(crate::pack::fullest()));
+        assert_eq!(read(&adrift), place);
         melody::install(None);
     }
 
