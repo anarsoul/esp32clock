@@ -249,6 +249,12 @@ into `OUT_DIR`.
 **`src/buzzer.rs`**: LEDC PWM on an open-drain pin; plays a melody on
 command, looped or once, and stops within a note.
 
+- `Pins` is the two pins a sound can go out of, GPIO5 and GPIO20, and
+  how each is driven and rests (`at_rest`, `rest`). A tone goes to the
+  one `settings::get().output` names at its start; the pin of the
+  tone before is taken back to its rest first when that differs,
+  since LEDC stays connected to it.
+
 - `preview` and `stop_preview`, the pages' and the bus's, do nothing
   while the alarm rings; `ring` and `stop` are the display task's.
 - A clip goes to `clip::play`, which hands it to the clip task on the
@@ -319,7 +325,10 @@ command, looped or once, and stops within a note.
 - `play` writes the clip's bits (`clip::Stream`) from flash into the
   ring ahead of the DMA. It connects GPIO5 as a frozen open-drain
   signal through the GPIO matrix's inverter once the stream runs, and
-  hands it back released before stopping. It logs the clip's chunks,
+  hands it back released before stopping; with the `output` setting
+  at `line` it is GPIO20, push-pull, no inverter, back to low, and a
+  converter clip cut short there ends on a ramp (`clip::fade`) before
+  the pin is taken back. It logs the clip's chunks,
   underruns and the time spent filling the ring (the player's share of
   the processor).
 - Registers, through `regs()`: the DMA's descriptor register, for the

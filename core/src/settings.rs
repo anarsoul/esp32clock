@@ -415,6 +415,37 @@ impl TempShow {
     }
 }
 
+/// Which pin the sound goes out of: the buzzer's, or the line output a
+/// clock with an amplifier has its filter on.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(u8)]
+pub enum AudioOut {
+    /// GPIO5, open-drain, into the buzzer's transistor.
+    Buzzer = 0,
+    /// GPIO20, push-pull, into an RC filter and an amplifier.
+    Line = 1,
+}
+
+impl AudioOut {
+    /// The form and API names, in record-byte order.
+    pub const NAMES: [&str; 2] = ["buzzer", "line"];
+    /// The page's labels, in the same order.
+    pub const LABELS: [&str; 2] = ["Buzzer (GPIO5)", "Amplifier (GPIO20)"];
+    pub const ALL: [AudioOut; 2] = [AudioOut::Buzzer, AudioOut::Line];
+
+    pub fn from_byte(b: u8) -> Option<Self> {
+        Self::ALL.get(b as usize).copied()
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::NAMES.iter().position(|n| *n == name).and_then(|i| Self::from_byte(i as u8))
+    }
+
+    pub fn name(self) -> &'static str {
+        Self::NAMES[self as usize]
+    }
+}
+
 /// The Wi-Fi transmit powers the driver has, as the form and API name
 /// them in dBm and as it takes them in quarter dBm (the table in
 /// esp-wifi-sys's `esp_wifi_set_max_tx_power` doc; 16 dBm is 66 to 71,
@@ -496,10 +527,13 @@ pub struct Settings {
     /// `TX_POWER_CHOICES`, for a clock whose antenna wants less than
     /// the ceiling.
     pub tx_power_qdbm: i8,
+    /// The pin the tones and the clips go out of. Read at each tone and
+    /// each clip, so a change needs no reset.
+    pub output: AudioOut,
 }
 
 /// Bytes in a stored record.
-pub const RECORD_LEN: usize = 386;
+pub const RECORD_LEN: usize = 387;
 
 /// The thermometer offset's bound, tenths of a degree either way.
 pub const TEMP_OFFSET_LIMIT_DC: i16 = 100;
@@ -512,8 +546,9 @@ pub const TEMP_OFFSET_LIMIT_DC: i16 = 100;
 /// they are, a value it does not know in one of them costs it that field
 /// only (`from_record`), and the record with its key stays within
 /// `storage::ITEM_MAX` bytes (1000), which that image's map can read; a
-/// record that outgrows it goes on in a second item.
-const RECORD_VERSION: u8 = 12;
+/// record that outgrows it goes on in a second item. Version 13 appends
+/// the sound output.
+const RECORD_VERSION: u8 = 13;
 
 /// Where the hostname sits in a version 3 record.
 const RECORD_HOSTNAME_LEN: usize = 9;
@@ -570,7 +605,10 @@ const RECORD_TZ: usize = RECORD_TZ_LEN + 1;
 
 /// Where the transmit power sits in a version 12 record: quarter dBm.
 const RECORD_TX_POWER: usize = RECORD_TZ + TZ_MAX;
-const _: () = assert!(RECORD_TX_POWER + 1 == RECORD_LEN, "RECORD_LEN does not match the layout");
+
+/// Where the sound output sits in a version 13 record.
+const RECORD_OUTPUT: usize = RECORD_TX_POWER + 1;
+const _: () = assert!(RECORD_OUTPUT + 1 == RECORD_LEN, "RECORD_LEN does not match the layout");
 
 /// The timezone at boot until the user sets it: `TZ_RULE` from the build,
 /// checked here so a bad rule fails the build, or else `TZ_OFFSET_MINUTES`
@@ -622,6 +660,7 @@ impl Settings {
         mqtt: Broker::NONE,
         mqtt_cleared: false,
         tx_power_qdbm: DEFAULT_TX_POWER_QDBM,
+        output: AudioOut::Buzzer,
     };
 
     /// Fill in what the build has and the record lacks: the network, the
@@ -683,8 +722,8 @@ impl Settings {
     /// (`0xff` for random), then the SSID, the password and the token,
     /// each a length byte and a padded field, then the flags byte, the
     /// thermometer offset, the temperature-on-the-panel byte, and the
-    /// broker: host, port, user and password; then the timezone rule and
-    /// the transmit power.
+    /// broker: host, port, user and password; then the timezone rule,
+    /// the transmit power and the sound output.
     pub fn to_record(&self) -> [u8; RECORD_LEN] {
         // The old minute field, for an image before version 11, which
         // checks it against `TZ_LIMIT_MINUTES`; a rule's standard offset
@@ -725,6 +764,7 @@ impl Settings {
         r[RECORD_TZ_LEN] = self.tz.len;
         r[RECORD_TZ..RECORD_TZ + TZ_MAX].copy_from_slice(&self.tz.bytes);
         r[RECORD_TX_POWER] = self.tx_power_qdbm as u8;
+        r[RECORD_OUTPUT] = self.output as u8;
         r
     }
 
@@ -739,7 +779,9 @@ impl Settings {
     /// that byte, so no broker, and version 10 after the broker, so the
     /// timezone is the fixed offset of bytes 7 and 8 (every version up to
     /// 10 stored minutes there; version 11 appends the rule and keeps the
-    /// minutes as its standard offset). Versions are append-only, so a record
+    /// minutes as its standard offset), version 11 after the rule, so the
+    /// transmit power is the build's, and version 12 after the power, so
+    /// the sound goes to the buzzer. Versions are append-only, so a record
     /// from a newer image is read by the prefix this one knows, and a
     /// colour, brightness or melody index past this image's table (an
     /// entry a newer image added, or a higher current ceiling) lands on
@@ -851,6 +893,11 @@ impl Settings {
                 s.tx_power_qdbm = qdbm;
             }
         }
+        // An output a later image added is the buzzer, which every
+        // clock has.
+        if version >= 13 {
+            s.output = AudioOut::from_byte(*r.get(RECORD_OUTPUT)?).unwrap_or(d.output);
+        }
         s.color = s.color.min(PALETTE.len() - 1);
         // A record saved by a build with a higher ceiling, or by a later
         // image with more steps, may name a step this build does not
@@ -937,6 +984,7 @@ mod tests {
             },
             mqtt_cleared: false,
             tx_power_qdbm: 34,
+            output: AudioOut::Line,
         }
     }
 
@@ -1038,6 +1086,7 @@ mod tests {
             9 => RECORD_BROKER_HOST_LEN,
             10 => RECORD_TZ_LEN,
             11 => RECORD_TX_POWER,
+            12 => RECORD_OUTPUT,
             _ => RECORD_LEN,
         }
     }
@@ -1075,7 +1124,8 @@ mod tests {
             assert_eq!(got.temp_show, if version >= 9 { s.temp_show } else { d.temp_show }, "v{version} temperature on the panel");
             assert_eq!(got.mqtt, if version >= 10 { s.mqtt } else { Broker::NONE }, "v{version} broker");
             assert!(!got.mqtt_cleared);
-            assert_eq!(got.tx_power_qdbm, d.tx_power_qdbm, "v{version} has no transmit power");
+            assert_eq!(got.tx_power_qdbm, if version >= 12 { s.tx_power_qdbm } else { d.tx_power_qdbm }, "v{version} transmit power");
+            assert_eq!(got.output, d.output, "v{version} has no sound output");
         }
     }
 
@@ -1144,6 +1194,7 @@ mod tests {
         but("a hostname past its field", &|r| r[RECORD_HOSTNAME_LEN] = HOSTNAME_MAX as u8 + 1, Settings { hostname: d.hostname, ..s });
         but("another face for the temperature", &|r| r[RECORD_TEMP_SHOW] = 9, Settings { temp_show: d.temp_show, ..s });
         but("a transmit power that is no level", &|r| r[RECORD_TX_POWER] = 69, Settings { tx_power_qdbm: d.tx_power_qdbm, ..s });
+        but("an output of a later image", &|r| r[RECORD_OUTPUT] = 2, Settings { output: d.output, ..s });
         but(
             "an offset past the limit",
             &|r| r[RECORD_TEMP_OFFSET..RECORD_TEMP_OFFSET + 2].copy_from_slice(&(TEMP_OFFSET_LIMIT_DC + 1).to_le_bytes()),
@@ -1341,6 +1392,14 @@ mod tests {
         let mut bad = ok.to_record();
         bad[RECORD_TX_POWER] = 72;
         assert_eq!(Settings::from_record(&bad).map(|s| s.tx_power_qdbm), Some(Settings::DEFAULT.tx_power_qdbm), "a power above the ceiling is the default");
+        assert_eq!(AudioOut::from_name("line"), Some(AudioOut::Line));
+        assert_eq!(AudioOut::from_name("Line"), None);
+        assert_eq!(AudioOut::from_byte(2), None);
+        for o in AudioOut::ALL {
+            assert_eq!(AudioOut::from_name(o.name()), Some(o));
+            assert_eq!(AudioOut::from_byte(o as u8), Some(o));
+        }
+        assert_eq!(Settings::DEFAULT.output, AudioOut::Buzzer, "what a stock clock has");
         assert!(Settings { alarm_days: DAYS_WEEKEND, ..ok }.alarm_on(5));
         assert!(!Settings { alarm_days: DAYS_WEEKEND, ..ok }.alarm_on(4));
         assert_eq!(RECORD_LEN, ok.to_record().len());

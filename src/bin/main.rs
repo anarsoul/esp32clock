@@ -18,7 +18,7 @@ use embassy_time::{Duration, Instant, Timer};
 use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
 use esp_hal::dma_tx_buffer;
-use esp_hal::gpio::{DriveMode, Flex, Input, InputConfig, Level, Output, OutputConfig, Pull};
+use esp_hal::gpio::{Flex, Input, InputConfig, OutputConfig, Pin, Pull};
 use esp_hal::interrupt::Priority;
 use esp_hal::ledc::Ledc;
 use esp_hal::rng::Rng;
@@ -31,7 +31,7 @@ use static_cell::StaticCell;
 
 use onebitdawn::buzzer;
 use onebitdawn::clip;
-use onebitdawn::settings::Settings;
+use onebitdawn::settings::{AudioOut, Settings};
 use onebitdawn::net::Mode;
 use onebitdawn::{buttons, carry, clock, dhcpd, display, dnsd, heal, http, mqtt, net, ota, pack, scan, sensors, settings, storage, watchdog};
 
@@ -107,17 +107,13 @@ async fn main(spawner: Spawner) -> ! {
     // Buzzer first. The pin feeds the base of a PNP whose emitter sits at
     // +5 V, so a push-pull 3.3 V high still turns it on. Open drain and
     // released (high impedance) is off, low is on.
-    let mut buzzer_pin = peripherals.GPIO5;
-    {
-        // Set the output register high and the pad open-drain now, so the
-        // pin is released however the pad was left. The buzzer task takes
-        // the pin over from here.
-        let _ = Output::new(
-            buzzer_pin.reborrow(),
-            Level::High,
-            OutputConfig::default().with_drive_mode(DriveMode::OpenDrain),
-        );
-    }
+    // Set the output register high and the pad open-drain now, so the
+    // pin is released however the pad was left. The buzzer task takes
+    // the pins over from here. The other is the line output, GPIO20,
+    // for a clock with an amplifier: left as the ROM had it (UART0's
+    // RX, an input) until the settings say it is in use.
+    let mut sound_pins = buzzer::Pins::new(peripherals.GPIO5.degrade(), peripherals.GPIO20.degrade());
+    sound_pins.rest(AudioOut::Buzzer);
 
     // Buttons switch to ground and the board has no pull-ups. GPIO4 is the
     // upper button on this board, GPIO3 the lower one.
@@ -191,6 +187,12 @@ async fn main(spawner: Spawner) -> ! {
         info!("clock: time carried over the reset, local time {:02}:{:02}:{:02}", t.hour, t.minute, t.second);
     }
     info!("settings: {:?}", settings::get());
+    // The line output at its rest, low, from here on, so the filter
+    // behind it settles once and not at the first sound. A clock
+    // switched to it later gets this at that sound.
+    if boot_settings.output == AudioOut::Line {
+        sound_pins.rest(AudioOut::Line);
+    }
 
     // The drivers discard anything sent in the first 200 us after power-up.
     Timer::after(Duration::from_millis(10)).await;
@@ -252,13 +254,13 @@ async fn main(spawner: Spawner) -> ! {
     // the thread executor Wi-Fi work held that off long enough to be
     // heard as skips. The tones stay with the buzzer task here, whose
     // LEDC driver is not `Send`.
-    // Safety: a second handle to the buzzer's pin. The clip task uses it
-    // only from a `clip::play` to its end, while the buzzer task, the
-    // other holder, waits in that call with LEDC off the pin.
-    let clip_pin = unsafe { buzzer_pin.clone_unchecked() };
+    // Safety: a second handle to the two sound pins. The clip task uses
+    // it only from a `clip::play` to its end, while the buzzer task, the
+    // other holder, waits in that call with LEDC silent on its pin.
+    let clip_pins = unsafe { sound_pins.clone_unchecked() };
     let clip_hw = clip::Hardware { i2s: peripherals.I2S0, dma: peripherals.DMA_CH1 };
-    scan_spawner.spawn(clip::clip_task(clip_hw, clip_pin).expect("spawn clip"));
-    spawner.spawn(buzzer::buzzer_task(Ledc::new(peripherals.LEDC), buzzer_pin).expect("spawn buzzer"));
+    scan_spawner.spawn(clip::clip_task(clip_hw, clip_pins).expect("spawn clip"));
+    spawner.spawn(buzzer::buzzer_task(Ledc::new(peripherals.LEDC), sound_pins).expect("spawn buzzer"));
     // The room sensors on the adapter: the NTC divider on GPIO0, the LDR
     // divider on GPIO1, both ADC1 (the converter that works with Wi-Fi on).
     let sensor_hw = sensors::SensorHardware { adc: peripherals.ADC1, ntc: peripherals.GPIO0, ldr: peripherals.GPIO1 };

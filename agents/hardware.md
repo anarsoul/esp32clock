@@ -105,6 +105,22 @@ user's bench, 2026-11-17:
   could be read across RS at 1 ms a division with the bandwidth
   limited, in both stages.
 
+## Line output (GPIO20)
+
+For a clock with an amplifier in place of the buzzer's stage; the
+`output` setting chooses it. Nothing here is measured yet: the design
+and its figures are `bench/pdm-amp.md` until it is built and heard.
+
+- Push-pull, at rest driven low. The tones' LEDC is silent there at a
+  duty of 0 %, and a clip's stream goes out with no inverter, its
+  zeros the bottom rail.
+- GPIO20 is UART0's RX, which nothing uses: an input with a pull-up
+  while the ROM runs. The firmware drives it only once the setting is
+  `line`: at boot if stored so, else at the first sound after the
+  change.
+- Why this pin and not 2, 10, 18, 19 or 21 is in the work's section
+  (`PLAN.md`, "A line output on the adapter").
+
 ## The GDMA's `out_dscr`
 
 It is not the descriptor being read. On the C3 it names the one two

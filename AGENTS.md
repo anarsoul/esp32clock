@@ -230,6 +230,12 @@ Each with its measurements in `agents/hardware.md`.
   plain `Output` when it ends, which clears the inverter, and a tone's
   LEDC must never be connected over an inverted pin. The firmware
   assumes neither of the user's buzzer mods.
+- **Line output (GPIO20)** is the other pin a sound can go out of,
+  for a clock with an amplifier: push-pull, low at rest, no inverter.
+  The `output` setting chooses, read at each tone and each clip. Every
+  pin configuration for sound goes through `buzzer::Pins`, so GPIO5 is
+  never built push-pull by a path meant for GPIO20; a tone takes the
+  last tone's pin back to its rest before LEDC goes to the other.
 - **The GDMA's `out_dscr` is not the descriptor being read**; it names
   the one two further on. Pace a DMA ring by time and use the register
   as a check at most.

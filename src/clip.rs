@@ -41,6 +41,20 @@
 //! chunks ahead of the DMA; `core::clip::Pacer` says which, by the
 //! clock.
 //!
+//! The line goes out of the pin the `output` setting names when the
+//! clip starts (`buzzer::Pins`). On the line output, GPIO20, it is
+//! push-pull with no inverter and rests low: the stream's zeros are the
+//! bottom rail, which its ramps start from and return to, and the
+//! thermometer's hold is not asked for, there being no transistor to
+//! heat. A clip cut short there is not cut at once: the chunk two on
+//! from the one being read is rewritten as a ramp down from the sample
+//! before it (`clip::fade`) with the rest after, and the pin is taken
+//! back when that has gone out, a tenth of a second later at 16 kHz;
+//! taken back at once, from the middle of the scale, it was a click in
+//! the speaker at every Stop (heard 2026-11-18). A stream of bits has
+//! no level to ramp and is cut as before. The rest of this is the
+//! buzzer's pin.
+//!
 //! The pin is the one that must never be pushed high (see `buzzer.rs`).
 //! It is handed over as an open-drain output already released, which
 //! esp-hal turns into a frozen signal no driver reconfigures, and
@@ -73,15 +87,17 @@ use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Instant, Timer};
 use esp_hal::dma::aligned::{DmaAlignedMut, InternalMemory};
 use esp_hal::dma::{BurstConfig, DmaDescriptor, DmaTxBuffer, Owner, Preparation};
-use esp_hal::gpio::{DriveMode, Level, Output, OutputConfig, OutputSignal};
+use esp_hal::gpio::OutputSignal;
 use esp_hal::i2s::master::{Channels, DataFormat, I2s, PdmConfig, PdmSlotMode, PdmTxConfig, TdmConfig};
-use esp_hal::peripherals::{DMA, DMA_CH1, GPIO5, I2S0};
+use esp_hal::peripherals::{DMA, DMA_CH1, I2S0};
 use esp_hal::time::Rate;
-use onebitdawn_core::clip::{CHUNK, Pacer, SLOTS, Stream, chunk_us, chunks_in, converter_clock};
+use onebitdawn_core::clip::{CHUNK, Pacer, SLOTS, Stream, chunk_us, chunks_in, converter_clock, fade};
 use log::{info, warn};
 use static_cell::ConstStaticCell;
 
+use crate::buzzer::Pins;
 use crate::melody;
+use crate::settings::{self, AudioOut};
 use crate::watchdog::{self, Party};
 
 /// The ring's bytes. In every build, with clips built in or not: the
@@ -177,7 +193,7 @@ pub fn playing_in(start: usize, len: usize) -> bool {
 /// Set while a clip goes through the chip's converter.
 static CONVERTING: AtomicBool = AtomicBool::new(false);
 
-/// Whether a clip is on the line through the chip's PDM converter: its
+/// Whether a clip is on the buzzer's line through the chip's PDM converter: its
 /// pulses are shorter than the buzzer's transistor switches, which
 /// then runs hot beside the thermometer. For `sensors`, which holds
 /// the reading.
@@ -205,12 +221,12 @@ pub async fn play<T: Send>(index: usize, looping: bool, cancel: &Signal<Critical
     }
 }
 
-/// Plays the clips the buzzer task asks for. `pin` is a second handle
-/// to the buzzer's pin, used only while a clip plays.
+/// Plays the clips the buzzer task asks for. `pins` is a second handle
+/// to the buzzer task's pins, used only while a clip plays.
 #[embassy_executor::task]
-pub async fn clip_task(hw: Hardware, pin: GPIO5<'static>) -> ! {
+pub async fn clip_task(hw: Hardware, pins: Pins) -> ! {
     let mut sampler = Sampler::new(hw);
-    let mut pin = pin;
+    let mut pins = pins;
     loop {
         let (index, looping) = START.wait().await;
         // The data and the note of where it is are taken in one step, with
@@ -222,7 +238,7 @@ pub async fn clip_task(hw: Hardware, pin: GPIO5<'static>) -> ! {
             // Watched from here to the clip's end; the loop that fills
             // the ring checks in.
             watchdog::expect(Party::Clip, true);
-            sampler.play(&mut pin, data, looping, &STOP).await;
+            sampler.play(&mut pins, data, looping, &STOP).await;
             watchdog::expect(Party::Clip, false);
             PLAYING.store(0, Ordering::Relaxed);
         }
@@ -244,12 +260,12 @@ impl Sampler {
         Self { hw, ring: Some(Ring::new()) }
     }
 
-    /// Play the clip `data`, PCM or beeper, once on `pin`. Returns early with what `cancel` was
+    /// Play the clip `data`, PCM or beeper, once on the pin the `output` setting names. Returns early with what `cancel` was
     /// signalled with, the line released by then; `None` when the clip
     /// has ended, or could not be started.
     async fn play<T: Send>(
         &mut self,
-        pin: &mut GPIO5<'static>,
+        pins: &mut Pins,
         data: &'static [u8],
         looping: bool,
         cancel: &Signal<CriticalSectionRawMutex, T>,
@@ -360,12 +376,14 @@ impl Sampler {
             }
         };
         let started = Instant::now();
-        // The stream is under way and at zeros: connect the line.
-        let line = Output::new(pin.reborrow(), Level::High, OutputConfig::default().with_drive_mode(DriveMode::OpenDrain))
-            .into_peripheral_output()
-            .with_output_inverter(true);
+        // The stream is under way and at zeros: connect the line. The
+        // buzzer's through the inverter, a 1 pulling it low; the line
+        // output's as it is, a 1 high.
+        let out = settings::get().output;
+        let line = pins.at_rest(out).into_peripheral_output().with_output_inverter(out == AudioOut::Buzzer);
         OutputSignal::I2SO_SD.connect_to(&line);
-        CONVERTING.store(converter.is_some(), Ordering::Relaxed);
+        // The hold is for the buzzer's transistor.
+        CONVERTING.store(converter.is_some() && out == AudioOut::Buzzer, Ordering::Relaxed);
 
         let mut pacer = Pacer::new();
         let mut chunks = 0;
@@ -387,9 +405,25 @@ impl Sampler {
             }
         };
 
-        // The pin first, back to a plain released output with no
+        // Cut short on the line output: down to the rest by a ramp
+        // before the pin is taken, in the first chunk the pacer would
+        // write after an underrun, which the DMA is clear of.
+        if cancelled.is_some() && converter.is_some() && out == AudioOut::Line {
+            let at = pacer.played(position(first), chunks_in(started.elapsed().as_micros(), bit_rate)) + 2;
+            let before = slot(at - 1);
+            let from = i16::from_le_bytes([before[CHUNK - 2], before[CHUNK - 1]]);
+            fade(from, slot(at));
+            player.rest(slot(at + 1));
+            player.rest(slot(at + 2));
+            while chunks_in(started.elapsed().as_micros(), bit_rate) <= at {
+                Timer::after(tick).await;
+                watchdog::check_in(Party::Clip);
+            }
+        }
+
+        // The pin first, back to a plain output at its rest with no
         // inverter; then the transfer.
-        release(pin);
+        pins.rest(out);
         CONVERTING.store(false, Ordering::Relaxed);
         let (_, ring) = transfer.stop();
         self.ring = Some(ring);
@@ -438,13 +472,6 @@ fn settle_clock() {
     clkm.modify(|_, w| unsafe { w.tx_clkm_div_num().bits(num) });
     regs.tx_conf().modify(|_, w| w.tx_update().set_bit());
     while regs.tx_conf().read().tx_update().bit_is_set() {}
-}
-
-/// Make the pin a released open-drain output of the GPIO register,
-/// whatever it was connected to. The pad keeps this after the `Output`
-/// is dropped, as it does in `main.rs` at boot.
-fn release(pin: &mut GPIO5<'static>) {
-    let _ = Output::new(pin.reborrow(), Level::High, OutputConfig::default().with_drive_mode(DriveMode::OpenDrain));
 }
 
 /// The slot whose descriptor the DMA channel names, which is

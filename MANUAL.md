@@ -257,7 +257,10 @@ in the browser's light or dark:
   transmit power (2 to 16 dBm, 16 by default; `tx_power` in `/api`).
   Lower it only for a clock whose antenna needs less: with too little
   the clock may not reach the network; then hold both buttons for
-  10 s, and set it again on the access point's setup page. The access
+  10 s, and set it again on the access point's setup page. Last is
+  the sound output (`output` in `/api`): the buzzer, or, for a clock
+  with an amplifier wired to GPIO20, that pin. On a clock without one
+  the second choice is silence; it takes effect at the next sound. The access
   point itself always transmits at 11 dBm.
 - `/ha`: the MQTT broker for Home Assistant, see below.
 - `/clips`: the clip pack in use and the upload of another, see

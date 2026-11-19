@@ -10,7 +10,7 @@ use crate::melody;
 use crate::mqtt::Link;
 use crate::sensors::{Tenths, fahrenheit_tenths};
 use crate::settings::{
-    BRIGHTNESS_STEPS, BROKER_HOST_MAX, BROKER_PASSWORD_MAX, BROKER_USER_MAX, Credentials, DAY_NAMES, DAYS_ALL, DAYS_WEEKDAYS,
+    AudioOut, BRIGHTNESS_STEPS, BROKER_HOST_MAX, BROKER_PASSWORD_MAX, BROKER_USER_MAX, Credentials, DAY_NAMES, DAYS_ALL, DAYS_WEEKDAYS,
     DAYS_WEEKEND, HOSTNAME_MAX, Hostname, PALETTE_NAMES, PASSWORD_MAX, PASSWORD_MIN, SSID_MAX, Secret, Settings,
     TEMP_OFFSET_LIMIT_DC, TOKEN_MAX, TX_POWER_CHOICES, TZ_LIMIT_MINUTES, TempShow, Text, tx_power_from_name, tx_power_name,
     valid_broker_host, valid_broker_password, valid_broker_user, valid_password, valid_token,
@@ -135,7 +135,7 @@ pub enum FormError {
 /// The keys of the pages' forms that take a typed or chosen value, with
 /// the label each has on its page: what a refused form names its bad
 /// field by. The page writes the label, never the query's own text.
-pub const FIELDS: [(&str, &str); 16] = [
+pub const FIELDS: [(&str, &str); 17] = [
     ("alarm", "Alarm time"),
     ("days", "Alarm days"),
     ("melody", "Alarm sound"),
@@ -146,6 +146,7 @@ pub const FIELDS: [(&str, &str); 16] = [
     ("temp_offset", "Thermometer offset"),
     ("hostname", "Hostname"),
     ("tx_power", "Wi-Fi transmit power"),
+    ("output", "Sound output"),
     ("mqtt_host", "Host"),
     ("mqtt_port", "Port"),
     ("mqtt_user", "User"),
@@ -428,6 +429,7 @@ pub fn apply_one(s: &mut Settings, key: &str, value: &str, allow: Allow) -> Resu
         "temp_show" => s.temp_show = TempShow::from_name(value).ok_or(FormError::BadValue)?,
         "hostname" => s.hostname = Hostname::new(value).ok_or(FormError::BadValue)?,
         "tx_power" => s.tx_power_qdbm = tx_power_from_name(value).ok_or(FormError::BadValue)?,
+        "output" => s.output = AudioOut::from_name(value).ok_or(FormError::BadValue)?,
         "days" => s.alarm_days = parse_days(value).ok_or(FormError::BadValue)?,
         "melody" => s.melody = melody::index_of(value).ok_or(FormError::BadValue)?,
         _ => return Err(FormError::UnknownKey),
@@ -657,7 +659,7 @@ pub fn write_json(out: &mut impl core::fmt::Write, s: &Settings, st: &Status) ->
     write_days(out, s.alarm_days)?;
     write!(
         out,
-        "\",\"skip\":{},\"melody\":\"{}\",\"twelve_hour\":{},\"tz\":\"{}\",\"temp_offset\":{},\"temp_show\":\"{}\",\"hostname\":\"{}\",\"tx_power\":{},\"ssid\":\"{}\",\"password_set\":{},\"token_set\":{},\
+        "\",\"skip\":{},\"melody\":\"{}\",\"twelve_hour\":{},\"tz\":\"{}\",\"temp_offset\":{},\"temp_show\":\"{}\",\"hostname\":\"{}\",\"tx_power\":{},\"output\":\"{}\",\"ssid\":\"{}\",\"password_set\":{},\"token_set\":{},\
 \"mqtt_host\":\"{}\",\"mqtt_port\":{},\"mqtt_user\":\"{}\",\"mqtt_password_set\":{},\"mqtt\":\"{}\",\"ringing\":{},\
 \"version\":\"{}\",\"slot\":\"{}\",\"clips\":\"{}\",\"mode\":\"{}\",\"uptime\":{},\"heals\":{},\"watchdog\":{},\"clips_paused\":{},\"temp_c\":{},\"temp_f\":{},\"light\":{},\"rssi\":{},\
 \"utc_offset\":{},\"dst\":{},\"last_heal\":",
@@ -669,6 +671,7 @@ pub fn write_json(out: &mut impl core::fmt::Write, s: &Settings, st: &Status) ->
         s.temp_show.name(),
         s.hostname.as_str(),
         tx_power_name(s.tx_power_qdbm).unwrap_or("null"),
+        s.output.name(),
         JsonStr(s.wifi.ssid.as_str()),
         !s.wifi.password.0.is_empty(),
         !s.token.0.is_empty(),
@@ -1030,12 +1033,16 @@ pub fn write_settings_page(
 {}\
 <p><small>Leave the power at {dflt} dBm unless this clock's antenna needs less: with too little the clock may not reach the network at all. \
 If that happens, hold both buttons for 10 s: the clock's own access point starts, and its page has this setting too.</small></p></fieldset>\
+<fieldset><legend>Sound</legend>\
+<label>Sound output <select name=output>{}</select></label>\
+<p><small>Choose whichever is fitted in your clock.</small></p></fieldset>\
 {SAVE}</form><script>{UNSAVED_JS}</script>",
         Check("twelve_hour", s.twelve_hour),
         TempShowOptions(s.temp_show),
         Tenths(s.temp_offset_dc),
         s.hostname.as_str(),
         TxPowerField(s.tx_power_qdbm),
+        AudioOutOptions(s.output),
         dflt = TX_POWER_DEFAULT,
         tlim = Tenths(TEMP_OFFSET_LIMIT_DC),
         hmax = HOSTNAME_MAX,
@@ -1419,6 +1426,18 @@ impl core::fmt::Display for TempShowOptions {
     }
 }
 
+/// The `<option>`s of the sound output select.
+struct AudioOutOptions(AudioOut);
+
+impl core::fmt::Display for AudioOutOptions {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        for (name, label) in AudioOut::NAMES.iter().zip(AudioOut::LABELS) {
+            write!(f, "<option value={name}{}>{label}</option>", if *name == self.0.name() { " selected" } else { "" })?;
+        }
+        Ok(())
+    }
+}
+
 /// The alarm's days as seven checkboxes, all named `days`: `apply`
 /// reads the repeats of one body as a union. Above them a select of
 /// the presets, which ticks the boxes and follows them.
@@ -1570,7 +1589,7 @@ mod tests {
     #[test]
     fn apply_sets_every_key() {
         let mut s = Settings::DEFAULT;
-        let body = b"color=cyan&brightness=25&alarm=06%3A30&armed=on&days=weekend&skip=1&twelve_hour=true&tz=-420&temp_offset=-0.7&temp_show=f&hostname=Bedroom-Clock&tx_power=8.5&melody=random";
+        let body = b"color=cyan&brightness=25&alarm=06%3A30&armed=on&days=weekend&skip=1&twelve_hour=true&tz=-420&temp_offset=-0.7&temp_show=f&hostname=Bedroom-Clock&tx_power=8.5&output=line&melody=random";
         apply(&mut s, body, Allow::NONE).unwrap();
         assert_eq!(s.color, PALETTE_NAMES.iter().position(|n| *n == "cyan").unwrap());
         assert_eq!(s.brightness_pct(), 25);
@@ -1582,6 +1601,7 @@ mod tests {
         assert_eq!(s.temp_show, TempShow::Fahrenheit);
         assert_eq!(s.hostname.as_str(), "bedroom-clock");
         assert_eq!(s.tx_power_qdbm, 34);
+        assert_eq!(s.output, AudioOut::Line);
         assert_eq!(s.melody, melody::RANDOM);
         assert!(s.is_valid());
         // The broker keys, with the page's allowance.
@@ -1656,6 +1676,8 @@ mod tests {
         assert_eq!(try_body(b"tx_power=18"), Err(FormError::BadValue), "above the ceiling");
         assert_eq!(try_body(b"tx_power=12"), Err(FormError::BadValue), "not a level the driver has");
         assert_eq!(try_body(b"tx_power=68"), Err(FormError::BadValue), "dBm, not quarters");
+        assert_eq!(try_body(b"output=buzzer"), Ok(()));
+        assert_eq!(try_body(b"output=gpio20"), Err(FormError::BadValue));
         assert_eq!(try_body(b"%zz=1"), Err(FormError::UnknownKey));
         assert_eq!(try_body(b"hostname=-bad"), Err(FormError::BadValue));
         assert_eq!(try_body(b"days="), Err(FormError::BadValue));
@@ -1844,10 +1866,10 @@ mod tests {
         write_json(&mut rule, &s, &status(true)).unwrap();
         assert!(rule.contains(r#""twelve_hour":false,"tz":"<+0545>-5:45","temp_offset""#), "{rule}");
         assert!(out.contains(r#""temp_offset":-2.5,"temp_show":"c","hostname""#), "{out}");
-        assert!(out.contains(&format!(r#","tx_power":{},"ssid""#, TX_POWER_DEFAULT)), "{out}");
+        assert!(out.contains(&format!(r#","tx_power":{},"output":"buzzer","ssid""#, TX_POWER_DEFAULT)), "{out}");
         let mut low = String::new();
         write_json(&mut low, &Settings { tx_power_qdbm: 34, ..s }, &status(true)).unwrap();
-        assert!(low.contains(r#","tx_power":8.5,"ssid""#), "{low}");
+        assert!(low.contains(r#","tx_power":8.5,"output":"buzzer","ssid""#), "{low}");
         assert!(out.contains(r#""last_heal":1800000000}"#));
         assert!(out.ends_with("}\n"));
         let mut none = String::new();
@@ -2052,6 +2074,7 @@ mod tests {
             ("temp_offset", format!("-{}.{}", TEMP_OFFSET_LIMIT_DC / 10, TEMP_OFFSET_LIMIT_DC % 10)),
             ("hostname", hostname),
             ("tx_power", tx_power),
+            ("output", longest(&mut AudioOut::NAMES.iter().copied())),
         ];
         let ha = [
             ("mqtt_host", "h".repeat(BROKER_HOST_MAX)),
@@ -2314,7 +2337,7 @@ mod tests {
     fn each_page_has_its_own_fields() {
         let out = pages(&Settings::DEFAULT, &status(true), Note::None);
         assert_eq!(field_names(&out[0]), ["armed", "alarm", "days", "skip", "melody", "color", "brightness"]);
-        assert_eq!(field_names(&out[1]), ["tz", "twelve_hour", "temp_show", "temp_offset", "hostname", "tx_power"]);
+        assert_eq!(field_names(&out[1]), ["tz", "twelve_hour", "temp_show", "temp_offset", "hostname", "tx_power", "output"]);
         assert_eq!(field_names(&out[2]), ["mqtt_host", "mqtt_port", "mqtt_user", "mqtt_password"]);
         assert!(field_names(&out[3]).is_empty() && field_names(&out[4]).is_empty(), "the clips and system pages post by script");
         // One form with Save under both fieldsets; the display's

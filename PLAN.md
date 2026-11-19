@@ -78,7 +78,7 @@ substitutes the lowest step at draw time while dark is set. A user
 who has chosen the lowest step sees no difference. The current step
 `IS` still comes from the step actually drawn, cap and all.
 
-### A line output on the adapter for an amplifier — an idea of 2026-11-15, nothing built or measured; to be tried on the bench board when the amplifiers arrive
+### A line output on the adapter for an amplifier — an idea of 2026-11-15; the setting and the pin built 2026-11-18, not flashed, nothing heard or measured
 
 The user's, of the speaker mod: with a proper amplifier in place of
 Q1 as the output stage, the adapter can carry the filter, and the
@@ -119,14 +119,16 @@ did.
   their own).
 - The setting: `output`, `buzzer` (the default, and what every older
   record reads as) or `line`; a new record version, on `/settings`
-  and in `/api`, not in `mqtt::SET_KEYS`. Read at boot, and a save
-  that changes it resets the clock as a change of network does: the
-  buzzer task's LEDC and the clip task's pin handle are made once in
-  `main.rs`, and swapping them under a playing tune is not worth the
-  code.
+  and in `/api`, not in `mqtt::SET_KEYS`. As first written it was
+  read at boot and a change reset the clock. Built otherwise
+  (2026-11-18, the user's "can it not be changed at run time?"): it
+  is read at every tone and at every clip, since both build their
+  pin's output anew each time anyway, so a change takes effect at the
+  next sound and the two outputs can be compared on the bench without
+  a reset between.
 - On `line` the clip's I2S signal goes to that pin through the GPIO
   matrix without the inverter, and the beeps' LEDC to the same pin,
-  both push-pull; GPIO5 is left released for the whole boot. The pin
+  both push-pull; GPIO5 stays released. The pin
   rests driven low, so the rest is the ground and the rail's noise
   is not in it, and the clip's ramps start from and return to the
   bottom rail as they do from the released line now. Whether 30 ms
@@ -151,6 +153,91 @@ alone: a second harmonic of about (Rp/R1)·a/2, some 1 % at full
 scale; 7 mA while the pin is low. A high line turns Q1 on through
 R5, so the buzzer must be off the board, as the speaker mod has it;
 Q1 may stay.
+
+**Built 2026-11-18** (record version 13, `settings::AudioOut`,
+`buzzer::Pins`; the build, clippy and the host tests pass; not
+flashed: the bench board is in its 24 h soak until 2026-11-19 12:09).
+
+- `buzzer::Pins` holds GPIO5 and GPIO20 as `AnyPin`s and is the one
+  place that knows each pin's drive and rest: the buzzer's open-drain
+  and released, the line's push-pull and low. The buzzer task has it
+  and the clip task a second handle, as with the one pin before.
+- A tone: `settings::get().output` at its start. LEDC stays connected
+  to the last tone's pin at the silent duty (100 % on the buzzer,
+  0 % on the line), so when a tone goes to the other pin the task
+  first takes the old one back to its rest, or both would sound.
+- A clip: the setting at the moment the line is connected. The
+  inverter only for the buzzer; `clip::converting`, which holds the
+  thermometer, only for the buzzer.
+- GPIO20 is not touched at boot unless the stored setting is `line`,
+  in which case it is driven low before the tasks start. A clock
+  switched to `line` later has it driven at its first sound: one step
+  from the ROM's pull-up to the bottom rail, a thump to be heard once.
+- The filter's values and the amplifier's level were worked out again
+  from the datasheets for the CJMCU-832 and a PAM8403 module:
+  `bench/pdm-amp.md`, with the drawings beside it. They replace the
+  1 kΩ / 10 nF and 10 kΩ / 1 nF above, whose stages load each other
+  more than was allowed for, and the "clips near 0.1 V rms", which is
+  0.2 V rms (0.62 V peak to peak at 5 V).
+
+Flashed to test-clock over USB the same day. The user's scope on the
+filter's output, no amplifier yet (2026-11-18): "looks good", the
+clips an audio wave, the beeps a square wave.
+
+Heard the same day (the user, 2026-11-18), on a breadboard: the
+CJMCU-832's filter of `bench/pdm-amp.md` (2.2 kΩ / 4.7 nF, 10 kΩ /
+4.7 nF, 3.3 kΩ to ground) into a PAM8403 module with a 50 kΩ pot, the
+PAM8302s not having arrived, and the same 8 Ω 0.25 W speaker as the
+speaker mod has. "Subjectively the quality is noticeably better."
+There is a slight background noise, which the user takes for pickup
+from the Wi-Fi on the breadboard; where it comes in (the 3.3 V rail
+through the pin, the ground between the boards, the amplifier's
+supply) is not yet told apart. The PAM8302, whose input is
+differential, is still to be heard.
+
+An A/B the same evening (the user): the same clips, the output
+switched at run time between the S8550's stage and the PAM8403, each
+into its own speaker of the same kind, the loudness matched by the
+amplifier's pot. The amplifier is "noticeably cleaner", "as if the
+dynamic range it passes is wider". By ear, nothing measured. A reason
+offered and not tested: the transistor is a non-linear element ahead
+of any filter, so the converter's shaped noise folds into the audio
+band there, where the RC filter removes it before the amplifier.
+
+One more thing for the amplifier, the user's of 2026-11-18: its
+trimmer sets the loudness, which the S8550's stage has no way to do.
+A larger RS there would in theory, but with a PAM8302 as cheap as it
+is that is pointless.
+
+A click at Stop and none at Play (the user, 2026-11-18): a clip that
+ends by itself ramps down, one cut short had its pin taken to the
+bottom rail from the middle of the scale. Built the same evening: on
+the line output a converter clip cut short ends on a ramp, one chunk
+long, written two chunks ahead of the DMA from the sample before it
+(`clip::fade`, under test), and the pin is taken when it has gone
+out, so Stop is about 0.1 s later there at 16 kHz. The buzzer's cut
+and a bit stream's are as they were. Heard by the user the same
+evening on test-clock, the PAM8403 and the breadboard: no click at
+Stop any more, on a quiet clip (PPK) either.
+
+To check, on a board with the filter and the amplifier (or a scope on
+the filter's output, `bench/pdm-amp.md`):
+
+1. `output=buzzer`, a stock clock: tones and clips as before, and a
+   scope on GPIO20 shows nothing.
+2. `POST /api` with `output=line`, no reset: the next preview is on
+   GPIO20 and the buzzer is silent, for a note melody and for a clip
+   of each kind (a converter clip and a beeper clip).
+3. Back to `buzzer` and to `line` again between previews, and in the
+   middle of a note melody: never both at once, never a buzzer held
+   on, GPIO20 low at rest.
+4. The clip's start and end on the scope: the ramp from the bottom
+   rail, and whether it is a thump in the speaker.
+5. A clip on `line`: the thermometer does not hold (`sensors` in the
+   heartbeat).
+6. The record: an update from version 12 keeps every setting with the
+   output at `buzzer`; a rollback from 13 to the release before keeps
+   them too.
 
 To try on the bench board, in this order: the pull-up and the filter
 on a breadboard with the firmware as it is, the level at the

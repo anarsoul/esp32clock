@@ -836,6 +836,19 @@ impl<'a> Stream<'a> {
     }
 }
 
+/// A ramp for a converter's stream cut short: `out`, a chunk of
+/// samples, falls in a straight line from `from`, the sample before
+/// it, to `SAMPLE_REST`, which its last sample is. For a clip stopped
+/// on the line output, where taking the pin to its rest from the
+/// middle of the scale is a step the amplifier makes a click of.
+pub fn fade(from: i16, out: &mut [u8]) {
+    let samples = out.as_chunks_mut::<SAMPLE_BYTES>().0;
+    let (n, fall) = (samples.len() as i32, SAMPLE_REST as i32 - from as i32);
+    for (i, pair) in samples.iter_mut().enumerate() {
+        *pair = ((from as i32 + fall * (i as i32 + 1) / n) as i16).to_le_bytes();
+    }
+}
+
 /// Chunks the line has sent `elapsed_us` after the start at `bit_rate`,
 /// by the clock.
 pub const fn chunks_in(elapsed_us: u64, bit_rate: u32) -> u32 {
@@ -1582,6 +1595,18 @@ mod tests {
         assert_eq!(rest, [0; 8]);
         pcm_stream.rest(&mut rest);
         assert_eq!(rest, if CONVERTER.is_some() { [0, 0x80, 0, 0x80, 0, 0x80, 0, 0x80] } else { [0; 8] });
+        // A stream cut short falls from where it was to the rest, never
+        // rising, and ends on the rest whatever it started from.
+        for from in [i16::MAX, 1234, 0, -20_000, SAMPLE_REST] {
+            let mut chunk = [0u8; CHUNK];
+            fade(from, &mut chunk);
+            let got: Vec<i16> = chunk.as_chunks::<2>().0.iter().map(|p| i16::from_le_bytes(*p)).collect();
+            assert!(got[0] <= from && got.windows(2).all(|w| w[0] >= w[1]), "from {from}");
+            assert_eq!(*got.last().unwrap(), SAMPLE_REST);
+            // No step larger than a sample's share of the fall, rounded up.
+            let step = (from as i32 - SAMPLE_REST as i32) / got.len() as i32 + 1;
+            assert!(got.windows(2).all(|w| (w[0] as i32 - w[1] as i32) <= step) && from as i32 - got[0] as i32 <= step);
+        }
         // The clock: whole dividers of 160 MHz, within a quarter of a percent.
         assert_eq!(converter_clock(16_000, 128), (13, 256_410));
         assert_eq!(converter_clock(8_000, 128), (12, 128_205));
