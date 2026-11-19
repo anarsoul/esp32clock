@@ -22,3 +22,12 @@ path = "src/main.rs"
 # which are what a pack is checked with before it is given out.
 onebitdawn-core = { path = "../../core" }
 sha2 = { version = "0.10", default-features = false }
+
+# `core` leaves the critical section and the time driver to whoever
+# links it: esp-hal in the firmware. The command needs them given, or
+# the `cdylib`, which cargo builds beside it, does not link where a
+# library may leave no symbol undefined (MSVC: v0.5-rc1's release).
+# The WebAssembly has no use for either and imports nothing.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+embassy-time     = { version = "0.5.0", features = ["std"] }
+critical-section = { version = "1.2.0", features = ["std"] }

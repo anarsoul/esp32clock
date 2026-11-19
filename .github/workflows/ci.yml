@@ -64,8 +64,32 @@ jobs:
           cargo pack-wasm
           ls -l target/wasm32-unknown-unknown/tool/onebitdawn_pack.wasm
 
-  firmware:
-    name: Firmware and OTA image
+  # The pack maker as the release builds it, on the systems the release
+  # builds it for: a link that fails on one of them is found here and
+  # not at a tag.
+  tools:
+    name: Pack maker (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu, name: linux-x86_64, exe: "" }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc, name: windows-x86_64, exe: ".exe" }
+          - { os: macos-latest, target: aarch64-apple-darwin, name: macos-arm64, exe: "" }
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Build and make a pack
+        shell: bash
+        run: |
+          cargo build --profile tool -p onebitdawn-pack --bin onebitdawn-pack --target ${{ matrix.target }}
+          "target/${{ matrix.target }}/tool/onebitdawn-pack${{ matrix.exe }}" \
+            -o check.bin clips/trantor.bpr mods/Orion-Nero6.3.0.2.xm:name=keygen
+
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6

@@ -106,6 +106,7 @@ jobs:
     name: Pack maker (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false # each system's result, not the first failure's
       matrix:
         include:
           - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu, name: linux-x86_64, exe: "" }
@@ -191,9 +192,11 @@ jobs:
             on `http://<ip>/system`; see "Prebuilt images" in MANUAL.md.
             What changed is in CHANGELOG.md.
 
+  # After the release: a tag whose release failed must not become the
+  # page's `latest/` (v0.5-rc1 did, its Windows pack maker not linking).
   pages:
     name: Flasher page
-    needs: build
+    needs: [build, release]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
