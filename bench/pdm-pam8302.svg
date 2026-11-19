@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="620" viewBox="0 0 1200 620" font-family="DejaVu Sans, Liberation Sans, Arial, sans-serif">
-  <rect width="1200" height="620" fill="#ffffff"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="646" viewBox="0 0 1200 646" font-family="DejaVu Sans, Liberation Sans, Arial, sans-serif">
+  <rect width="1200" height="646" fill="#ffffff"/>
   <text x="40" y="44" font-size="24" font-weight="bold" fill="#111">PDM on GPIO20 into a CJMCU-832 (PAM8302A)</text>
 
   <g stroke="#111" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round">
@@ -18,13 +18,18 @@
     <!-- ground rail -->
     <path d="M126 440 H900"/>
     <!-- module -->
-    <rect x="900" y="170" width="250" height="320" rx="8"/>
+    <rect x="900" y="80" width="250" height="410" rx="8"/>
+    <!-- shutdown line, its pull-down R4 and a ground -->
+    <path d="M126 100 H900 M820 100 V112 M820 172 V186 M806 186 H834 M811 192 H829 M816 198 H824"/>
+    <rect x="806" y="112" width="28" height="60"/>
     <!-- terminals -->
+    <circle cx="120" cy="100" r="6" fill="#fff"/>
     <circle cx="120" cy="220" r="6" fill="#fff"/>
     <circle cx="120" cy="440" r="6" fill="#fff"/>
   </g>
 
   <g fill="#111">
+    <circle cx="820" cy="100" r="5"/>
     <circle cx="380" cy="220" r="5"/>
     <circle cx="640" cy="220" r="5"/>
     <circle cx="760" cy="220" r="5"/>
@@ -34,7 +39,11 @@
   </g>
 
   <g font-size="18" fill="#111">
+    <text x="112" y="80" text-anchor="end" font-weight="bold">GPIO10</text>
     <text x="112" y="200" text-anchor="end" font-weight="bold">GPIO20</text>
+    <text x="796" y="138" text-anchor="end">R4</text>
+    <text x="796" y="160" text-anchor="end">47k</text>
+    <text x="916" y="106">SD</text>
     <text x="112" y="470" text-anchor="end" font-weight="bold">GND</text>
     <text x="250" y="194" text-anchor="middle">R1  2.2k</text>
     <text x="510" y="194" text-anchor="middle">R2  10k</text>
@@ -44,12 +53,13 @@
     <text x="666" y="344">4.7n</text>
     <text x="784" y="326">R3</text>
     <text x="784" y="348">3.3k</text>
-    <text x="1025" y="158" text-anchor="middle">CJMCU-832</text>
+    <text x="1025" y="68" text-anchor="middle">CJMCU-832</text>
     <text x="916" y="226">A+</text>
     <text x="916" y="446">A−</text>
     <text x="1134" y="300" text-anchor="end">Vin  5 V</text>
-    <text x="1134" y="330" text-anchor="end">SD  open</text>
-    <text x="1134" y="360" text-anchor="end">speaker + −</text>
+    <text x="1134" y="330" text-anchor="end">speaker + −</text>
+    <text x="1134" y="390" text-anchor="end">the board's 10k pull-up,</text>
+    <text x="1134" y="412" text-anchor="end">SD to Vin, taken off</text>
   </g>
 
   <g font-size="16" fill="#1a5fb4" font-style="italic">
@@ -61,6 +71,7 @@
     <text x="40" y="530">GPIO20 push-pull, PDM at 4 or 8 MHz.  −3 dB at about 11 kHz, 45 dB down at 250 kHz.  No coupling capacitors: the board has its own.</text>
     <text x="40" y="556">The board's 10k trimmer sits across A+ / A−, in parallel with R3: at its maximum a full-scale PDM gives about ±3.8 V on the speaker.</text>
     <text x="40" y="582">A− goes to the filter's ground (the foot of C2 and R3), not to the amplifier's.  Neither speaker wire to ground.</text>
-    <text x="40" y="608">Design on paper, not yet built.  The figures are in bench/pdm-amp.md.</text>
+    <text x="40" y="608">GPIO10 high turns the amplifier on for a sound; R4 keeps it shut down while the pin floats through a reset.</text>
+    <text x="40" y="634">Design on paper, not yet built.  The figures are in bench/pdm-amp.md.</text>
   </g>
 </svg>

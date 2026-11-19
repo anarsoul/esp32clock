@@ -122,26 +122,62 @@ line at 8 Mbit/s.
 
 ## 2. An amplifier module (PAM8302 or similar)
 
-Not built, nothing measured. A class D module takes Q1's place as
-the output stage: it gets the converter's bits from the pin through
-an RC filter, with no saturating transistor between, and drives the
-speaker itself. The design is in `PLAN.md` ("a line output on the
-adapter for an amplifier"); in short:
+A class D module takes Q1's place as the output stage: it gets the
+converter's bits from a pin of its own, GPIO20, through an RC filter,
+with no saturating transistor between, and drives the speaker itself.
+The `output` setting (`/settings`) sends the sound there: `line`, or
+`split` for the note melodies on the buzzer and the clips on the
+amplifier. The history is in `PLAN.md` ("A line output on the adapter
+for an amplifier"), the filters' figures and the drawings in
+`bench/pdm-amp.md`.
 
-- **First, on the bench, with the firmware as it is**: a 470 Ω
-  pull-up from GPIO5 to 3.3 V (never to 5 V), two RC stages of 10 kΩ
-  and 680 pF (−3 dB near 9 kHz), about 2.2 kΩ to ground as a divider,
-  since a module with 24 dB of gain clips near 0.1 V rms, and a
-  series capacitor into the amplifier's input. The buzzer must be off
-  the board, since a pulled-up line turns Q1 on.
-- **Then a pin of its own**: GPIO20, push-pull, with the filter on
-  the adapter (1 kΩ / 10 nF, then 10 kΩ / 1 nF, a divider, 1 µF) and
-  an `output` setting, `buzzer` or `line`, so that one firmware
-  serves both kinds of clock and a wrong setting is silence.
+For a PAM8302 board (Adafruit's, or the CJMCU-832 taken as its copy),
+on paper, the boards not having arrived:
 
-Measurements: to come when the module arrives. To be read: the level
-at the amplifier's input, the hiss on a silent clip and with Wi-Fi
-busy, and the two wirings side by side.
+```
+GPIO10 ─────────────────────────────┬──────── SD
+                                 R4 47k
+                                    │
+                                   GND
+
+GPIO20 ──R1 2k2──┬──R2 10k──┬──────┬── A+
+                 │          │      │
+              C1 4n7     C2 4n7  R3 3k3
+                 │          │      │
+GND ─────────────┴──────────┴──────┴── A−
+
+5 V ── Vin        GND ── GND        speaker on the board's terminals
+```
+
+- **The filter** is two RC stages and a divider; A− goes to the
+  filter's ground, not to the amplifier's. The board has its own
+  coupling capacitors and a trimmer, which is the loudness.
+- **The shutdown pin.** At rest an amplifier makes the Wi-Fi's traffic
+  heard as very quiet clicks, so the firmware holds GPIO10 high only
+  while a sound plays on the amplifier and low otherwise. R4, on the
+  adapter, keeps the amplifier shut down while the pin floats through
+  a reset.
+- **Take the board's pull-up off SD** (R3 on Adafruit's board, 10 kΩ
+  from SD to Vin; on a copy, find it with a meter). With the
+  amplifier on 5 V it would put 5 V through 10 kΩ on a 3.3 V pin, and
+  draw 0.5 mA all the time the amplifier is shut down.
+- A board with SD left unwired and its pull-up in place works too,
+  always on, clicks and all.
+- GPIO10 is the ESP32-C3 Zero's own LED, which is given up for this.
+- The amplifier stays on 5 V: on 3.3 V it would share the module's
+  small regulator with the Wi-Fi.
+
+**Built and heard so far** (2026-11-18, a breadboard): the filter
+with C2 at 2 nF into a PAM8403 module with a 50 kΩ pot, whose shutdown
+pin is tied on the module, and the same 8 Ω 0.25 W speaker. Against
+the S8550's stage, the output switched at run time and the loudness
+matched: "noticeably cleaner". A slight background noise and the
+Wi-Fi's clicks at rest, which is what the shutdown pin is for.
+Nothing measured.
+
+Still to come, with the PAM8302: the level at its input, the hiss on
+a silent clip and with Wi-Fi busy, the shutdown pin's own click if it
+has one, and the start of a sound after it.
 
 ## The model of the S8550 stage, and why it is pessimistic
 

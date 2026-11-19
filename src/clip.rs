@@ -380,6 +380,11 @@ impl Sampler {
         // buzzer's through the inverter, a 1 pulling it low; the line
         // output's as it is, a 1 high.
         let out = settings::get().output.clips();
+        // The amplifier is on already, the buzzer task's doing, but for
+        // an output changed since the melody began.
+        if out == SoundPin::Line {
+            pins.amp_on();
+        }
         let line = pins.at_rest(out).into_peripheral_output().with_output_inverter(out == SoundPin::Buzzer);
         OutputSignal::I2SO_SD.connect_to(&line);
         // The hold is for the buzzer's transistor.

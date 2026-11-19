@@ -250,7 +250,12 @@ into `OUT_DIR`.
 command, looped or once, and stops within a note.
 
 - `Pins` is the two pins a sound can go out of, GPIO5 and GPIO20, and
-  how each is driven and rests (`at_rest`, `rest`). A tone goes to the
+  how each is driven and rests (`at_rest`, `rest`), and the
+  amplifier's shutdown pin, GPIO10 (`amp_on`, `amp_off`, `amp_shut`
+  for the boot). The task turns the amplifier on before a melody that
+  goes to the line output (`amp_for`, with `AMP_WAKE` to come up) and
+  off at a stop or the melody's own end; a tone or a clip that finds
+  the output changed to the line turns it on itself. A tone goes to the
   one `settings::get().output.tones()` names at its start; the pin of the
   tone before is taken back to its rest first when that differs,
   since LEDC stays connected to it.

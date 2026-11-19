@@ -9,6 +9,7 @@ GPIO20 is push-pull at 3.3 V and carries the PDM stream at 4 or 8 MHz.
 A two-stage RC filter takes it to the input of a PAM8302A (the
 CJMCU-832 board) or a PAM8403 module with a volume pot. The drawings
 are `pdm-pam8302.svg` and `pdm-pam8403.svg` (and their `.png`).
+GPIO10 is the PAM8302A's shutdown: "The shutdown pin" below.
 
 ## From the datasheets
 
@@ -24,6 +25,7 @@ September 2020).
 | PSRR at 1 kHz | 50 dB | 58 dB |
 | supply | 2.0 to 5.5 V | 2.5 to 5.5 V |
 | input capacitor | 0.1 to 0.22 µF recommended | `fC = 1/(2π·RI·CI)` |
+| shutdown | SD, low is shut down: high from 1.2 V, low to 0.4 V, under 1 µA shut down | SHDN and MUTE, tied on the module |
 
 - An external resistor in series with a PAM8302A input lowers the
   gain: `20·log(150k/(10k + RIN))`.
@@ -44,7 +46,10 @@ descriptions fit; no schematic of the CJMCU-832 itself was found.
 Adafruit's schematic (rev. B) has a 10 kΩ trimmer across A+ and A−,
 its wiper through 1 µF and a series resistor to IN_P, and A− through
 1 µF and a series resistor to IN_N. The series resistors' value could
-not be read off the drawing (it looks like 100 Ω).
+not be read off the drawing (it looks like 100 Ω). The Eagle file
+(github.com/adafruit/Adafruit-PAM8302-Mono-Amplifier-PCB, read
+2026-11-18) says 100 Ω for both, and has one more part: R3, 10 kΩ
+from SD to the supply.
 
 Check on the board, unpowered:
 
@@ -86,6 +91,49 @@ The load on node b is R3, the trimmer's 10 kΩ and the amplifier's
 - A board with no trimmer: R3 2.7k gives 0.162, 0.53 V peak to peak,
   ±4.0 V, 11.3 kHz. With 3.3k it would sit on the clipping threshold.
   Such a board needs 100 nF in each input if it has none.
+
+## The shutdown pin
+
+Planned 2026-11-18, the firmware built the same day, nothing soldered
+or heard: the PAM8302s have not arrived.
+
+At rest the amplifier amplifies what the Wi-Fi puts on its input, as
+very quiet clicks when the clock sends or receives (the user, on the
+PAM8403 and the breadboard). So the firmware shuts it down between
+sounds: GPIO10 to SD, high for a sound and low otherwise.
+
+```
+GPIO10 ──────┬────── SD
+             │
+          R4 47k          the board's 10k from SD to Vin taken off
+             │
+GND ─────────┴
+```
+
+- The board's pull-up comes off (R3 on Adafruit's, an 0805; on a
+  copy, whatever a meter finds between SD and Vin). Left on with the
+  amplifier at 5 V it is 5 V through 10 kΩ on a 3.3 V pin: 0.15 mA
+  through the pad's clamp while the pin floats, 0.17 mA into the
+  driver while it is high, and 0.5 mA all the time the amplifier is
+  shut down, against the chip's 1 µA.
+- R4, on the adapter, is anything from 10 kΩ to 100 kΩ: with the
+  pull-up gone it only has to hold a floating pin low. The amplifier
+  is then off through the ROM and the boot, where GPIO20 steps to
+  3.3 V, and shut down before its supply comes or goes, which the
+  datasheet asks for against the pop. A pull-down that beat the
+  pull-up instead would be under 870 Ω and take 5 mA from the pin.
+- 3.3 V on SD is on, whatever the amplifier's supply: the threshold
+  is 1.2 V.
+- The amplifier could run from 3.3 V (0.65 W into 8 Ω at 1 % THD on
+  3.6 V) and the pull-up stay, but its current and the Wi-Fi's would
+  then share the module's regulator: it stays on 5 V (the user,
+  2026-11-18).
+- A board with SD left open and its pull-up on plays as before, always
+  on.
+- GPIO10 is the module's own LED on the Zero, an addressable one,
+  which is given up for this.
+- The firmware gives the amplifier 20 ms (`buzzer::AMP_WAKE`) between
+  SD and the sound. The datasheet has no figure; to be heard.
 
 ## Filter for the PAM8403 module
 

@@ -139,7 +139,9 @@ did.
   so the Wi-Fi's bursts on that rail are in the audio; if they are
   heard, a single-gate buffer from an RC-filtered supply is the fix,
   a footprint at most. The amplifier's shutdown pin on one more GPIO
-  is a thought for the idle current, not a plan.
+  is a thought for the idle current, not a plan. (A plan since
+  2026-11-18, for the Wi-Fi's clicks: "The amplifier shut down
+  between sounds", at the end of this section.)
 
 **A first try that needs no firmware: a pull-up on GPIO5.** For the
 bench, before the setting exists, and not for the board. A 470 Ω
@@ -276,6 +278,116 @@ To try on the bench board, in this order: the pull-up and the filter
 on a breadboard with the firmware as it is, the level at the
 amplifier's input, the hiss with a silent clip and with Wi-Fi busy;
 then the setting and the new pin, and the two side by side.
+
+**The amplifier shut down between sounds — the user's of 2026-11-18,
+the firmware built the same day, not flashed, nothing soldered or
+heard.** "Ideally, amplifier needs to be shut down when
+not used, since it picks up interference from WiFi (very quiet clicks
+when WiFi is sending / receiving). PAM8302 should use shutdown pin,
+e.g. GPIO10. LED on esp32c3 zero will be unusable, but it is a
+sacrifice I am willing to make." So the shutdown pin, a thought for
+the idle current above, is a plan for the clicks, and the idle current
+comes with it. Everything below is reasoned; nothing is built, heard
+or looked up in the datasheet again.
+
+- The pin: GPIO10, the one free pin left that is neither a strapping
+  pin, the USB nor UART0's TX (the list above). It was refused for the
+  audio because the module's LED is on it; as a level that changes
+  twice a sound it only costs the LED, which the firmware never used.
+  On the Zero the LED is an addressable one and GPIO10 is its data
+  input: whether one edge with no bit train behind it ever lights it
+  is to be seen.
+- The level: high is on, low is shut down, which is the PAM8302A's SD
+  (active low) wired straight to the pin. Push-pull. The datasheet
+  (Diodes, PAM8302A, read 2026-11-18): SD high from 1.2 V, low to
+  0.4 V, with no word of the supply, so the pin's 3.3 V is enough at
+  5 V; under 1 µA shut down; no pull on SD inside the chip is
+  mentioned, so what a floating SD does is the module's resistor's, if
+  it has one; SD is to rise 1 to 100 ms after the supply (10 ms
+  typical), and "for the best power on/off pop performance" the
+  amplifier is shut down before the supply comes or goes, which a
+  pull-down on the adapter gives. No turn-on time from SD is given.
+- Through a reset the pin is an input and floats, and the module's
+  own pull-up on SD turns the amplifier on until the firmware is up.
+  On Adafruit's board it is R3, 10 kΩ from SD to the amplifier's
+  supply (its Eagle schematic, github.com/adafruit/
+  Adafruit-PAM8302-Mono-Amplifier-PCB, read 2026-11-18; the copies are
+  to be checked with a meter). With the amplifier at 5 V that is one
+  more 5 V source on a GPIO (the user: "Ugh"): some 0.15 mA through
+  the pad's clamp while the pin floats, 0.17 mA into the driver while
+  it is high, and 0.5 mA through R3 all the time the amplifier is shut
+  down, against the chip's 1 µA. A pull-down that wins against 10 kΩ
+  would be under 870 Ω and cost 5 mA from the pin while the amplifier
+  is on. So: R3 comes off the module (an 0805), and the adapter has a
+  pull-down on GPIO10, 10 kΩ to 100 kΩ. Then nothing on SD is above
+  3.3 V, the amplifier is off through the ROM and the boot, GPIO20's
+  step to 3.3 V there with it, and it is shut down before its supply
+  comes or goes, as the datasheet asks. A module with R3 left on and
+  SD not wired plays as it does today. The amplifier on 3.3 V, with
+  R3 left on, was the other way (2.0 to 5.5 V; some 0.55 W into 8 Ω at
+  1 % THD, scaled from the datasheet's 0.65 W at 3.6 V): its current
+  and the Wi-Fi's would share the module's regulator, and the rail's
+  noise would be its supply. The user, 2026-11-18: stay on 5 V and
+  take the pull-up off.
+- No new setting. The pin is driven only when a sound goes to the
+  line output (`output` at `line` or `split`), and at boot, low, when
+  the stored setting is one of those, before GPIO20 is driven low, so
+  that step is not amplified. On `buzzer` it is never touched. A clock
+  with an amplifier and nothing on GPIO10 plays as it does now, its
+  module's pull-up holding SD.
+- `buzzer::Pins` gets the third pin and stays the one place that
+  knows the pins: `amp(on)`. The buzzer task brackets a whole command
+  with it, since it starts the tones and the clips alike
+  (`clip::play` is called from it): on at the start of a `Preview` or
+  a `Ring` whose sound goes to `SoundPin::Line`, a wait of `AMP_WAKE`
+  for the amplifier to come up, the sound, and off when the command
+  has ended, after the pin is back at its rest (a clip's ramp gone
+  out, the tone's duty at 0 %). It stays on through the gaps between
+  notes and between a ring's repeats, so a ring is one on and one off.
+  A tone or a clip that finds the setting changed to the line under
+  it turns the amplifier on itself, without the wait.
+- `AMP_WAKE` is a guess until heard: the first note or the clip's
+  ramp cut at its start means it is too short. The amplifier's own
+  click at each turn-on and turn-off, if it has one, is what this
+  trades the Wi-Fi's clicks for: to be heard before it is kept. The
+  alarm starts later by the wait.
+- The PAM8403 on the bench has its shutdown pin tied on the module;
+  this is for the PAM8302s, when they arrive.
+- When built, in the same change: the line output's bullet in
+  `AGENTS.md`, "Line output" in `agents/hardware.md`, `Pins` in
+  `agents/modules.md`, the pin in `bench/pdm-amp.md` and its drawings,
+  the wiring in `MANUAL.md` and `speaker-mod/README.md`.
+
+Built 2026-11-18 (the build, clippy and the host tests pass; not
+flashed):
+
+- `buzzer::Pins` has the third pin and `AMP_ON`, an atomic the two
+  tasks write by turns: `amp_on` (and whether it had been off),
+  `amp_off` (only if a sound turned it on, so a clock at `buzzer`
+  never has the pin driven), `amp_shut` for the boot.
+- The buzzer task: `amp_for` before a melody's first sound, on with
+  `AMP_WAKE` (20 ms, the guess) if the melody's pin is the line, off
+  if it is the buzzer; off at a `Stop` and at a preview's own end. A
+  command that replaces another leaves the amplifier as it is, so one
+  preview after another is not an off and an on.
+- A tone and a clip that go to the line turn it on themselves if it
+  is not, with no wait: for an `output` changed under a melody.
+- `main.rs`: `amp_shut` and then GPIO20's rest, when the stored
+  setting's clips go to the line.
+- Written up: `bench/pdm-amp.md` ("The shutdown pin") and
+  `pdm-pam8302.svg` with GPIO10, the pull-down (R4, 47 kΩ) and the
+  pull-up taken off; `speaker-mod/README.md`'s section on the
+  amplifier, which had fallen behind the line output; `MANUAL.md`,
+  `ARCHITECTURE.md`, `AGENTS.md`, `agents/hardware.md` and
+  `agents/modules.md`.
+
+To check, on a PAM8302 with SD on GPIO10 (the pin alone can be seen
+on a scope before the amplifiers arrive): the pin on the scope, high
+from before a sound to after it and low otherwise, for a note melody,
+a clip, a clip cut short and a ring with its gaps; low and untouched
+on `buzzer`; the Wi-Fi's clicks gone at rest; the amplifier's own
+click at the two edges; the start of a sound not cut; through a reset
+with and without the pull-down; the Zero's LED.
 
 ### A watchdog — designed, built and run on test-clock 2026-11-17; a soak still owed
 

@@ -240,6 +240,10 @@ Each with its measurements in `agents/hardware.md`.
   pin configuration for sound goes through `buzzer::Pins`, so GPIO5 is
   never built push-pull by a path meant for GPIO20; a tone takes the
   last tone's pin back to its rest before LEDC goes to the other.
+- **Amplifier shutdown (GPIO10)** is high only from before a sound on
+  the line output to after it; the buzzer task brackets a melody with
+  it and `Pins` is its only way. Never driven while the output is
+  `buzzer`, and low at boot before GPIO20 is driven.
 - **The GDMA's `out_dscr` is not the descriptor being read**; it names
   the one two further on. Pace a DMA ring by time and use the register
   as a check at most.

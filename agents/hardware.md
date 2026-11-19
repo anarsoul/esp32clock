@@ -123,6 +123,29 @@ and its figures are `bench/pdm-amp.md` until it is built and heard.
 - Why this pin and not 2, 10, 18, 19 or 21 is in the work's section
   (`PLAN.md`, "A line output on the adapter").
 
+## Amplifier shutdown (GPIO10)
+
+The shutdown pin of the amplifier behind the line output, a PAM8302A's
+SD: push-pull, high is on. Built 2026-11-18, nothing soldered or
+heard; the wiring is `bench/pdm-amp.md`, "The shutdown pin".
+
+- Why: at rest the amplifier makes the Wi-Fi's traffic heard as faint
+  clicks (the user, 2026-11-18, a PAM8403 on a breadboard).
+- High from `buzzer::AMP_WAKE` before a melody that goes to the line
+  output until it has ended and the pin is at its rest; through the
+  gaps between notes and between an alarm's repeats. Low otherwise.
+- Driven only for a sound on the line output, and low at boot, before
+  GPIO20, when the stored `output` is `line` or `split`. On `buzzer`
+  the pin stays as the ROM left it, an input.
+- Through a reset it floats: the adapter's pull-down holds SD low,
+  and the module's own pull-up to its 5 V supply is taken off (10 kΩ
+  on Adafruit's board), so nothing on the pin is above 3.3 V.
+- From the datasheet: SD is high from 1.2 V and low to 0.4 V; under
+  1 µA shut down; no time from SD to sound is given, so `AMP_WAKE` is
+  a guess.
+- On the ESP32-C3 Zero GPIO10 is the module's addressable LED, which
+  the firmware never used.
+
 ## The GDMA's `out_dscr`
 
 It is not the descriptor being read. On the C3 it names the one two

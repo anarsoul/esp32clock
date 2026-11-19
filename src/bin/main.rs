@@ -111,8 +111,10 @@ async fn main(spawner: Spawner) -> ! {
     // pin is released however the pad was left. The buzzer task takes
     // the pins over from here. The other is the line output, GPIO20,
     // for a clock with an amplifier: left as the ROM had it (UART0's
-    // RX, an input) until the settings say it is in use.
-    let mut sound_pins = buzzer::Pins::new(peripherals.GPIO5.degrade(), peripherals.GPIO20.degrade());
+    // RX, an input) until the settings say it is in use, and with it
+    // GPIO10, the shutdown pin of that amplifier.
+    let mut sound_pins =
+        buzzer::Pins::new(peripherals.GPIO5.degrade(), peripherals.GPIO20.degrade(), peripherals.GPIO10.degrade());
     sound_pins.rest(SoundPin::Buzzer);
 
     // Buttons switch to ground and the board has no pull-ups. GPIO4 is the
@@ -189,8 +191,11 @@ async fn main(spawner: Spawner) -> ! {
     info!("settings: {:?}", settings::get());
     // The line output at its rest, low, from here on, so the filter
     // behind it settles once and not at the first sound. A clock
-    // switched to it later gets this at that sound.
+    // switched to it later gets this at that sound. The amplifier is
+    // shut down first, so it does not amplify the step, and stays so
+    // until a sound.
     if boot_settings.output.clips() == SoundPin::Line {
+        sound_pins.amp_shut();
         sound_pins.rest(SoundPin::Line);
     }
 

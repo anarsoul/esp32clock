@@ -263,7 +263,11 @@ in the browser's light or dark:
   pin, or, for one that has both, the note melodies on the buzzer and
   the clips on the amplifier. On a clock without an amplifier the
   second choice is silence and the third silent clips; it takes
-  effect at the next sound. The access
+  effect at the next sound. With either of the two, GPIO10 is the
+  amplifier's shutdown pin: high while a sound plays there and low
+  otherwise, so the amplifier is silent at rest (the wiring is
+  `bench/pdm-amp.md`); an amplifier with nothing wired to it works as
+  well, always on. The access
   point itself always transmits at 11 dBm.
 - `/ha`: the MQTT broker for Home Assistant, see below.
 - `/clips`: the clip pack in use and the upload of another, see

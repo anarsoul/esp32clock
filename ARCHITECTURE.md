@@ -76,7 +76,7 @@ executor** runs the rest cooperatively.
 | thread | `display::display_task` | the UI state | tick, button or settings change → `ui` → render → publish; rings the alarm |
 | thread | `watchdog::watchdog_task` | the RTC watchdog | feeds it while the display task, and the clip task during a clip, check in; resets the clock when one does not |
 | thread | `buttons::button_task` | GPIO3, GPIO4 | debounce into press events |
-| thread | `buzzer::buzzer_task` | LEDC, the buzzer pin and the line output | note melodies; hands clips to the clip task |
+| thread | `buzzer::buzzer_task` | LEDC, the buzzer pin, the line output and the amplifier's shutdown pin | note melodies; hands clips to the clip task |
 | thread | `sensors::sensor_task` | ADC1, GPIO0, GPIO1 | filtered NTC and LDR readings |
 | thread | `storage::persist_task` | the `nvs` map | debounced save of changed settings |
 | thread | `net::net_task` | the stack's runner | embassy-net |
@@ -143,7 +143,9 @@ level, so the pin is open drain throughout and released means silent.
 A clock with an amplifier has a second pin, the line output, push-pull
 and low at rest; the `output` setting says which of the two a sound
 goes out of, or the note melodies on the one and the clips on the
-other, read at each tone and each clip (`buzzer::Pins`).
+other, read at each tone and each clip (`buzzer::Pins`). A third
+pin is that amplifier's shutdown, which the buzzer task holds high
+for the length of a melody on the line output and low otherwise.
 
 - **Note melodies**: `buzzer_task` plays pitch-and-length tables from
   `core::melody` as LEDC PWM.

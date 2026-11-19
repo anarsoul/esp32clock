@@ -30,11 +30,22 @@
 //! LEDC stays connected to the pin of the last tone, silent, so the
 //! task takes that pin back before a tone goes to the other one.
 //!
+//! The amplifier behind the line output is shut down between sounds,
+//! by its shutdown pin on GPIO10 (high is on): at rest it amplifies
+//! what the Wi-Fi puts on its input, heard as faint clicks. The task
+//! turns it on before a melody that goes to the line output, gives it
+//! `AMP_WAKE`, and turns it off when the melody has ended and the pin
+//! is back at its rest; it stays on through the gaps between notes and
+//! between an alarm's repeats. GPIO10 is driven only for a sound on the
+//! line output, so a clock with the output at `buzzer` never touches it.
+//!
 //! Nothing sounds on its own. The task plays a melody on command, on a
 //! loop for the alarm or once for a preview, and stops within a note when
 //! told to. A command naming `melody::RANDOM` is resolved here, from the
 //! hardware RNG, so the setting passes through the display and the page
 //! handler unchanged and the log says which tune was drawn.
+
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use embassy_futures::select::{Either, select};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
@@ -54,17 +65,31 @@ use crate::melody::{self, Melody};
 use crate::settings::{self, SoundPin};
 use crate::watchdog;
 
-/// The two pins a sound can go out of.
+/// What the amplifier is given between its shutdown pin going high
+/// and the sound. The datasheet has no figure for it: a guess until
+/// heard, too short if a sound's start is cut.
+const AMP_WAKE: Duration = Duration::from_millis(20);
+
+/// Whether the amplifier's shutdown pin is high, the amplifier on.
+/// Written by the buzzer task, and by the clip task while the buzzer
+/// task waits for it in `clip::play`: by turns, as the pins are used.
+static AMP_ON: AtomicBool = AtomicBool::new(false);
+
+/// The two pins a sound can go out of, and the amplifier's shutdown
+/// pin.
 pub struct Pins {
     /// GPIO5: never pushed high (the head of this file).
     buzzer: AnyPin<'static>,
     /// GPIO20.
     line: AnyPin<'static>,
+    /// GPIO10, to the shutdown pin of the amplifier behind `line`:
+    /// high is on, low is shut down.
+    amp: AnyPin<'static>,
 }
 
 impl Pins {
-    pub fn new(buzzer: AnyPin<'static>, line: AnyPin<'static>) -> Self {
-        Self { buzzer, line }
+    pub fn new(buzzer: AnyPin<'static>, line: AnyPin<'static>, amp: AnyPin<'static>) -> Self {
+        Self { buzzer, line, amp }
     }
 
     /// A second handle to both pins.
@@ -73,7 +98,11 @@ impl Pins {
     ///
     /// The two holders must use the pins by turns.
     pub unsafe fn clone_unchecked(&self) -> Self {
-        Self { buzzer: unsafe { self.buzzer.clone_unchecked() }, line: unsafe { self.line.clone_unchecked() } }
+        Self {
+            buzzer: unsafe { self.buzzer.clone_unchecked() },
+            line: unsafe { self.line.clone_unchecked() },
+            amp: unsafe { self.amp.clone_unchecked() },
+        }
     }
 
     /// How the pin of `out` is driven.
@@ -100,6 +129,38 @@ impl Pins {
     /// `Output` is dropped.
     pub fn rest(&mut self, out: SoundPin) {
         let _ = self.at_rest(out);
+    }
+
+    /// Drive the amplifier's shutdown pin, push-pull. The pad keeps
+    /// the level after the `Output` is dropped.
+    fn amp(&mut self, on: bool) {
+        let _ = Output::new(self.amp.reborrow(), Level::from(on), OutputConfig::default());
+        AMP_ON.store(on, Ordering::Relaxed);
+    }
+
+    /// Shut the amplifier down whatever the pin was, for the boot of a
+    /// clock whose sounds go to the line output: the pin floats through
+    /// a reset.
+    pub fn amp_shut(&mut self) {
+        self.amp(false);
+    }
+
+    /// The amplifier on, for a sound on the line output. `true` if it
+    /// was shut down, and so has yet to come up.
+    pub fn amp_on(&mut self) -> bool {
+        let was_off = !AMP_ON.load(Ordering::Relaxed);
+        if was_off {
+            self.amp(true);
+        }
+        was_off
+    }
+
+    /// The amplifier shut down, if a sound turned it on. A clock that
+    /// never sounds on the line output never has the pin driven here.
+    pub fn amp_off(&mut self) {
+        if AMP_ON.load(Ordering::Relaxed) {
+            self.amp(false);
+        }
     }
 }
 
@@ -206,6 +267,24 @@ async fn play_once(ledc: &Ledc<'static>, pins: &mut Pins, on: &mut SoundPin, m: 
     None
 }
 
+/// The amplifier as `m` needs it, before its first sound: on, and
+/// given `AMP_WAKE` if it was shut down, for a melody that goes to the
+/// line output; off for one that goes to the buzzer after one that did
+/// not. The pin is the `output` setting's now; a tone or a clip that
+/// finds it changed under the melody turns the amplifier on itself.
+async fn amp_for(pins: &mut Pins, m: &Melody) {
+    let output = settings::get().output;
+    let out = if m.clip.is_some() { output.clips() } else { output.tones() };
+    match out {
+        SoundPin::Line => {
+            if pins.amp_on() {
+                Timer::after(AMP_WAKE).await;
+            }
+        }
+        SoundPin::Buzzer => pins.amp_off(),
+    }
+}
+
 /// Owns the LEDC peripheral and the two pins, which it lends to the
 /// clip task for the length of a clip.
 ///
@@ -225,17 +304,27 @@ pub async fn buzzer_task(ledc: Ledc<'static>, pins: Pins) -> ! {
     let mut last_random = None;
     let mut command = COMMAND.wait().await;
     loop {
+        // The amplifier goes off at a stop and at a melody's own end,
+        // and stays as it is when another melody follows at once.
         command = match command {
-            Command::Stop => COMMAND.wait().await,
+            Command::Stop => {
+                pins.amp_off();
+                COMMAND.wait().await
+            }
             Command::Preview(i) => {
                 let m = resolve(i, &mut last_random, "preview");
+                amp_for(&mut pins, &m).await;
                 match play_once(&ledc, &mut pins, &mut on, &m, false).await {
                     Some(c) => c,
-                    None => COMMAND.wait().await,
+                    None => {
+                        pins.amp_off();
+                        COMMAND.wait().await
+                    }
                 }
             }
             Command::Ring(i) => {
                 let m = resolve(i, &mut last_random, "ring");
+                amp_for(&mut pins, &m).await;
                 loop {
                     if let Some(c) = play_once(&ledc, &mut pins, &mut on, &m, true).await {
                         break c;
@@ -273,6 +362,10 @@ async fn tone(ledc: &Ledc<'static>, pins: &mut Pins, on: &mut SoundPin, freq_hz:
     if *on != out {
         pins.rest(*on);
         *on = out;
+    }
+    // On already, but for an output changed in the middle of a melody.
+    if out == SoundPin::Line {
+        pins.amp_on();
     }
     let silent = silent_pct(out);
     let mut pwm_timer = ledc.timer::<LowSpeed>(timer::Number::Timer0);
