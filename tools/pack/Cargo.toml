@@ -28,6 +28,8 @@ sha2 = { version = "0.10", default-features = false }
 # the `cdylib`, which cargo builds beside it, does not link where a
 # library may leave no symbol undefined (MSVC: v0.5-rc1's release).
 # The WebAssembly has no use for either and imports nothing.
+# `generic-queue-8` is embassy-time's own timer queue: without it the
+# queue asks for an executor's, and there is none here.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-embassy-time     = { version = "0.5.0", features = ["std"] }
+embassy-time     = { version = "0.5.0", features = ["std", "generic-queue-8"] }
 critical-section = { version = "1.2.0", features = ["std"] }

@@ -90,6 +90,8 @@ jobs:
           "target/${{ matrix.target }}/tool/onebitdawn-pack${{ matrix.exe }}" \
             -o check.bin clips/trantor.bpr mods/Orion-Nero6.3.0.2.xm:name=keygen
 
+  firmware:
+    name: Firmware and OTA image
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
