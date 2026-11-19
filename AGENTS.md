@@ -56,7 +56,7 @@ of. `CLAUDE.md` is a symlink to this file; edit this one.
   2026-11-16); the modules' sources are in `mods/`. They
   are other people's music, not under the project's licence;
   `clips/README.md` credits each and must go on doing so. A clip
-  nobody may redistribute stays in the ignored `wav/`, `tap/`, `sid/` and `pt3/`,
+  nobody may redistribute stays in the ignored `wav/`, `tap/`, `sid/`, `pt3/` and `xm/`,
   and a pack made of such in the ignored `packs/`.
 - The project is licensed MIT OR Apache-2.0 (`LICENSE-MIT`,
   `LICENSE-APACHE`, the `license` field of both manifests). Every `.rs`

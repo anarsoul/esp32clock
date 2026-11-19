@@ -9892,3 +9892,12 @@ ten until the new ones are uploaded.
 Not done: the clip as a ringing alarm, round and round for five
 minutes at half the processor; the version line, which says
 `v0.4-95-gb7cb573` with no `-dirty` for a build of a changed tree.
+
+*2026-11-18, later.* The module is not ours to give out, so it left
+`mods/`, which is tracked: `xm/` is a new ignored directory, as `sid/`
+and `pt3/` are, with `children.s3m`, `children.xm` and the buzzer's
+`children.xmc`; the speaker's stays in `packs/speaker/`. The local
+packs are made by `packs/local.sh` (ignored, like all of `packs/`):
+it converts Children again and makes `packs/clips-local.bin` and
+`packs/clips-local-speaker.bin` of the nine clips, which take the
+place of the two `-children` packs; both clocks hold exactly these.
