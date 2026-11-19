@@ -9,13 +9,17 @@
   <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
   <style>
     /* The page follows the browser's light or dark. The --md-sys-color-*
-       names are the ones ESP Web Tools' dialog reads (they inherit into
-       its shadow tree), so the dialog follows too. */
+       names are the ones ESP Web Tools' dialogs read. A dialog's own
+       :host rule sets the surfaces and the primary to light values, so
+       inheriting from :root is not enough: the names are set on the
+       dialog elements as well, where the page's rule wins over :host. */
     :root {
       color-scheme: light dark;
       --bg: #f7f6f3; --card: #ffffff; --text: #1d1c1a; --muted: #5f5c56;
       --line: #dedbd3; --accent: #b8430a; --on-accent: #ffffff;
       --code: #eeece6; --notice: #fdf1e7; --raised: #efede8;
+    }
+    :root, ewt-install-dialog, ewt-no-port-picked-dialog {
       --md-sys-color-primary: var(--accent);
       --md-sys-color-on-primary: var(--on-accent);
       --md-sys-color-surface: var(--card);

@@ -65,6 +65,9 @@ from `http://<ip>/update`; its settings survive the update.
 
 ### Fixed
 
+- The web installer's dialogs follow the browser's dark theme, where
+  they stayed white with the page's light text on them; their buttons
+  have the page's accent colour.
 - A request too long for the clock is told so, where the connection
   was closed with no answer: `431` for a head over 1536 bytes, `413`
   for a form's body over the limit, `400` for a head that does not
