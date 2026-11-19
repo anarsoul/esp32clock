@@ -264,8 +264,10 @@ struct Channel {
     key_on: bool,
     envelope_frame: u32,
     fade: u32,
-    /// Effect memories.
+    /// Effect memories; FastTracker keeps one for each direction of
+    /// the portamento.
     porta: u8,
+    porta_down: u8,
     tone_speed: u8,
     slide: u8,
     vibrato_speed: u8,
@@ -568,7 +570,8 @@ impl<'a> Tune<'a> {
             _ => {}
         }
         match cell.effect {
-            1 | 2 if cell.param != 0 => ch.porta = cell.param,
+            1 if cell.param != 0 => ch.porta = cell.param,
+            2 if cell.param != 0 => ch.porta_down = cell.param,
             3 if cell.param != 0 => ch.tone_speed = cell.param,
             4 => {
                 if hi != 0 {
@@ -619,7 +622,7 @@ impl<'a> Tune<'a> {
         match cell.effect {
             0 if cell.param != 0 => ch.arpeggio = Self::arpeggio(cell.param, speed, tick) * SEMITONE,
             1 => ch.period = (ch.period - ch.porta as i32 * 4).max(1),
-            2 => ch.period = (ch.period + ch.porta as i32 * 4).min(PERIOD_MAX),
+            2 => ch.period = (ch.period + ch.porta_down as i32 * 4).min(PERIOD_MAX),
             3 => Self::tone_portamento(ch),
             4 => Self::vibrato(ch),
             5 => {
@@ -674,10 +677,11 @@ impl<'a> Tune<'a> {
     }
 
     /// A sine of at most `depth * 255 / 32` period units either way,
-    /// up in pitch first.
+    /// down in pitch first, as FastTracker's goes (the instrument's
+    /// own goes up first).
     fn vibrato(ch: &mut Channel) {
         let wave = (SINE[(ch.vibrato_pos >> 2 & 31) as usize] as i32 * ch.vibrato_depth as i32) >> 5;
-        ch.vibrato = if ch.vibrato_pos & 0x80 == 0 { -wave } else { wave };
+        ch.vibrato = if ch.vibrato_pos & 0x80 == 0 { wave } else { -wave };
         ch.vibrato_pos = ch.vibrato_pos.wrapping_add(ch.vibrato_speed << 2);
     }
 
@@ -1015,8 +1019,12 @@ mod tests {
         // And the row after it is the plain note again.
         assert_eq!(play(4, &[(0, (C4, 1, 0, 0, 0x47))])[4], base);
         // Portamento: four units a tick for each of the parameter, not
-        // on the first tick, remembered.
-        assert_eq!(play(4, &[(0, (C4, 1, 0, 1, 3)), (1, (0, 0, 0, 2, 0))])[..8], [base, base - 12, base - 24, base - 36, base - 36, base - 24, base - 12, base]);
+        // on the first tick, remembered, each direction by itself: a
+        // 200 after only a 1xx has nothing to remember (openmpt123,
+        // 2026-11-18; Crush leans on it).
+        assert_eq!(play(4, &[(0, (C4, 1, 0, 1, 3)), (1, (0, 0, 0, 1, 0))])[..8], [base, base - 12, base - 24, base - 36, base - 36, base - 48, base - 60, base - 72]);
+        assert_eq!(play(4, &[(0, (C4, 1, 0, 1, 3)), (1, (0, 0, 0, 2, 0))])[..8], [base, base - 12, base - 24, base - 36, base - 36, base - 36, base - 36, base - 36]);
+        assert_eq!(play(4, &[(0, (C4, 1, 0, 2, 1)), (1, (0, 0, 0, 1, 3)), (2, (0, 0, 0, 2, 0))])[8..12], [base - 24, base - 20, base - 16, base - 12]);
         assert_eq!(play(4, &[(0, (C4, 1, 0, 0xE, 0x12)), (1, (0, 0, 0, 0xE, 0x21))])[..8], [base - 8, base - 8, base - 8, base - 8, base - 4, base - 4, base - 4, base - 4]);
         // Tone portamento goes to the note and stops there; the note
         // does not start the sample again.
@@ -1029,10 +1037,12 @@ mod tests {
         assert_eq!(seen[0], 0);
         assert!(seen[1] < 0 && seen[1] > seen[2], "{seen:?}");
         assert_eq!((seen.iter().min(), seen.iter().max()), (Some(&-15), Some(&15)), "{seen:?}");
-        // Vibrato swings about the note, up first, and is gone with it.
+        // Vibrato swings about the note, down in pitch first (the
+        // period up; openmpt123 on Crush's lead, 2026-11-18), and is
+        // gone with it.
         let vib = play(6, &[(0, (C4, 1, 0, 4, 0xF4)), (1, (0, 0, 0, 0, 0))]);
         assert_eq!(vib[0], base);
-        assert!(vib[1..6].iter().all(|&p| (p - base).abs() <= 4 * 255 / 32) && vib[2] < base && vib[3..6].iter().any(|&p| p > base), "{:?}", &vib[..6]);
+        assert!(vib[1..6].iter().all(|&p| (p - base).abs() <= 4 * 255 / 32) && vib[2] > base && vib[3..6].iter().any(|&p| p < base), "{:?}", &vib[..6]);
         assert_eq!(vib[6], base);
     }
 

@@ -709,6 +709,56 @@ pack upload".
 Not covered: a panel (the ring runs into no drivers), a speaker, the
 buttons, the access point, the sensors.
 
+## The module player against openmpt123: vibrato's direction, a memory for each portamento — fixed 2026-11-18, heard on test-clock with Crush only
+
+The user, of Crush (eighteen channels, the section above) previewed
+on test-clock: "It sounds a bit weird", and asked
+whether every instrument and effect of the module is played. The
+converter names nothing missing: the module's effects are 1 2 3 4 8 A
+B C D F, its volume column sets, slides, fine slides and panning (C,
+D, E: 2294 cells of it), one sample an instrument, all of 8 bits, one
+ping-pong loop. Panning is the one thing dropped, the clock being
+mono.
+
+Checked on the host against openmpt123 (mono, 31 250 Hz), the whole
+mix and then each of the eighteen channels alone (the module split
+into eighteen, the other channels' cells emptied but for B, D, F and
+G; `CLIP_RAW`):
+
+- The whole mix: every order's level within 0.5 dB of the
+  reference's, and nine bands from 40 Hz to 15.6 kHz within 0.3 dB
+  but the top two, 0.9 and 2.5 dB under (the averaging down).
+- **Vibrato went the wrong way**: up in pitch first, where
+  FastTracker's (and the reference's) goes down first. The lead of
+  orders 43 and 44 was 13 to 27 cents off over an order for it.
+  Fixed in `xm::Tune::vibrato`; the instrument's own vibrato does go
+  up first and is as it was.
+- **Portamento up and down shared one memory**; FastTracker keeps
+  one each (a module of one cell 110 and then 200s does not move in
+  openmpt123). Crush has 721 cells of 100 and 442 of 200. Fixed:
+  `Channel::porta_down`.
+- Both change Halftime and Keygen as well, which have 4xx and 6xx by
+  the hundred (Keygen 1xx and 2xx too, each with its own parameter).
+  The clips are the same files; the player reads them differently.
+- After the fixes, per channel and order: pitch within 6 cents
+  everywhere a channel is above -42 dBFS but the tails of three
+  sweeps (channels 15, 16 and 17, at -32 to -37 dBFS, where a slide
+  runs into the period's limit, which is not FastTracker's), and
+  levels within 0.7 dB but channel 11, 0.7 to 1 dB under throughout,
+  and those tails. Not chased.
+- The fixes change 11 of the 48 orders' mix. So they are not likely
+  to be all of "weird". What else differs from the module on a
+  stereo player, and was not tried: the sides, 7 to 12 dB under the middle in most
+  orders, are gone in mono; and the mix is 5 dB hotter than
+  Halftime's or Children's (0.4 dB over one voice at full level, RMS)
+  into the same limiter, which takes its gain down as far and holds
+  it there more of the time.
+
+The stack with the fixes: 39 880 bytes (39 960 before: eighty
+bytes, four a channel for the new memory and its padding).
+
+Not heard since the fixes: Halftime and Keygen, which they change.
+
 ## Checks still owed
 
 Built, and by its heading in `HISTORY.md` not yet seen, heard or run
