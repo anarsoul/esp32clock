@@ -4,14 +4,16 @@ The clips of the default clip pack, the extra alarm melodies a clock
 has in its `clips` partition (see "Clip packs" in `MANUAL.md`):
 
 ```
-scripts/clips.sh                                       # packs/clips-default.bin, these seven
+scripts/clips.sh                                       # packs/clips-default.bin, these eight
 cargo pack -o packs/one.bin clips/trantor.bpr          # a pack of one of them
 ALARM_CLIP=clips/trantor.bpr cargo build --release     # or built into the firmware, the older way
 ```
 
 The first four are other people's music and are **not** covered by
 the project's MIT OR Apache-2.0 licence; each is credited below, and
-copyright stays with its author. The last three were made here.
+copyright stays with its author. The next three were made here. The
+last is the project's author's own tune, and is **not** under the
+project's licence either.
 
 ## `trantor.bpr`
 
@@ -102,3 +104,35 @@ cargo pack --clip clips/morning_mood.xmc mods/grieg-morning-bright.xm
 cargo pack --clip clips/morning_mood_chip.xmc mods/grieg-morning-chip.xm
 cargo pack --clip clips/mountain_king.xmc mods/grieg-mountain-king-bright.xm
 ```
+
+## `suspended_seconds.xmc`
+
+"Suspended Seconds" (2026) by **Vasily Khoruzhick**, a tune for
+piano, written for this clock. **Copyright (c) 2026 Vasily
+Khoruzhick, all rights reserved**: the tune, its MIDI file
+(`mods/src/suspended_seconds.mid`), the module
+(`mods/suspended-seconds.xm`) and this clip are not under the
+project's licence and may not be distributed apart from onebitdawn's
+clip pack.
+
+- **The notes** are the composer's MIDI file, with nothing arranged:
+  each note's velocity is its volume, a note let go under the sustain
+  pedal rings until the pedal comes up, and the notes' starts are on
+  their eighths.
+- **The piano** is the upright of Versilian Studios'
+  [VSCO 2 Community Edition](https://github.com/sgossner/VSCO-2-CE),
+  which is CC0, at mezzo-forte: a recording every C and G, the first
+  second or so of each and a loop, with the string's decay in the
+  instrument's envelope.
+- **The script** that writes the module, `mods/src/suspended_seconds.py`
+  with `scripts/mkxm.py`, is the project's, under its licence.
+
+A piano's attacks are flattened into clicks by a limiter that follows
+the waveform, so this clip's limiter lets go slowly, from a low knee:
+
+```
+scripts/mkxm.py mods/src/suspended_seconds.py mods/suspended-seconds.xm
+cargo pack --clip clips/suspended_seconds.xmc mods/suspended-seconds.xm:knee=12,release=10
+```
+
+For a speaker (`scripts/speaker-clips.sh`) it is `knee=12,release=13`.

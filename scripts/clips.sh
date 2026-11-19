@@ -8,7 +8,7 @@
 #        scripts/clips.sh            make the default pack only and print
 #                                    its path, for the clock's Clips page
 #
-# Without a pack named, the default one is made of the seven clips in
+# Without a pack named, the default one is made of the eight clips in
 # clips/ (the pack maker, tools/pack; cargo) as packs/clips-default.bin. The
 # clock answers once the pack is written and checked, then reboots; the
 # panel is dark meanwhile. A megabyte takes about half a minute.
@@ -22,7 +22,7 @@ if [ -z "$pack" ]; then
     pack=packs/clips-default.bin
     cargo pack -o "$pack" clips/trantor.bpr clips/halftime.xmc clips/keygen.xmc \
         clips/synchronization.pt3c clips/morning_mood.xmc clips/morning_mood_chip.xmc \
-        clips/mountain_king.xmc
+        clips/mountain_king.xmc clips/suspended_seconds.xmc
 fi
 if [ "$host" = - ]; then
     printf '%s (%s bytes)\n' "$pack" "$(stat -c %s "$pack")"

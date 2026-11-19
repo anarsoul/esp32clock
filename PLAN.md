@@ -1357,6 +1357,9 @@ the first kit); Halftime and Keygen heard with the ramp.
 
 ## Checks still owed
 
+- "Suspended Seconds" (2026-11-19, in `HISTORY.md`): the processor's
+  share while it plays, from a clock's serial log.
+
 - The pack maker (2026-11-19): the release workflow's three builds of
   the command (Linux, Windows, macOS) and the deploy of `docs/pack/`
   with its wasm, which run only with a tag; the command in a user's

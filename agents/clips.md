@@ -172,7 +172,30 @@ scripts/mkxm.py mods/src/mountain_king.py mods/grieg-mountain-king-chip.xm chip
   (`Sample.pluck`) or noise (`Sample.noise`); `bright=` lifts what is
   over 2 kHz.
 - It reports a note that found no channel; there should be none.
-- The two there are Grieg's Morning (shortened; read off a scan) and
+- A piano is a struck string: `Sample(struck=)` takes the
+  recording's own fall out of the sample and into the instrument's
+  volume envelope, which has no sustain point and goes on down after
+  the loop's start as the recording does, and `Instrument(damp=)`
+  makes a key-off the damper, the fade. `read_midi(path, pedal=True)`
+  gives a note let go under the sustain pedal its length to where the
+  pedal comes up, and with `grid=` puts a played file's notes on
+  the grid. A recording may be a file anywhere by its URL (kept in
+  `xm/` under its host's name), a WAV or an AIFF file, one `channel`
+  of it.
+- "Suspended Seconds" (`mods/src/suspended_seconds.py`,
+  `mods/suspended-seconds.xm`, `clips/suspended_seconds.xmc`) is the
+  user's own piano tune from his MIDI file, velocities and pedal
+  kept, quantized to eighths, the default pack's eighth clip. Its kit
+  is `upright` (VSCO's upright at mf; the user's ear, 2026-11-19);
+  the tune's file has six others that were tried (VSCO's at pp, the
+  University of Iowa's Steinway B, lifted ones). A piano's attacks
+  click in the limiter, so its clip is made with
+  `knee=12,release=10` for the buzzer and `knee=12,release=13` for a
+  speaker (the user's ear again), a limiter that lets go over a
+  second and rides a passage's level. The tune is the user's and not
+  under the project's licence: not to be distributed apart from
+  onebitdawn's clip pack.
+- The other two there are Grieg's Morning (shortened; read off a scan) and
   In the Hall of the Mountain King (Mutopia's MIDI file). Morning in
   both kits and the Mountain King in `bright` are in the default
   pack; `clips/README.md` has the commands and the sources.

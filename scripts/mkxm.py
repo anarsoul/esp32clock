@@ -18,6 +18,9 @@ The recorded notes are Versilian Studios' VSCO 2 Community Edition,
 which is CC0. They are fetched by name from its repository at a pinned
 commit into `xm/vsco/` (ignored by git) and cut down here: mono, a new
 rate, a loop found and crossfaded for a note that is held, 8 bits.
+A piano's note is a struck string (`Sample(struck=)`,
+`Instrument(damp=)`): its decay is the instrument's envelope, with no
+sustain point, and its key-off the damper.
 
 Needs numpy and scipy.
 """
@@ -43,11 +46,18 @@ KEY_OFF = 97
 
 
 def fetch(path):
-    """The local copy of a file of VSCO 2 CE, fetched if it is not there."""
-    local = os.path.join(CACHE, path)
+    """The local copy of a file of VSCO 2 CE, or of a file anywhere by
+    its URL (kept in `xm/` under its host's name), fetched if it is
+    not there."""
+    if "://" in path:
+        parts = urllib.parse.urlsplit(path)
+        local = os.path.join(ROOT, "xm", parts.netloc, os.path.basename(parts.path))
+        url = urllib.parse.urlunsplit(parts._replace(path=urllib.parse.quote(parts.path)))
+    else:
+        local = os.path.join(CACHE, path)
+        url = VSCO + urllib.parse.quote(path)
     if not os.path.exists(local):
         os.makedirs(os.path.dirname(local), exist_ok=True)
-        url = VSCO + urllib.parse.quote(path)
         print(f"fetching {path}", file=sys.stderr)
         with urllib.request.urlopen(url) as r:
             data = r.read()
@@ -57,9 +67,35 @@ def fetch(path):
     return local
 
 
-def read_wav(path):
-    """A WAV file as mono floats in -1..1 and its rate."""
+def read_aiff(path, channel=None):
+    """An AIFF file of 16 bits as mono floats in -1..1 and its rate."""
     d = open(path, "rb").read()
+    assert d[:4] == b"FORM" and d[8:12] == b"AIFF", path
+    at, channels, rate, x = 12, 0, 0, None
+    while at + 8 <= len(d):
+        tag, size = d[at:at + 4], struct.unpack(">I", d[at + 4:at + 8])[0]
+        body = d[at + 8:at + 8 + size]
+        if tag == b"COMM":
+            channels, _, bits = struct.unpack(">hIh", body[:8])
+            assert bits == 16, f"{path}: {bits} bits"
+            # The rate is an 80-bit float.
+            exponent, mantissa = struct.unpack(">HQ", body[8:18])
+            rate = round(mantissa * 2.0 ** ((exponent & 0x7FFF) - 16383 - 63))
+        elif tag == b"SSND":
+            offset = struct.unpack(">I", body[:4])[0]
+            x = np.frombuffer(body[8 + offset:8 + offset + (len(body) - 8 - offset) // 2 * 2], ">i2")
+        at += 8 + size + (size & 1)
+    assert channels and x is not None, path
+    x = x[:len(x) // channels * channels].reshape(-1, channels).astype(np.float64) / 32768
+    return (x.mean(axis=1) if channel is None else x[:, channel]), rate
+
+
+def read_wav(path, channel=None):
+    """A WAV file as mono floats in -1..1 and its rate; an AIFF file
+    too. `channel` is the one to take, where it is not all of them."""
+    d = open(path, "rb").read()
+    if d[:4] == b"FORM":
+        return read_aiff(path, channel)
     assert d[:4] == b"RIFF" and d[8:12] == b"WAVE", path
     at = 12
     fmt = None
@@ -82,8 +118,8 @@ def read_wav(path):
                 x = np.frombuffer(body[:len(body) // 4 * 4], "<f4").astype(np.float64)
             else:
                 raise ValueError(f"{path}: {bits} bits, format {kind}")
-            x = x[:len(x) // channels * channels].reshape(-1, channels).mean(axis=1)
-            return x, rate
+            x = x[:len(x) // channels * channels].reshape(-1, channels)
+            return (x.mean(axis=1) if channel is None else x[:, channel]), rate
         at += 8 + size + (size & 1)
     raise ValueError(f"{path}: no data")
 
@@ -115,9 +151,14 @@ def midi_hz(note):
     return 440.0 * 2 ** ((note - 69) / 12)
 
 
-def read_midi(path):
+def read_midi(path, pedal=False, grid=None):
     """A MIDI file's notes: for each track a sorted list of (start,
-    length, note, velocity), the times in quarter notes."""
+    length, note, velocity), the times in quarter notes. With `pedal`
+    a note let go while the sustain pedal is down (controller 64 at 64
+    or more) lasts until the pedal comes up or its key is struck
+    again, as a piano's does. `grid` puts a played file on the grid:
+    (a, b) in quarter notes, each note's start to the nearest `a` and
+    its end and the pedal's moves to the nearest `b`."""
     d = open(path, "rb").read()
     assert d[:4] == b"MThd", path
     _, count, division = struct.unpack(">HHH", d[8:14])
@@ -128,6 +169,10 @@ def read_midi(path):
         t = d[at + 8:at + 8 + size]
         at += 8 + size
         i, tick, status, held, notes = 0, 0, 0, {}, []
+        down, ringing = False, {}
+
+        def ended(key, start, velocity):
+            notes.append((start / division, (tick - start) / division, key, velocity))
 
         def number():
             nonlocal i
@@ -139,9 +184,15 @@ def read_midi(path):
                 if b < 128:
                     return v
 
+        played = 0
         while i < len(t):
-            tick += number()
+            played += number()
+            tick = played
             b = t[i]
+            if grid:
+                on = b & 0xF0 == 0x90 and t[i + 2] or not b & 0x80 and status & 0xF0 == 0x90 and t[i + 1]
+                step = (grid[0] if on else grid[1]) * division
+                tick = round(round(played / step) * step)
             if b == 0xFF:
                 i += 2
                 size = number()
@@ -160,11 +211,25 @@ def read_midi(path):
                     continue
                 key, value = t[i], t[i + 1]
                 i += 2
-                if kind == 0x90 and value:
+                if kind == 0xB0 and key == 64 and pedal:
+                    down = value >= 64
+                    if not down:
+                        for k in sorted(ringing):
+                            ended(k, *ringing.pop(k))
+                elif kind == 0x90 and value:
+                    if key in ringing:
+                        ended(key, *ringing.pop(key))
                     held.setdefault(key, []).append((tick, value))
                 elif kind in (0x80, 0x90) and held.get(key):
                     start, velocity = held[key].pop(0)
-                    notes.append((start / division, (tick - start) / division, key, velocity))
+                    if grid:
+                        tick = max(tick, start + round(grid[1] * division))
+                    if down:
+                        ringing[key] = (start, velocity)
+                    else:
+                        ended(key, start, velocity)
+        for k in sorted(ringing):
+            ended(k, *ringing.pop(k))
         tracks.append(sorted(notes))
     return tracks
 
@@ -247,24 +312,34 @@ class Sample:
     `attack` seconds, with the last `fade` of it crossfaded into what
     is before the loop; without it the note is `length` seconds, faded
     out over its last third. `skip` starts later in the file than its
-    first sound.
+    first sound, which is where it first passes `onset` of its peak:
+    more for a quiet recording with a noise before the note.
+
+    `struck` is for a string struck and left to ring, a piano's:
+    (the module's tick in seconds, a depth in dB). The recording's own
+    fall up to `attack` is divided out of it, down to `depth` at most,
+    and kept as `shape`, points of a volume envelope in ticks, which
+    goes on down after the loop's start at the rate the recording
+    falls at. So the loop is stored near full scale, where 8 bits are
+    enough, and the envelope is the decay (`Instrument(damp=)`).
     """
 
     def __init__(self, name, path, note, rate, attack=0.25, loop=None, fade=None, length=None, skip=0.0, gain=1.0,
-                 tune=True, bright=0.0, made=None):
+                 tune=True, bright=0.0, made=None, struck=None, channel=None, onset=0.02):
         self.name = name
         self.note = note
         self.loop_match = 1.0
+        self.shape = None
         if made is not None:
             # Not a recording to be cut: the samples, their rate, their
             # pitch and, where they have one, their loop (`soundfont`,
             # `wave`).
             x, src, self.hz, given = made
         else:
-            x, src = read_wav(fetch(path))
+            x, src = read_wav(fetch(path), channel)
             given = None
             peak = np.abs(x).max()
-            first = int(np.argmax(np.abs(x) > peak * 0.02))
+            first = int(np.argmax(np.abs(x) > peak * onset))
             x = x[max(0, first - int(0.004 * src)) + int(skip * src):]
             # The pitch, where the note has settled.
             a = int((attack if loop else 0.03) * src)
@@ -276,9 +351,14 @@ class Sample:
         if bright:
             # More of what is over 2 kHz, by so many dB: the clock's
             # buzzer and its small speaker have little under it.
-            k = math.exp(-2 * math.pi * 2000 / src)
+            # Or (dB, Hz), for another corner than 2 kHz.
+            lift, corner = bright if isinstance(bright, tuple) else (bright, 2000)
+            k = math.exp(-2 * math.pi * corner / src)
             under = lfilter([1 - k], [1, -k], x)
-            x = under + (x - under) * 10 ** (bright / 20)
+            x = under + (x - under) * 10 ** (lift / 20)
+        if struck:
+            self.whole = (x, src)
+            x = self.flatten(x, src, attack, *struck)
         if rate != src:
             g = math.gcd(int(rate), int(src))
             x = resample_poly(x, rate // g, src // g)
@@ -293,6 +373,8 @@ class Sample:
         elif loop:
             x, self.loop_start = self.make_loop(x, rate, attack, loop, fade or min(loop / 2, 0.25))
             self.loop_len = len(x) - self.loop_start
+            if struck:
+                self.ring_on(x)
         elif length is None:
             self.loop_start = self.loop_len = 0
         else:
@@ -361,6 +443,73 @@ class Sample:
         x *= np.exp(-6.9 * np.arange(n) / rate / decay)
         return cls(name, None, note, rate, made=(x, rate, midi_hz(note), None))
 
+    def flatten(self, x, rate, attack, tick, depth):
+        """Take the recording's fall to `attack` out of it and into
+        `shape`; see the class. What follows the loop's start is
+        `ring_on`'s, once there is a loop to measure."""
+        hop = max(1, int(0.005 * rate))
+        half = int(0.015 * rate)
+        power = np.concatenate(([0.0], np.cumsum(x * x)))
+        centres = np.arange(0, len(x), hop)
+        lo, hi = np.maximum(centres - half, 0), np.minimum(centres + half, len(x))
+        db = 10 * np.log10((power[hi] - power[lo]) / (hi - lo) + 1e-12)
+        top = int(np.argmax(db[:int(0.2 * rate / hop)]))
+        # The level, 5 ms at a time, from its top and never rising: a
+        # piano's strings beat, and an envelope cannot follow that.
+        loudest = float(db[top])
+        db = np.minimum.accumulate(np.where(np.arange(len(db)) < top, loudest, db)) - loudest
+
+        def at(seconds):
+            return float(db[min(len(db) - 1, int(seconds * rate / hop))])
+
+        # How fast it dies once it has settled, in dB a second.
+        a, b = int(attack * rate / hop), min(len(db), int((attack + 2.0) * rate / hop))
+        slope = -float(np.polyfit(np.arange(a, b) * hop / rate, db[a:b], 1)[0])
+        self.fall = min(max(slope, 3.0), 20.0)
+        # The share of the fall the envelope takes while the recording
+        # lasts: all of it, if that is no deeper than `depth`.
+        share = min(1.0, depth / max(-at(attack), 1e-6))
+        first = max(1, round(top * hop / rate / tick))
+        last = round(attack / tick)
+        ticks = sorted({first + round((last - first) * f) for f in (0.0, 0.1, 0.22, 0.4, 0.65, 1.0)})
+        points = [(0, 64)]
+        for t in ticks:
+            level = max(1, min(points[-1][1], round(64 * 10 ** (share * at(t * tick) / 20))))
+            points.append((t, level))
+        gain = np.interp(np.arange(len(x)) / rate / tick, [p[0] for p in points], [p[1] / 64 for p in points])
+        self.shape, self.tick = points, tick
+        self.decay = (db, hop / rate / tick, loudest, float(db[int(0.2 * rate / hop):].min()) + 10)
+        return x / gain
+
+    def ring_on(self, x):
+        """The envelope after the loop's start: the level the recording
+        has at each moment, over the level the loop is kept at. Its
+        points are where that halves, by the recording for as far as it
+        is above its noise and then at the rate it was falling at."""
+        db, ticks, loudest, floor = self.decay
+        loop = 10 * math.log10(float((x[self.loop_start:] ** 2).mean()) + 1e-12) - loudest
+        points = self.shape
+        t = float(points[-1][0])
+        was = float(db[min(len(db) - 1, int(t / ticks))])
+        # A couple of ticks for the step from what the envelope was at
+        # to what the loop asks for: the loop is levelled, and is not
+        # quite as loud as the stretch before it.
+        level = max(1, min(64, round(64 * 10 ** ((was - loop) / 20))))
+        t += 3
+        points.append((round(t), level))
+        while len(points) < 12:
+            level = level // 2 if len(points) < 11 else 0
+            want = loop + 20 * math.log10(max(level, 0.5) / 64)
+            under = np.nonzero(db <= want)[0]
+            if want > floor and len(under) and under[0] * ticks > t:
+                t = under[0] * ticks
+            else:
+                t += max(1.0, (was - want) / self.fall / self.tick)
+            was = want
+            points.append((round(t), level))
+            if not level:
+                break
+
     def make_loop(self, x, rate, attack, loop, fade):
         s = int(attack * rate)
         f = int(fade * rate)
@@ -405,11 +554,16 @@ class Instrument:
     note takes to die away after its key-off (0 for a note that is
     never held: it rings to its end), `rise` the ticks it takes to
     come up, for a sample cut from the middle of a note. `vibrato` is the instrument's own,
-    (sweep, depth, rate) as FastTracker has them."""
+    (sweep, depth, rate) as FastTracker has them. `damp` is for a
+    `struck` sample: its envelope is the sample's `shape`, which runs
+    to nothing whether the key is held or not, and a key-off is the
+    damper, the ticks the note takes to fade."""
 
-    def __init__(self, sample, release=0, rise=0, volume=64, vibrato=None, transpose=0, fall=None):
+    def __init__(self, sample, release=0, rise=0, volume=64, vibrato=None, transpose=0, fall=None, damp=0):
+        assert not damp or (sample.shape and not release), f"{sample.name}: damp is for a struck sample"
         self.sample = sample
         self.release = release
+        self.damp = damp
         self.rise = rise
         # (ticks, level): a held note falls to `level` of 64 over
         # `ticks` and stays there, as a plucked or struck one would.
@@ -525,7 +679,11 @@ class Module:
             head = bytearray()
             head += struct.pack("<I", 263) + s.name.encode("ascii")[:22].ljust(22) + b"\0" + struct.pack("<H", 1)
             head += struct.pack("<I", 40) + bytes(96)
-            if ins.release:
+            if ins.damp:
+                # No sustain point: the envelope is the string dying
+                # away, and the key-off's fade the damper.
+                points, sustain, kind, fadeout = s.shape, 0, 1, min(0xFFF, round(32768 / ins.damp))
+            elif ins.release:
                 # Held at full level; the key-off lets the line down.
                 points = [(0, 0), (ins.rise, 64)] if ins.rise else [(0, 64)]
                 if ins.fall:
@@ -592,7 +750,7 @@ class Line:
             if tick:
                 c[3], c[4] = 0xE, 0xD0 | tick
         self.started = row
-        if ins.release:
+        if ins.release or ins.damp:
             self.off(at + length)
 
     def off(self, at):
@@ -647,11 +805,11 @@ class Voices:
 
     def span(self, at, length, pitch, ins):
         rows = self.m.row_seconds(at)
-        if ins.release:
+        if ins.release or ins.damp:
             # The channel is the note's to its end, and to the row
             # after if it is let go in the middle of one.
             end = math.ceil(round((at + length) * self.m.speed) / self.m.speed - 1e-9)
-            return end, end + ins.release / self.m.speed
+            return end, end + (ins.release or ins.damp) / self.m.speed
         ring = ins.sample.ring * midi_hz(ins.sample.note) / midi_hz(pitch + ins.transpose)
         return at + min(length, 1.0), at + ring / rows
 
@@ -780,6 +938,8 @@ def main():
         rel, fine = i.tuning()
         loop = f"loop {s.loop_len} ({s.loop_match:.3f})" if s.loop_len else "no loop"
         print(f"  {i.number:2} {s.name:12} {len(s.data):6} at {s.rate}, {s.hz:7.1f} Hz, {loop}, rms {s.rms:.2f}, rel {rel} fine {fine}")
+        if s.shape:
+            print("     falls " + " ".join(f"{t}:{level}" for t, level in s.shape) + f", then {s.fall:.1f} dB a second")
 
 
 if __name__ == "__main__":

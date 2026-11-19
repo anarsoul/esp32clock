@@ -10144,3 +10144,306 @@ the clock has saved with the beeps, the beeps are what it has.
 **Verified** (the user, 2026-11-19): white-clock updated over the air
 to `v0.4-109-gb651296`, packs made on the pack maker's page and
 uploaded: "Tested on white-clock, works as expected."
+
+## "Suspended Seconds", a module of the user's own piano tune — built 2026-11-19, in the default packs, heard on a buzzer and a speaker the same day: verified
+
+The user: "Let's build a mod out of Csus2_nov19.mid. This is my own
+tune, it is written for piano. Pay attention to velocity and sustain
+pedal - these are important. The tune loops naturally. Suggest a name
+for it." Then, the same day: "Second Thoughts" was good, and after it
+"Let's call the tune \"Suspended Seconds\" instead"; "I play it with
+\"Grand Concert Piano\" setting on my Roland electric piano";
+"Copyright to this tune belongs to me. Re-distribution outside of
+onebitdawn clip pack is not allowed."
+
+**The licence.** The tune, its MIDI file and the module made of it
+are the user's and not under the project's licence: they may not be
+distributed apart from onebitdawn's clip pack. The script
+`mods/src/suspended_seconds.py` says so at its top; `clips/README.md`
+must when the clip goes into the pack. Nothing is committed: whether
+the MIDI file and the module belong in a public repository is the
+user's to say.
+
+**The file.** One piano track, 96 beats at 120 to the minute, 48 s;
+132 notes from B2 to F6, velocities 29 to 93; the first 64 beats on
+the grid, the rest as played (onsets some hundredths of a beat off
+it, which is kept). The pedal (controller 64) is down nearly
+throughout and lifted for an eighth of a beat at each change of
+harmony, every eight beats at first, then four, then two; it is up
+from beat 95.75 and the last note is let go at 96, so the end is
+dry and the tune goes round to its first bar. `Csus2_nov19.mid` is
+copied to `mods/src/suspended_seconds.mid`; the user's file is where
+it was.
+
+**What was built.**
+
+- `mkxm.read_midi(path, pedal=True)`: a note let go with the pedal
+  down lasts until the pedal comes up (a value under 64) or its key
+  is struck again. Without the argument it reads as before: the four
+  Grieg modules come out of the changed script byte for byte.
+- A struck string in the script (`Sample(struck=)`,
+  `Instrument(damp=)`). No recording is kept whole (a held bass note
+  is ten seconds): the first 0.45 to 0.75 s and a loop of a third of
+  a second after it, and the instrument's volume envelope is the
+  decay. The recording's own fall, 10 to 20 dB in its first half
+  second, is divided out of the sample down to a quarter and put in
+  the envelope's first points, so the loop is kept at 8 bits near
+  full scale and not at four; after the loop's start the envelope
+  halves where the recording halves, measured against the level the
+  loop came out at. The envelope has no sustain point: it runs
+  whether the key is held or not, as a string does, and a key-off
+  (the key up with the pedal up, or the pedal coming up) is the
+  damper, the instrument's fade, 125 ms. The player had both already;
+  nothing in `xm.rs` changed.
+- Velocity is the note's volume, `64 (v / 93)^1.5`: 29 is 15 dB under
+  93.
+- Twelve ticks a row, a row a sixteenth, tempo 240: a tick is 10.4
+  ms, which is what a played onset (ED) and a key-off (K) are rounded
+  to. 384 rows in six patterns, played round from the top; the last
+  key-offs are held inside the last row.
+- Ten channels: nine notes at the most are sounding at once with
+  their dampers, and `Voices` gives each a channel where nothing
+  sounds. No note is without a channel and none cuts another.
+- Three kits, for the user's ear (`scripts/mkxm.py
+  mods/src/suspended_seconds.py out.xm <kit>`):
+
+| kit | the piano | the module | the clip |
+| --- | --- | --- | --- |
+| `grand` (the default) | MuseScore General's grand (`xm/sf2/`, MIT; FluidR3's), its loud layer, eight recordings | 157 114 bytes | 155 014 |
+| `layers` | the same, with its soft layer under the notes below velocity 56 | 304 412 | 300 528 |
+| `upright` | VSCO 2 CE's upright (`Keys/Upright Nr1`, CC0), its loud layer, every C and G from C3 to G6 | 156 866 | 154 766 |
+
+- The font's grand is a dry one: from its middle up a note is 30 dB
+  down in a second and 45 in a second and a half, which leaves the
+  pedal nothing to hold. In the two grand kits a note in its loop
+  falls no faster than 9 dB a second (`RING` in the tune's file); the
+  first half second is the recording's. This is a choice made without
+  ears. The upright rings as recorded.
+- Each has 6 dB more of what is over 2 kHz, as the Grieg kits have 10.
+- The font's licence asks for its notices in a derivative work
+  (`xm/sf2/MuseScore_General_License.md`): they go in
+  `clips/README.md` if a grand kit is the one kept.
+
+**Measured on the host, 2026-11-19.**
+
+- A reference made from the whole recordings (each note the recording
+  at its pitch and volume, damped where the pedal says) against
+  openmpt123's render of the module, the level 250 ms at a time
+  through the tune: the upright 1.1 dB rms apart, at worst 6.2 under
+  and 1.6 over; the grand, where the reference is within 25 dB of its
+  loudest, 0.8 dB rms, at worst 2.1 under and 4.2 over (its tails are
+  longer than the recordings' on purpose).
+- Each of the upright's instruments alone is within 5 cents of its
+  note in openmpt123's render and within 3 dB of its recording for
+  four seconds, but for where the recording's strings beat.
+- The clock's own mix (`CLIP_RAW`, `dump_the_tune`) is 48.00 s, its
+  peak 0.29 of full scale, and 2.2 to 2.3 dB over openmpt123's as the
+  Grieg modules' are; within 1.2 dB of it a quarter second at a time
+  for the upright. For the grand two onsets are 4 and 5 dB under
+  (beats 9 and 41, a B4 an octave over the bass's B3: the two
+  recordings' partials meet in another phase in each player).
+- The converter names nothing the player lacks.
+- The pedal's lengths, by hand: the first C4 lasts to 7.875, where
+  the pedal first comes up; the G5 of beat 10 to 13, where it is
+  struck again; the last G4 to 96.
+
+**Where it is.** The three kits are `mods/suspended-seconds-grand.xm`,
+`-layers.xm` and `-upright.xm` (the user: "put new mods into mods/"),
+for the pack maker's page; `grand` is the working choice since the
+user plays a grand. Packs of them for a clock are in the ignored
+`packs/`: `suspended-seconds-ab-speaker.bin` and `-ab-buzzer.bin`
+(610 544 bytes, 51 % of the partition, the clips `ss_grand`,
+`ss_layers`, `ss_upright`), and `suspended-seconds.bin` and
+`-speaker.bin`, the grand alone.
+
+**Quantized, and other pianos, 2026-11-19.** The user, having heard
+the three in the page: "Quantize the notes in the tune. Also look for
+more piano samples, I am looking for something softer - neither
+sounds like a real piano."
+
+- `read_midi(grid=(0.5, 0.125))`: each note's start goes to the
+  nearest eighth, its end and the pedal's moves to the nearest
+  thirty-second, in the file's order, so a note and the pedal that
+  lets it go do not change places. All 132 starts are on an eighth
+  (84 on the beat, 48 off it); the furthest moved 0.084 of a beat.
+- What was wrong with the first three, as far as can be said without
+  ears: the loudest layer of each piano, 6 dB more of what is over
+  2 kHz on top, and only the first half second of each recording
+  before a loop a third of a second long, which is a piano's attack
+  and then an organ. The font's grand was the worst of it, dry and
+  given a made-up ring. All three are gone, and with them
+  `Sample.soundfont(whole=)`, the ring's limit and the lift.
+- A real grand: the University of Iowa's Musical Instrument Samples
+  (`theremin.music.uiowa.edu/MISpiano.html`), a Steinway & Sons model
+  B, every note at pp, mf and ff, two microphones 8 inches over the
+  bass and the treble strings, 16 bits. Its page: "freely available
+  on this website and may be downloaded and used for any projects,
+  without restrictions" (Lawrence Fritts, Electronic Music Studios).
+  `mkxm.fetch` takes a URL and `read_wav` an AIFF file and one
+  channel of it: the left microphone under middle C, the right from
+  it up.
+- Its pp is no use: the note is 15 to 25 dB over a rumble that comes
+  before it (pp C4 peaks at 0.006 of full scale). `Sample(onset=)`
+  is where a recording is taken to start, for such a file.
+- Each recording is now kept for 0.7 to 1.5 s before its loop, and
+  the loop is 0.3 to 0.6 s, the best of six lengths tried.
+- The kits now:
+
+| kit | the piano | the module | the clip |
+| --- | --- | --- | --- |
+| `steinway` (the default) | Iowa's Steinway B at mf, nine recordings, C3 to E6, none played more than two semitones off | 285 779 bytes | 283 456 |
+| `upright` | VSCO 2 CE's upright at mf | 258 461 | 256 361 |
+| `soft` | the same at pp | 256 603 | 254 503 |
+
+- Against the reference from the whole recordings, as above: the
+  Steinway 0.7 dB rms, at worst 2.6 under and 3.7 over; the upright
+  1.0, 5.3 under and 2.0 over; the soft upright 1.5, 9.4 under and
+  1.5 over. No note without a channel, none cut. The clock's mix of
+  the Steinway is 48.00 s, its peak 0.39 of full scale. The Grieg
+  modules are still the same files.
+- They are `mods/suspended-seconds-steinway.xm`, `-upright.xm` and
+  `-soft.xm`, and the packs `packs/suspended-seconds-ab-speaker.bin`
+  and `-ab-buzzer.bin` (794 556 bytes, 67 % of the partition; the
+  clips `ss_steinway`, `ss_upright`, `ss_soft`). The tables and the
+  paragraph "Where it is" above are the first three kits'.
+- With no lift these will be duller on the buzzer than the Grieg
+  modules; that is for the ear on a clock.
+
+**Dull, and clicks, 2026-11-19.** The user, of the second three in
+the page: the soft upright "is closer to what I want to hear,
+although it is a bit dull - no treble at all. What is sampling rate
+for the samples? Is it 31250Hz?"; the Steinway "also not bad, but
+same dullness"; the upright "also not bad"; and "There are subtle
+clicks between the fast notes - issue with samples or another bug in
+player?"
+
+- The rates are 16 000 for the two lowest recordings and 22 050 for
+  the rest; the clock plays at 31 250. They are not what is dull: in
+  a note's first second the recordings themselves have the octave
+  from 2 to 4 kHz 24 to 55 dB under the whole at pp and mf, and what
+  is over 4 kHz 45 dB under or more. A soft piano close to its
+  strings has no treble to keep.
+- The share of the power over 1 kHz and over 2 kHz in openmpt123's
+  render of each kit (Halftime has 5.3 % over 2 kHz, the Grieg kits 8
+  and 13):
+
+| kit | what | over 1 kHz | over 2 kHz |
+| --- | --- | --- | --- |
+| `soft` | the upright, pp | 8.5 % | 1.48 % |
+| `soft-bright` | with 12 dB more of what is over 1 kHz | 15.1 | 2.95 |
+| `upright` | the upright, mf | 19.2 | 4.66 |
+| `upright-bright` | with 10 dB more of what is over 2 kHz | 33.0 | 10.43 |
+| `steinway` | the Steinway, mf | 8.5 | 0.08 |
+| `steinway-ff` | the Steinway, ff | 16.5 | 0.84 |
+| `steinway-bright` | the ff with 12 dB more of what is over 1 kHz | 28.2 | 2.28 |
+
+  A lift on the Steinway's mf does nothing (0.25 % at 12 dB, 0.30 at
+  24: what is up there is not the piano), so its bright kit is its
+  ff. `Sample(bright=(dB, Hz))` is the lift with another corner. All
+  seven are in `mods/` as `suspended-seconds-<kit>.xm`.
+- **The clicks are the limiter**, not the samples and not the player's
+  notes. The clock's mix before the shaping has no step more than
+  three times its surroundings; after it, with either output's
+  defaults, every attack is a step (six to sixteen times), the clip's
+  rms is 6 dB under full scale and its peaks are at the rails: the
+  limiter's gain follows the waveform, a piano's attack is a peak
+  over a quiet ring, and its top is flattened. With the limiter off,
+  `knee=50` (the Steinway's peak in the mix is 49 of those units, the
+  others' 38 to 46), there is no such step and nothing at the rails;
+  the clip is then 19 dB under full scale in rms, 13 dB quieter than
+  with it, and the tune's dynamics are what was written. A gentler
+  limiter (`knee=25,release=12`) still has ten such steps.
+- The samples' first values are at most 11 of 127 (the soft
+  upright's G6 and G4); no fade-in was added.
+- The first three's packs in `packs/` are gone; none was made of
+  these: the choice is by ear in the page, with `knee=50` in a clip's
+  Options.
+
+**The upright, and how loud, 2026-11-19.** The user: "suspended-seconds-upright.xm
+is the one, although it is now rather quiet with knee=50". The kit is
+chosen: VSCO's upright at mf, no lift. Its clip for a speaker, by the
+limiter's settings (a step is a second difference over five times its
+surroundings, 2 ms at a time; the buzzer's figures are 1.7 dB lower
+with the same pattern):
+
+| options | rms | steps | beats 0 to 8 against 72 to 80 |
+| --- | --- | --- | --- |
+| the defaults | -8.0 dBFS | 33 | |
+| `knee=50` | -20.8 | 0 | |
+| `knee=41`, the tune's own peak | -19.1 | 0 | |
+| `knee=41,drive=180` | -16.1 | 0, 0.01 % of the samples clipped | |
+| `knee=12,release=13` | -15.5 | 0 | -15.3, -13.2 |
+| `knee=12,release=14` (any knee to 3) | -15.9 | 0 | -15.3, -13.7 |
+| `knee=8,release=12` | -12.8 | 8 | -14.6, -10.8 |
+| `knee=20,release=14,drive=180` | -13.1 | 9 | |
+
+A limiter that lets go over seconds and not milliseconds does not
+follow a note's attack, so nothing is flattened: it rides the level
+of a passage. `knee=12,release=13` is 5 dB over `knee=50` with no
+step; what it costs is the difference between the tune's quiet first
+half and its loud second, which comes out 2 dB apart, while the notes
+within a phrase keep their velocities. More than that needs the
+attacks cut, which is the click. `packs/suspended-seconds.bin` and
+`-speaker.bin` are the upright with these options.
+
+**The speaker's is settled; the buzzer's, 2026-11-19.** The user:
+"knee=12,release=13 for the speaker for this tune it is. Let's now
+figure it out for the buzzer". The buzzer cannot be judged in the
+page, so four clips for the ear on a clock,
+`packs/suspended-seconds-ab-buzzer.bin` (1 027 827 bytes, 87 % of the
+partition; the buzzer's high-pass, 300 Hz once, in all):
+
+| clip | what | rms | steps | beats 0 to 8, 72 to 80 | over 2 kHz |
+| --- | --- | --- | --- | --- | --- |
+| `ss_clean` | the upright, `knee=12,release=13`, as the speaker's | -16.3 dBFS | 0 | -15.8, -14.9 | 4.9 % |
+| `ss_mid` | `knee=12,release=10` | -11.7 | 5 | -13.6, -9.5 | 5.8 % |
+| `ss_loud` | the buzzer's defaults | -6.7 | 8, 2.4 % of the samples at the rails | -8.1, -6.3 | 5.4 % |
+| `ss_bright` | `upright-bright`, `knee=12,release=10` | about -12 | | | about 11 % |
+
+Also measured: a knee under 12 changes nothing at `release=13`;
+`highpass=500` and `passes=2` cost half a dB and add a point of
+treble; `release=11` has more steps (13) than 10. Not uploaded to a
+clock: white-clock has the local pack and its output on the line.
+
+**In the default packs, 2026-11-19.** The user: "knee=12,release=10
+for the buzzer. Add the tune with these settings to the default
+packs."
+
+- The kit is `upright`, the tune's default now, and the module
+  `mods/suspended-seconds.xm` (258 461 bytes); the six other kits'
+  modules are gone from `mods/` and are a command away
+  (`scripts/mkxm.py mods/src/suspended_seconds.py out.xm <kit>`).
+- `clips/suspended_seconds.xmc` (256 361 bytes) is the buzzer's,
+  `knee=12,release=10`, the default pack's eighth clip:
+  `scripts/clips.sh`, the CI's and the release's lists,
+  `core/build.rs`'s comment, the pack maker's tests (the clip byte
+  for byte from the module, the pack's names and labels).
+  `scripts/speaker-clips.sh` makes the speaker's from the module with
+  `knee=12,release=13`.
+- `clips/README.md` has the tune's terms (the user's copyright, all
+  rights reserved, not to be distributed apart from the clip pack)
+  and the piano's source; `AGENTS.md`, the changelog, the manual and
+  the readme say eight.
+- The default pack is 727 891 bytes, 61 % of the partition (471 466
+  and 39 % before), for a buzzer and for a speaker. The parser's test
+  reads it; the pack maker's 14 tests and its clippy pass; the 186
+  host tests pass with the eight built in.
+- The MIDI file and the module are in the tree for the tests and the
+  speaker's pack to be made from, under the same terms as the clip.
+
+**On the clocks, 2026-11-19.** Both updated over the LAN to this
+tree, `v0.4-113-g53ddf77-dirty` (the ramp in the player, which a
+clock at `v0.4-109` lacked, is what the piano's envelopes need).
+white-clock: `packs/clips-default-speaker.bin`, 727 891 bytes, its
+output on the line; its local clips are off it, since the local pack
+and this clip together are over the partition. martin-clock (the
+user asked): the local buzzer pack with the new clip and without
+`mountain_king` and `morning_mood_chip`, the user's choice of what
+goes, `packs/clips-local-martin.bin`, 12 clips, 1 169 969 bytes, 99 %
+of the partition; its alarm is `morning_mood` still. Nothing was
+played by this session on either.
+
+**Heard, 2026-11-19.** The user, with the packs on white-clock and
+martin-clock: "Heard on a buzzer and a speaker. All good." The
+processor's share on a clock was not measured (ten channels; the
+Mountain King's eighteen were 48 %).

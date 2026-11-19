@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 # Copyright (c) 2026 Vasily Khoruzhick
 # Make the default clip pack for a clock with a speaker in the buzzer's
-# place (speaker-mod/README.md): the seven clips of clips/, the
+# place (speaker-mod/README.md): the eight clips of clips/, the
 # XM modules converted again from mods/ with the bass left in (a high-pass
 # at 100 Hz, once) and the limiter letting go over 128 ms and not 16:
 # as hard a drive as the buzzer's clips have, but a gain that follows
@@ -17,6 +17,11 @@
 # full scale, the user's choice by ear of 2026-11-16 over the hard
 # limiter, which the buzzer's pack has. The knee wants a firmware of
 # that day or later; an older one limits hard.
+# Suspended Seconds is a piano, whose attacks a limiter that follows
+# the waveform flattens into clicks: its limiter lets go over a
+# second (release=13) from a low knee, so it rides a passage's level
+# and not a note's (the user's choice, 2026-11-19; the buzzer's clip
+# has release=10).
 # The pack maker's `--sound-output speaker` is these settings, so the
 # pack is the default one's sources through it: packs/clips-default-speaker.bin,
 # under the default pack's names, so a clock's melody setting means the
@@ -30,4 +35,5 @@ pack=packs/clips-default-speaker.bin
 cargo pack -o "$pack" --sound-output speaker clips/trantor.bpr \
     "mods/Orion - Nero Burning ROM v5.5.7.8kg.xm:name=halftime" mods/Orion-Nero6.3.0.2.xm:name=keygen \
     mods/nq-synchronization.pt3:restart,name=synchronization \
-    mods/grieg-morning-bright.xm mods/grieg-morning-chip.xm mods/grieg-mountain-king-bright.xm
+    mods/grieg-morning-bright.xm mods/grieg-morning-chip.xm mods/grieg-mountain-king-bright.xm \
+    mods/suspended-seconds.xm:knee=12,release=13

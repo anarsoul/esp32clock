@@ -33,6 +33,7 @@ fn the_modules_come_out_as_the_clips_in_the_repository() {
         ("mods/grieg-morning-bright.xm", "clips/morning_mood.xmc"),
         ("mods/grieg-morning-chip.xm", "clips/morning_mood_chip.xmc"),
         ("mods/grieg-mountain-king-bright.xm", "clips/mountain_king.xmc"),
+        ("mods/suspended-seconds.xm:knee=12,release=10", "clips/suspended_seconds.xmc"),
         ("tools/pack/tests/data/tiny.mod", "tools/pack/tests/data/tiny-mod.xmc"),
         ("tools/pack/tests/data/tiny.s3m", "tools/pack/tests/data/tiny-s3m.xmc"),
         ("tools/pack/tests/data/tiny.sid", "tools/pack/tests/data/tiny.sidc"),
@@ -53,6 +54,7 @@ fn a_clip_made_already_goes_in_as_it_is() {
         "clips/morning_mood.xmc",
         "clips/morning_mood_chip.xmc",
         "clips/mountain_king.xmc",
+        "clips/suspended_seconds.xmc",
     ] {
         let made = made(clip, Output::Speaker);
         assert!(made.data == repo(clip) && made.loops && made.notes.is_empty(), "{clip}");
@@ -70,13 +72,14 @@ fn the_default_pack_from_its_sources() {
         made("mods/grieg-morning-bright.xm", Output::Buzzer),
         made("mods/grieg-morning-chip.xm", Output::Buzzer),
         made("mods/grieg-mountain-king-bright.xm", Output::Buzzer),
+        made("mods/suspended-seconds.xm:knee=12,release=10", Output::Buzzer),
     ];
     let pack = build(&clips).unwrap();
     let pack = Pack::parse(&pack).unwrap();
     let names: Vec<&str> = (0..pack.count()).map(|k| pack.clip(k).unwrap().name).collect();
-    assert_eq!(names, ["trantor", "halftime", "keygen", "synchronization", "morning_mood", "morning_mood_chip", "mountain_king"]);
+    assert_eq!(names, ["trantor", "halftime", "keygen", "synchronization", "morning_mood", "morning_mood_chip", "mountain_king", "suspended_seconds"]);
     let labels: Vec<&str> = (0..pack.count()).map(|k| pack.clip(k).unwrap().label).collect();
-    assert_eq!(labels, ["Trantor", "Halftime", "Keygen", "Synchronization", "Morning Mood", "Morning Mood Chip", "Mountain King"]);
+    assert_eq!(labels, ["Trantor", "Halftime", "Keygen", "Synchronization", "Morning Mood", "Morning Mood Chip", "Mountain King", "Suspended Seconds"]);
     // A speaker's clips are others, of the same lengths: the shaping
     // is the header's.
     for (arg, k) in [("mods/Orion-Nero6.3.0.2.xm:name=keygen", 2), ("mods/nq-synchronization.pt3:restart,name=synchronization", 3)] {

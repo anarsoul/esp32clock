@@ -52,7 +52,7 @@ from `http://<ip>/update`; its settings survive the update.
   partition, `clips`: half a megabyte from each of the two firmware
   slots and the 128 KB at the end of the flash that nothing used. A pack is made with `onebitdawn-pack` or on its web page (up to
   16 clips), checked by a SHA-256 at upload and at every boot, and
-  played in place from the flash. The default pack, the seven clips
+  played in place from the flash. The default pack, the eight clips
   below, is `onebitdawn-clips-<tag>.bin` on a release, and the web
   installer writes it.
 - **A clock flashed before this release has the old partition table,
@@ -92,7 +92,11 @@ from `http://<ip>/update`; its settings survive the update.
 - Three more clips in the default pack, made for this project from
   Grieg's first *Peer Gynt* suite: "Morning Mood" with an orchestra's
   instruments and again as a chiptune, and "Mountain King" (In the
-  Hall of the Mountain King). The pack is seven clips and 471 KB.
+  Hall of the Mountain King).
+- An eighth, "Suspended Seconds", a piano tune by Vasily Khoruzhick
+  written for the clock, played with its velocities and its sustain
+  pedal. The tune is its composer's and not under the project's
+  licence (`clips/README.md`). The pack is eight clips and 728 KB.
 - The alarm sound is stored by its name and no longer by its place in
   the list: an alarm keeps its clip through a new clip pack that still
   has it, in whatever order, and through a firmware with more note

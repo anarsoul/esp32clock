@@ -56,7 +56,10 @@ host and the browser, over `core`. `CLAUDE.md` is a symlink to this file; edit t
   PT3 module that is here with his permission (the user asked him,
   2026-11-16); the modules' sources are in `mods/`. They
   are other people's music, not under the project's licence;
-  `clips/README.md` credits each and must go on doing so. The other
+  `clips/README.md` credits each and must go on doing so.
+  "Suspended Seconds" is the user's own piano tune and not under the
+  project's licence either: his copyright, not to be distributed
+  apart from onebitdawn's clip pack. The other
   three are ours, Grieg's Morning (twice) and In the Hall of the
   Mountain King as modules `scripts/mkxm.py` writes from `mods/src/`,
   with CC0 recordings in them (`agents/clips.md`). A clip
