@@ -359,6 +359,12 @@ nothing for PCM (HISTORY.md, 2026-11-16).
   all on 2026-11-18).
 - It mixes at 32 kHz and averages to 16 kHz (8 if the clip asks; at
   62.5 kHz to 31.25 for a clip at `clip::FAST_HZ`).
+- No step in the mix but a note's own attack: a level a tick changed
+  is reached over about 2 ms (`RAMP_PER_SECOND`), and what a channel
+  was sounding when a new note took it is carried on in `Tune::cut`
+  and dies away in about 5 ms (`CUT_DECAY`). A note starts at its
+  level at once. The test is
+  `a_level_is_ramped_to_and_a_cut_note_dies_away`.
 - Then a high-pass and a hard limiter, as `tools/pack/src/wav.rs` gives
   PCM (`shape.rs`), their settings read from the clip's header; the
   converter works out the filter's coefficients.

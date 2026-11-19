@@ -31,7 +31,10 @@
 //! module uses beyond that.
 //!
 //! The channels are mixed at four times the output rate with linear
-//! interpolation and averaged down. Then the tune gets what the PCM
+//! interpolation and averaged down. A level moves to where a tick put
+//! it over a couple of milliseconds, and a note cut by the next on its
+//! channel dies away over a few, as FastTracker's do: a step in the
+//! mix is a click. Then the tune gets what the PCM
 //! clips get on the host in `tools/pack/src/wav.rs`, since the buzzer is
 //! the same: the bass cut by a high-pass and the level pushed hard into
 //! a limiter. How much bass and how hard are the clip's to say, in its
@@ -69,6 +72,13 @@ const PATTERN_ENTRY: usize = 6;
 const INSTRUMENT_ENTRY: usize = 80;
 /// Points of a volume envelope.
 const ENVELOPE_POINTS: usize = 12;
+/// A level the tick changed is reached over a 512th of a second, about
+/// 2 ms, and not within one mixed sample: FastTracker ramps its
+/// volumes too, and a step in level is a click.
+const RAMP_PER_SECOND: u32 = 512;
+/// What a cut note left in the mix loses a 64th of each mixed sample:
+/// gone in about 5 ms.
+const CUT_DECAY: i32 = 64;
 /// Channels played; the converter refuses a module with more. A
 /// channel that is not sounding costs the mixer nothing, one that is
 /// about as much as any other, so a module's cost follows its voices.
@@ -259,8 +269,15 @@ struct Channel {
     sounding: i32,
     /// 0 to 64.
     volume: u8,
-    /// What the mixer multiplies by, 0 to 4096.
+    /// What the mixer is to multiply by, 0 to 4096, and what it does
+    /// multiply by for now, in 256ths of that: the level gets to where
+    /// a tick put it over `ramp` mixed samples, `gain_step` each, and a
+    /// note that has just begun (`fresh`) starts at its level.
     amp: i32,
+    gain: i32,
+    gain_step: i32,
+    ramp: u32,
+    fresh: bool,
     key_on: bool,
     envelope_frame: u32,
     fade: u32,
@@ -310,6 +327,9 @@ pub struct Tune<'a> {
     /// The tick being played is the tune's last.
     last: bool,
     ended: bool,
+    /// What the notes cut short were adding to the mix when they were
+    /// cut, on its way to nothing (`sounding_now`).
+    cut: i32,
     channel: [Channel; MAX_CHANNELS],
     /// The high-pass and the limiter the mix ends in.
     shaper: Shaper,
@@ -347,6 +367,7 @@ impl<'a> Tune<'a> {
             looping: false,
             last: false,
             ended: false,
+            cut: 0,
             channel: [Channel::default(); MAX_CHANNELS],
             mix_hz: if flags & FAST != 0 { FAST_MIX_HZ } else { MIX_HZ },
             shaper: Shaper::new(byte(data, 10), byte(data, 11), octaves, core::array::from_fn(|i| word(data, 18 + 2 * i) as i16), byte(data, 16), flags & WIDE != 0, byte(data, 29)),
@@ -502,6 +523,7 @@ impl<'a> Tune<'a> {
             self.channel[c].instrument = cell.instrument;
         }
         let instrument = self.instrument(self.channel[c].instrument);
+        let cut = self.sounding_now(c);
         let ch = &mut self.channel[c];
         if cell.instrument != 0 {
             ch.volume = instrument.map_or(0, |i| i.volume());
@@ -519,6 +541,8 @@ impl<'a> Tune<'a> {
             if cell.slides_to_note() && ch.playing {
                 ch.target = period;
             } else if let Some(i) = instrument {
+                self.cut += cut;
+                ch.fresh = true;
                 (ch.data, ch.len, ch.loop_start, ch.loop_len) = i.sample();
                 ch.period = period;
                 ch.target = period;
@@ -530,6 +554,7 @@ impl<'a> Tune<'a> {
                 ch.auto_pos = 0;
                 ch.auto_depth = if i.auto_vibrato().0 == 0 { i.auto_vibrato().1 << 8 } else { 0 };
             } else {
+                self.cut += cut;
                 ch.playing = false;
             }
         }
@@ -539,6 +564,19 @@ impl<'a> Tune<'a> {
             9 => ch.volume = (ch.volume + (cell.volume & 0xF)).min(64),
             _ => {}
         }
+    }
+
+    /// What the channel adds to the mix at this moment. A note that
+    /// starts where another is sounding takes its place within a
+    /// sample, which is a step in the mix and a click; the step is
+    /// carried on in `cut` and dies away there.
+    fn sounding_now(&self, c: usize) -> i32 {
+        let ch = &self.channel[c];
+        if !ch.playing || ch.pos >= ch.len {
+            return 0;
+        }
+        let sample = byte(self.d, (ch.data + ch.pos) as usize) as i8 as i32 * 256;
+        (sample * (ch.gain >> 8)) >> 12
     }
 
     fn key_off(ch: &mut Channel, instrument: Option<Instrument>) {
@@ -610,6 +648,7 @@ impl<'a> Tune<'a> {
             self.trigger(c);
         }
         let instrument = self.instrument(self.channel[c].instrument);
+        let cut = self.sounding_now(c);
         let ch = &mut self.channel[c];
         let lo = cell.param & 0xF;
         match cell.volume >> 4 {
@@ -636,6 +675,8 @@ impl<'a> Tune<'a> {
             0xA => Self::volume_slide(ch),
             0xE => match cell.param >> 4 {
                 9 if lo != 0 && tick % lo == 0 => {
+                    self.cut += cut;
+                    ch.fresh = true;
                     ch.pos = 0;
                     ch.frac = 0;
                     ch.playing = ch.len > 0;
@@ -729,6 +770,13 @@ impl<'a> Tune<'a> {
             None => 64,
         };
         ch.amp = ((ch.volume as u32 * level * global / 64) * ch.fade / FADE_FULL) as i32;
+        let gain = ch.amp << 8;
+        if ch.fresh || !ch.playing {
+            (ch.gain, ch.ramp, ch.fresh) = (gain, 0, false);
+        } else if ch.gain != gain {
+            ch.ramp = (mix_hz / RAMP_PER_SECOND).max(1);
+            ch.gain_step = (gain - ch.gain) / ch.ramp as i32;
+        }
         // The instrument's vibrato: a sine that grows to its depth over
         // the sweep, whatever the pattern says.
         let mut auto = 0;
@@ -754,7 +802,11 @@ impl<'a> Tune<'a> {
     /// One mixed sample: the channels' sum, 32768 for one channel at
     /// full level.
     fn mix(&mut self) -> i32 {
-        let mut sum = 0;
+        // What the notes that were cut short left behind, dying away.
+        let mut sum = self.cut;
+        if self.cut != 0 {
+            self.cut -= self.cut / CUT_DECAY + self.cut.signum();
+        }
         for ch in &mut self.channel[..self.channels] {
             if !ch.playing {
                 continue;
@@ -766,7 +818,11 @@ impl<'a> Tune<'a> {
             }
             let (a, b) = (at(ch.pos), if after < ch.len { at(after) } else { 0 });
             let sample = a * 256 + (b - a) * (ch.frac >> 8) as i32;
-            sum += (sample * ch.amp) >> 12;
+            if ch.ramp != 0 {
+                ch.ramp -= 1;
+                ch.gain = if ch.ramp == 0 { ch.amp << 8 } else { ch.gain + ch.gain_step };
+            }
+            sum += (sample * (ch.gain >> 8)) >> 12;
             let frac = ch.frac + (ch.step & 0xFFFF);
             ch.frac = frac & 0xFFFF;
             ch.pos = ch.pos.saturating_add((ch.step >> 16) + (frac >> 16));
@@ -1127,6 +1183,36 @@ mod tests {
         // With no envelope a key-off is silence at once.
         let plain = ticks(&module(1, 4, 125, &[0], &[pattern(4, &[(0, (C4, 1, 0, 0, 0)), (1, (0, 0, 0, 0x14, 2))])], &[square(32)]));
         assert_eq!(plain.iter().map(|t| t.1).collect::<Vec<_>>()[..8], [64, 64, 64, 64, 64, 64, 0, 0]);
+    }
+
+    #[test]
+    fn a_level_is_ramped_to_and_a_cut_note_dies_away() {
+        // A sample that is one level throughout: the mix is the gain.
+        let flat = |level: i8| Ins { sample: vec![level; 32], ..square(32) };
+        let full = 127 * 256;
+        // A note, then silence by the volume column, then the level
+        // back, then a note of a silent instrument on top of it.
+        let cells = [(0, (C4, 1, 0, 0, 0)), (1, (0, 0, 0x10, 0, 0)), (2, (0, 0, 0x50, 0, 0)), (3, (C4, 2, 0, 0, 0))];
+        let out = mixed(&module(1, 4, 125, &[0], &[pattern(4, &cells)], &[flat(127), flat(0)]));
+        let row = out.len() / 4;
+        let ramp = (MIX_HZ / RAMP_PER_SECOND) as usize;
+        // The note starts at its level: an attack is not softened.
+        assert_eq!(out[0], full);
+        assert!(out[..row].iter().all(|&s| s == full));
+        // Down to nothing over the ramp, a step a sample, and up again.
+        for (at, from, to) in [(row, full, 0), (2 * row, 0, full)] {
+            let part = &out[at - 1..at + ramp + 1];
+            assert_eq!((part[0], part[ramp + 1]), (from, to));
+            assert!(part.windows(2).all(|w| (w[1] - w[0]).abs() <= full / ramp as i32 + 256), "{part:?}");
+            assert!(part.windows(2).all(|w| (w[1] - w[0]).signum() == (to - from).signum() || w[1] == w[0]));
+        }
+        // The silent note takes the channel within a sample; what was
+        // sounding there is not gone within one.
+        let part = &out[3 * row - 1..3 * row + 16 * CUT_DECAY as usize];
+        assert_eq!(part[0], full);
+        assert!(part.windows(2).all(|w| w[1] <= w[0] && w[0] - w[1] <= full / CUT_DECAY + 1), "{:?}", &part[..8]);
+        assert!(part[CUT_DECAY as usize] < full / 2 && part[CUT_DECAY as usize] > full / 4);
+        assert_eq!(*part.last().unwrap(), 0);
     }
 
     #[test]
