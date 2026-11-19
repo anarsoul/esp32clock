@@ -49,7 +49,7 @@ jobs:
       - name: Test the core crate on the host
         run: cargo host-test
       - name: Test with the clips built in
-        run: ALARM_CLIP=clips/trantor.bpr,clips/halftime.xmc,clips/keygen.xmc,clips/synchronization.pt3c,clips/elysium.xmc cargo host-test
+        run: ALARM_CLIP=clips/trantor.bpr,clips/halftime.xmc,clips/keygen.xmc,clips/synchronization.pt3c cargo host-test
       - name: Build
         run: cargo build --release
       - name: Clippy
@@ -81,7 +81,7 @@ jobs:
           # it too. Checked by the parser the clock reads it with.
           scripts/mkpack.py "images/onebitdawn-clips-${GITHUB_REF_NAME}.bin" \
             clips/trantor.bpr clips/halftime.xmc clips/keygen.xmc \
-            clips/synchronization.pt3c clips/elysium.xmc
+            clips/synchronization.pt3c
           CLIP_PACK_FILE="images/onebitdawn-clips-${GITHUB_REF_NAME}.bin" \
             cargo host-test the_pack_file_parses -- --nocapture
           ls -l images
@@ -123,10 +123,6 @@ jobs:
 
                 espflash write-bin 0x2e0000 onebitdawn-clips-${{ github.ref_name }}.bin
                 espflash reset
-
-            The clip pack is other people's music, some of it for
-            non-commercial use only; for the details see
-            https://github.com/anarsoul/onebitdawn/blob/${{ github.ref_name }}/clips/README.md
 
             A clock flashed before this release has no such partition
             until it is flashed again over USB or from the web installer:

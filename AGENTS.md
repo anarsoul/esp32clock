@@ -51,11 +51,9 @@ of. `CLAUDE.md` is a symlink to this file; edit this one.
 - `clips/` holds the clips of the default clip pack
   (`scripts/clips.sh`, the CI and the release make it): Trantor's title
   music, two of Dualtrax's modules (written for ORiON's key
-  generators, hence the file names), n1k-o's "synchronization", a
+  generators, hence the file names) and n1k-o's "synchronization", a
   PT3 module that is here with his permission (the user asked him,
-  2026-11-16), and Jester's "elysium", a ProTracker module under
-  CC BY-NC-SA (The Mod Archive's licence for it), which is why the
-  pack as a whole is for non-commercial use only; the modules' sources are in `mods/`. They
+  2026-11-16); the modules' sources are in `mods/`. They
   are other people's music, not under the project's licence;
   `clips/README.md` credits each and must go on doing so. A clip
   nobody may redistribute stays in the ignored `wav/`, `tap/`, `sid/`, `pt3/` and `xm/`,

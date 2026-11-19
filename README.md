@@ -283,7 +283,7 @@ SID tunes and ZX Spectrum AY tunes (Pro Tracker 3), the last three
 played by the clock's own players and chip emulations. A clock's clips
 are a clip pack in a flash partition of their own, so they can be
 changed without a new firmware, from `http://<ip>/clips` or with
-`scripts/clips.sh`. The default pack is the five clips in `clips/`,
+`scripts/clips.sh`. The default pack is the four clips in `clips/`,
 and the web installer writes it. They are made for a clock with
 [the buzzer mod](#the-clock-board); a stock board plays them, but not
 well.

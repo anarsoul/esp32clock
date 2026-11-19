@@ -1044,6 +1044,15 @@ Owed: the user's ear on a clock (`melody=elysium`), the processor's
 share while it plays (four channels: under Halftime's, expected).
 The speaker pack of five is on test-clock since 2026-11-18.
 
+**Withdrawn from the pack, 2026-11-19.** The user took Elysium out of
+the default pack and out of the repository the next day: the module
+and its clip are in the ignored `xm/` (`xm/elysium.mod`,
+`xm/elysium.xmc`), the pack is the four again, and with the one clip
+that had a condition on use gone the pack has none; the lists, the
+counts, `clips/README.md`, the release notes and the installer's page
+are as they were before it. `scripts/mod2xm.py` stays. What is owed of
+this section is the converter heard on a clock, with any module.
+
 ## Checks still owed
 
 Built, and by its heading in `HISTORY.md` not yet seen, heard or run

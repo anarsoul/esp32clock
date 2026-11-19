@@ -16,8 +16,8 @@ fn main() {
 /// clips are its clip pack, in the `clips` partition (`pack.rs`,
 /// `scripts/mkpack.py`); building them into the firmware is the older
 /// way, still here for a clock whose partition table has no such
-/// partition. The five of the default pack that way:
-/// `ALARM_CLIP=clips/trantor.bpr,clips/halftime.xmc,clips/keygen.xmc,clips/synchronization.pt3c,clips/elysium.xmc`.
+/// partition. The four of the default pack that way:
+/// `ALARM_CLIP=clips/trantor.bpr,clips/halftime.xmc,clips/keygen.xmc,clips/synchronization.pt3c`.
 const DEFAULT_CLIPS: &str = "";
 
 /// `ALARM_CLIP` names the clips to build in as the last melodies, files

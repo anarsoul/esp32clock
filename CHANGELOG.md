@@ -48,7 +48,7 @@ from `http://<ip>/update`; its settings survive the update.
   partition, `clips`: half a megabyte from each of the two firmware
   slots and the 128 KB at the end of the flash that nothing used. A pack is made with `scripts/mkpack.py` (up to
   16 clips), checked by a SHA-256 at upload and at every boot, and
-  played in place from the flash. The default pack, the five clips
+  played in place from the flash. The default pack, the four clips
   below, is `onebitdawn-clips-<tag>.bin` on a release, and the web
   installer writes it.
 - **A clock flashed before this release has the old partition table,
@@ -114,14 +114,13 @@ from `http://<ip>/update`; its settings survive the update.
   into the new pack. `/api` has a read-only `clips` key, `pack` or
   `builtin`.
 
-- Five more alarm melodies that are not beeps: the title music of
+- Four more alarm melodies that are not beeps: the title music of
   *Trantor: The Last Stormtrooper* by David Whittaker, as the ZX
   Spectrum's speaker played it, two chiptunes by Dualtrax (from
   ORiON's key generators), "Halftime" and "Keygen", played from their tracker modules by a player in the
   firmware, and "Synchronization" by n1k-o, a ZX Spectrum AY tune
   played from its Pro Tracker 3 module by a player and an AY-3-8910
-  in the firmware, here with his permission, and "Elysium" by Jester of Sanity, an Amiga
-  ProTracker module of 1992 (CC BY-NC-SA, from The Mod Archive), played by the module player. They go out of the buzzer pin as a bitstream from I2S (the
+  in the firmware, here with his permission. They go out of the buzzer pin as a bitstream from I2S (the
   modules and PCM clips through its PCM-to-PDM converter, at 256 bits
   a sample; `CLIP_MODULATOR=sd` at build time is a software
   sigma-delta at a lower rate, for a buzzer circuit that asks for

@@ -43,7 +43,7 @@ jobs:
       # The older way, the clips built into the firmware: the players'
       # tests over the repository's clips run only with clips built in.
       - name: Test with the clips built in
-        run: ALARM_CLIP=clips/trantor.bpr,clips/halftime.xmc,clips/keygen.xmc,clips/synchronization.pt3c,clips/elysium.xmc cargo host-test
+        run: ALARM_CLIP=clips/trantor.bpr,clips/halftime.xmc,clips/keygen.xmc,clips/synchronization.pt3c cargo host-test
       - uses: actions/upload-artifact@v6
         with:
           name: onebitdawn-clips-${{ github.sha }}
