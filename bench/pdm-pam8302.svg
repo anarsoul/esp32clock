@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="620" viewBox="0 0 1200 620" font-family="DejaVu Sans, Liberation Sans, Arial, sans-serif">
+  <rect width="1200" height="620" fill="#ffffff"/>
+  <text x="40" y="44" font-size="24" font-weight="bold" fill="#111">PDM on GPIO20 into a CJMCU-832 (PAM8302A)</text>
+
+  <g stroke="#111" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <!-- signal line -->
+    <path d="M126 220 H200 M300 220 H460 M560 220 H900"/>
+    <!-- R1, R2 -->
+    <rect x="200" y="206" width="100" height="28"/>
+    <rect x="460" y="206" width="100" height="28"/>
+    <!-- C1 -->
+    <path d="M380 220 V320 M362 320 H398 M362 332 H398 M380 332 V440"/>
+    <!-- C2 -->
+    <path d="M640 220 V320 M622 320 H658 M622 332 H658 M640 332 V440"/>
+    <!-- R3 -->
+    <path d="M760 220 V280 M760 380 V440"/>
+    <rect x="746" y="280" width="28" height="100"/>
+    <!-- ground rail -->
+    <path d="M126 440 H900"/>
+    <!-- module -->
+    <rect x="900" y="170" width="250" height="320" rx="8"/>
+    <!-- terminals -->
+    <circle cx="120" cy="220" r="6" fill="#fff"/>
+    <circle cx="120" cy="440" r="6" fill="#fff"/>
+  </g>
+
+  <g fill="#111">
+    <circle cx="380" cy="220" r="5"/>
+    <circle cx="640" cy="220" r="5"/>
+    <circle cx="760" cy="220" r="5"/>
+    <circle cx="380" cy="440" r="5"/>
+    <circle cx="640" cy="440" r="5"/>
+    <circle cx="760" cy="440" r="5"/>
+  </g>
+
+  <g font-size="18" fill="#111">
+    <text x="112" y="200" text-anchor="end" font-weight="bold">GPIO20</text>
+    <text x="112" y="470" text-anchor="end" font-weight="bold">GND</text>
+    <text x="250" y="194" text-anchor="middle">R1  2.2k</text>
+    <text x="510" y="194" text-anchor="middle">R2  10k</text>
+    <text x="406" y="322">C1</text>
+    <text x="406" y="344">4.7n</text>
+    <text x="666" y="322">C2</text>
+    <text x="666" y="344">4.7n</text>
+    <text x="784" y="326">R3</text>
+    <text x="784" y="348">3.3k</text>
+    <text x="1025" y="158" text-anchor="middle">CJMCU-832</text>
+    <text x="916" y="226">A+</text>
+    <text x="916" y="446">A−</text>
+    <text x="1134" y="300" text-anchor="end">Vin  5 V</text>
+    <text x="1134" y="330" text-anchor="end">SD  open</text>
+    <text x="1134" y="360" text-anchor="end">speaker + −</text>
+  </g>
+
+  <g font-size="16" fill="#1a5fb4" font-style="italic">
+    <text x="388" y="210">a</text>
+    <text x="648" y="210">b</text>
+  </g>
+
+  <g font-size="16" fill="#333">
+    <text x="40" y="530">GPIO20 push-pull, PDM at 4 or 8 MHz.  −3 dB at about 11 kHz, 45 dB down at 250 kHz.  No coupling capacitors: the board has its own.</text>
+    <text x="40" y="556">The board's 10k trimmer sits across A+ / A−, in parallel with R3: at its maximum a full-scale PDM gives about ±3.8 V on the speaker.</text>
+    <text x="40" y="582">A− goes to the filter's ground (the foot of C2 and R3), not to the amplifier's.  Neither speaker wire to ground.</text>
+    <text x="40" y="608">Design on paper, not yet built.  The figures are in bench/pdm-amp.md.</text>
+  </g>
+</svg>

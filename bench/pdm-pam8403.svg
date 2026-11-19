@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="620" viewBox="0 0 1200 620" font-family="DejaVu Sans, Liberation Sans, Arial, sans-serif">
+  <rect width="1200" height="620" fill="#ffffff"/>
+  <text x="40" y="44" font-size="24" font-weight="bold" fill="#111">PDM on GPIO20 into a PAM8403 module with a volume pot</text>
+
+  <g stroke="#111" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <!-- signal line -->
+    <path d="M126 220 H200 M300 220 H460 M560 220 H900"/>
+    <!-- R1, R2 -->
+    <rect x="200" y="206" width="100" height="28"/>
+    <rect x="460" y="206" width="100" height="28"/>
+    <!-- C1 -->
+    <path d="M380 220 V320 M362 320 H398 M362 332 H398 M380 332 V440"/>
+    <!-- C2 -->
+    <path d="M640 220 V320 M622 320 H658 M622 332 H658 M640 332 V440"/>
+    <!-- ground rail -->
+    <path d="M126 440 H900"/>
+    <!-- unused input to ground -->
+    <path d="M900 330 H870 V440"/>
+    <!-- module -->
+    <rect x="900" y="170" width="250" height="320" rx="8"/>
+    <!-- terminals -->
+    <circle cx="120" cy="220" r="6" fill="#fff"/>
+    <circle cx="120" cy="440" r="6" fill="#fff"/>
+  </g>
+
+  <!-- optional R3 -->
+  <g stroke="#111" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="7 6">
+    <path d="M760 220 V280 M760 380 V440"/>
+    <rect x="746" y="280" width="28" height="100"/>
+  </g>
+
+  <g fill="#111">
+    <circle cx="380" cy="220" r="5"/>
+    <circle cx="640" cy="220" r="5"/>
+    <circle cx="380" cy="440" r="5"/>
+    <circle cx="640" cy="440" r="5"/>
+    <circle cx="870" cy="440" r="5"/>
+  </g>
+
+  <g font-size="18" fill="#111">
+    <text x="112" y="200" text-anchor="end" font-weight="bold">GPIO20</text>
+    <text x="112" y="470" text-anchor="end" font-weight="bold">GND</text>
+    <text x="250" y="194" text-anchor="middle">R1  1k</text>
+    <text x="510" y="194" text-anchor="middle">R2  4.7k</text>
+    <text x="406" y="322">C1</text>
+    <text x="406" y="344">6.8n</text>
+    <text x="666" y="322">C2</text>
+    <text x="666" y="344">1.5n</text>
+    <text x="784" y="326">R3</text>
+    <text x="784" y="348">(opt.)</text>
+    <text x="1025" y="158" text-anchor="middle">PAM8403 module</text>
+    <text x="916" y="226">L in</text>
+    <text x="916" y="336">R in</text>
+    <text x="916" y="446">GND</text>
+    <text x="1134" y="226" text-anchor="end">5 V</text>
+    <text x="1134" y="256" text-anchor="end">L out + −</text>
+  </g>
+
+  <g font-size="16" fill="#1a5fb4" font-style="italic">
+    <text x="388" y="210">a</text>
+    <text x="648" y="210">b</text>
+  </g>
+
+  <g font-size="16" fill="#333">
+    <text x="40" y="530">GPIO20 push-pull, PDM at 4 or 8 MHz.  −3 dB at about 13 kHz, 41 dB down at 250 kHz.  No divider: 3.3 V peak to peak reaches the pot.</text>
+    <text x="40" y="556">The amplifier clips above about 0.63 V peak to peak at its input, so the pot stays under a fifth of its travel.</text>
+    <text x="40" y="582">Optional divider by three: R3 3.3k with C1 10n and C2 3.3n.  The unused input goes to ground at the module's pin, not the chip's.</text>
+    <text x="40" y="608">Design on paper, not yet built.  The figures are in bench/pdm-amp.md.</text>
+  </g>
+</svg>
