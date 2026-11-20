@@ -581,11 +581,18 @@ switches back. A power cut clears the count.
      `onebitdawn-clips-speaker-<tag>.bin`, the same for a speaker
      (`scripts/speaker-clips.sh`), which the installer does not write;
    - `onebitdawn-pack-<tag>-…`, the pack maker for three systems;
+   - `onebitdawn-licenses-<tag>.txt`, the licences of the crates all
+     of these are built from, and of what is not a crate (the
+     bootloader, the radio's libraries): `scripts/licenses.sh`, which
+     is `cargo about` over `about.toml` and `about.hbs`. A dependency
+     under a licence `about.toml` does not accept fails the run, in
+     the CI too;
    - `onebitdawn-<tag>.bin` (`save-image --merge`): the whole flash
      from 0, contiguous, so it covers `nvs` with erased bytes and
      clears the settings; `write-bin` then needs an `espflash reset`.
 4. It deploys `docs/` to the `gh-pages` branch with the release under
-   `<tag>/` and `latest/`, keeping earlier tags. The release's
+   `<tag>/` and `latest/`, keeping earlier tags, and the list of
+   licences as `licenses.txt`, which both pages' footers link. The release's
    manifest for ESP Web Tools has five parts: the bootloader and the
    partition table cut from the merged image, an erased `otadata`, the
    OTA image at 0x20000 and the default clip pack at 0x2E0000. The

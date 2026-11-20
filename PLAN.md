@@ -1391,6 +1391,68 @@ tag and a control on the page, not built.
 
 Owed: the next tag's release having the file.
 
+## The licences of what a release is built from — built 2026-11-20, run on the host; the workflows not yet run
+
+A release hands out binaries (the images, the pack maker's commands,
+its WebAssembly on the page) built from other people's crates under
+MIT, Apache-2.0 and the like, whose notices are to go with a copy;
+until now a release had none of them (the user asked whether the web
+interface wants a copyright line: it does not, this is where the
+notices belong). Release process only, no firmware change, so it is
+within the freeze.
+
+Design:
+
+- `cargo about` (pinned in the workflows, a prebuilt binary as
+  espflash is) over the workspace, every member and every target a
+  release builds for: the chip, the three systems of the pack maker,
+  wasm. One list for all of them, a superset for each.
+- `about.toml` names the targets and the licences accepted; a
+  dependency under one not in the list fails the run, so a new
+  licence is seen when it arrives, not at a tag.
+- `about.hbs` is a plain-text template: a preamble for what is not a
+  crate (the project's own licence, the second-stage bootloader
+  espflash puts in the merged image, the radio's binary libraries,
+  the clips with a pointer to `clips/README.md`), then each licence's
+  text once with the crates under it.
+- `scripts/licenses.sh [out]` makes the file; the CI runs it on every
+  push, the release attaches `onebitdawn-licenses-<tag>.txt` and puts
+  it on the pages as `licenses.txt`, which both pages' footers link.
+- `README.md`'s License section and `agents/behaviour.md`'s
+  "Releases" say so; `CHANGELOG.md` gets a line.
+
+Built as designed, with cargo-about 0.9.3. What the run showed:
+
+- 171 crates: 162 taken under MIT (of an "MIT OR Apache-2.0" the
+  first accepted is chosen), ryu under Apache-2.0, the four riscv
+  crates ISC, smoltcp, managed and xarxa-driver 0BSD, unicode-ident
+  with Unicode-3.0 for its tables; the last three were added to
+  `accepted`. The file is 106 KB.
+- Some fifty crates, esp-hal's and embassy's among them, are
+  published with no licence file, and get the licence's plain text
+  with `<year> <copyright holders>`; the preamble says so. Nothing
+  better is in the package.
+- The radio's binaries (`libnet80211.a`, `libphy.a` and the rest) are
+  in `esp-wifi-sys-esp32c3`, not in `esp-phy`. Checked the same day
+  (the user asked): the `LICENSE` of `esp-idf`, `esp32-wifi-lib`,
+  `esp-phy-lib` and `esp-coex-lib` is Apache-2.0 in each. But one of
+  the binaries is `libwpa_supplicant.a`, ESP-IDF's build of Jouni
+  Malinen's wpa_supplicant and hostapd, BSD with three clauses, and
+  the firmware links it (some 150 `wpa_`, `hostap` and `sm_` symbols
+  in the ELF); a binary is to reproduce that notice, so the preamble
+  has it in full, from the component's `COPYING` and `README`.
+- The workspace's own crates are left out (`private`), for which the
+  root manifest got the `publish = false` the other two had.
+- The binary needs `--features cli` from `cargo install`; the
+  workflows take the prebuilt archive, whose name and layout were
+  checked by downloading it.
+
+Owed: a push's CI run with the new step; the next tag's release
+having the file and `licenses.txt` on the pages (until then the
+footers' link has nothing behind it). Not looked for: other
+third-party code inside Espressif's binaries or the bootloader beyond
+the supplicant.
+
 ## Checks still owed
 
 - "Suspended Seconds" (2026-11-19, in `HISTORY.md`): the processor's

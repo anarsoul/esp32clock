@@ -1,0 +1,88 @@
+onebitdawn: the licences of what a release is built from
+=========================================================
+
+onebitdawn itself is Copyright (c) 2026 Vasily Khoruzhick and licensed
+under MIT or Apache-2.0, at your option:
+https://github.com/anarsoul/onebitdawn
+
+The files of a release also hold other people's work:
+
+- The firmware images, the pack maker (onebitdawn-pack-*) and its
+  WebAssembly on the pack maker's page are built from the Rust crates
+  listed below, each under the licence it is listed with. The list is
+  made for every system a release is built for, so not every crate is
+  in every file.
+- The whole-flash image (onebitdawn-<tag>.bin) and the web installer's
+  bootloader.bin hold the ESP-IDF second-stage bootloader, Copyright
+  Espressif Systems (Shanghai) CO LTD, Apache-2.0:
+  https://github.com/espressif/esp-idf
+- The firmware links Espressif's Wi-Fi, PHY and coexistence
+  libraries, binaries that come in the esp-wifi-sys-esp32c3 crate
+  below, Copyright Espressif Systems (Shanghai) CO LTD, Apache-2.0:
+  https://github.com/espressif/esp32-wifi-lib
+  https://github.com/espressif/esp-phy-lib
+  https://github.com/espressif/esp-coex-lib
+- Among those binaries is ESP-IDF's build of wpa_supplicant and
+  hostapd, under the BSD licence that is given in full after this
+  list:
+  https://github.com/espressif/esp-idf/tree/master/components/wpa_supplicant
+- A crate published with no licence file of its own is listed under
+  the plain text of its licence, with no copyright line; its authors
+  are at the address beside its name.
+- The clip packs (onebitdawn-clips-*.bin) are music and not under the
+  project's licence; each clip's author and terms are in
+  https://github.com/anarsoul/onebitdawn/blob/master/clips/README.md
+
+wpa_supplicant and hostapd
+--------------------------
+
+Copyright (c) 2002-2022, Jouni Malinen <j@w1.fi> and contributors
+All Rights Reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+1. Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+
+3. Neither the name(s) of the above-listed copyright holder(s) nor the
+   names of its contributors may be used to endorse or promote products
+   derived from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+Overview
+--------
+
+{{#each overview}}
+- {{{name}}} ({{count}})
+{{/each}}
+
+{{#each licenses}}
+------------------------------------------------------------------------
+{{{name}}}
+------------------------------------------------------------------------
+
+Used by:
+{{#each used_by}}
+- {{{crate.name}}} {{{crate.version}}}{{#if crate.repository}} ({{{crate.repository}}}){{/if}}
+{{/each}}
+
+{{{text}}}
+
+{{/each}}

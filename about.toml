@@ -1,0 +1,26 @@
+# What `cargo about` (scripts/licenses.sh) makes a release's list of
+# licences from. A dependency under a licence not accepted here fails
+# the run: read the licence, then add it.
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "ISC",         # the riscv crates
+    "0BSD",        # smoltcp, managed, xarxa-driver
+    "Unicode-3.0", # unicode-ident's tables, with MIT OR Apache-2.0
+]
+
+# Every target a release builds for: the chip, the pack maker's three
+# systems, its WebAssembly. One list, a superset for each of them.
+targets = [
+    "riscv32imc-unknown-none-elf",
+    "x86_64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+    "aarch64-apple-darwin",
+    "wasm32-unknown-unknown",
+]
+
+# Tests are not in a release.
+ignore-dev-dependencies = true
+
+# The workspace's own crates (`publish = false`) are the preamble's.
+private = { ignore = true }

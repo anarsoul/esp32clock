@@ -298,7 +298,9 @@ clips and packs is in the manual's
 ## License
 
 MIT or Apache-2.0, at your option. See `LICENSE-MIT` and
-`LICENSE-APACHE`.
+`LICENSE-APACHE`. A release's files are built from other people's
+crates too; their licences are the release's
+`onebitdawn-licenses-<tag>.txt` (`scripts/licenses.sh` makes it).
 
 The display protocol and the board documentation come from
 [misterblack1/HU-058_ESPHome](https://github.com/misterblack1/HU-058_ESPHome)

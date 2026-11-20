@@ -1,7 +1,8 @@
 # A release from a `v*` tag: the firmware with the prebuilt settings
 # (the same as ci.yml), the OTA image for `/update`, the merged image
 # for espflash, the default clip pack, the same for a speaker, and the pack maker (tools/pack)
-# as a command for Linux, Windows and macOS, attached to the GitHub release; then the flasher
+# as a command for Linux, Windows and macOS, and the licences of what
+# all of them are built from, attached to the GitHub release; then the flasher
 # page in docs/ and the pack maker's page in docs/pack/ with its
 # WebAssembly, with the release's manifest and images, deployed to the
 # gh-pages branch, keeping earlier releases, which the page offers in a
@@ -24,6 +25,7 @@ env:
   TZ_RULE: "<-07>7" # Vancouver, UTC-7 all year
   API_TOKEN: "" # none: the PIN on the panel until the owner sets one
   ESPFLASH_VERSION: v4.7.0
+  CARGO_ABOUT_VERSION: 0.9.3
 
 jobs:
   build:
@@ -47,6 +49,11 @@ jobs:
           chmod +x "$HOME/.local/bin/espflash"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           "$HOME/.local/bin/espflash" --version
+      - name: Install cargo-about
+        run: |
+          curl -sSfL "https://github.com/EmbarkStudios/cargo-about/releases/download/${CARGO_ABOUT_VERSION}/cargo-about-${CARGO_ABOUT_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
+            | tar xz --strip-components=1 -C "$HOME/.local/bin" --wildcards '*/cargo-about'
+          cargo about --version
       # A tag never publishes a build the CI would have failed.
       - name: Test the core crate on the host
         run: cargo host-test
@@ -100,6 +107,9 @@ jobs:
           # The pack maker for its page, docs/pack/.
           cargo pack-wasm
           cp target/wasm32-unknown-unknown/tool/onebitdawn_pack.wasm images/
+          # The licences of the crates all of the above, and the pack
+          # maker's commands, are built from (about.toml, about.hbs).
+          scripts/licenses.sh "images/onebitdawn-licenses-${GITHUB_REF_NAME}.txt"
           ls -l images
       - uses: actions/upload-artifact@v6
         with:
@@ -159,6 +169,7 @@ jobs:
         with:
           files: |
             images/onebitdawn-*.bin
+            images/onebitdawn-licenses-*.txt
             tools-out/onebitdawn-pack-*
           body: |
             - What changed: [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/CHANGELOG.md)
@@ -182,6 +193,7 @@ jobs:
             | `onebitdawn-clips-${{ github.ref_name }}.bin` | the alarm sounds (clip pack) for the buzzer |
             | `onebitdawn-clips-speaker-${{ github.ref_name }}.bin` | the same for a clock with a speaker; upload at `http://<ip>/clips` |
             | `onebitdawn-pack-${{ github.ref_name }}-*` | the pack maker for your own tunes, also at https://anarsoul.github.io/onebitdawn/pack/ |
+            | `onebitdawn-licenses-${{ github.ref_name }}.txt` | the licences of what these files are built from |
 
             A new clock boots as the access point `clock-xxxx`, password
             `onebitdawn`, setup form at http://192.168.4.1/. The images
@@ -236,6 +248,9 @@ jobs:
           cat "docs/$TAG/manifest.json"
           # The pack maker's page, with the converters of this release.
           cp images/onebitdawn_pack.wasm docs/pack/
+          # The licences of what the page hands out, which both pages'
+          # footers link; the latest release's, as the wasm is.
+          cp "images/onebitdawn-licenses-$TAG.txt" docs/licenses.txt
       - uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}

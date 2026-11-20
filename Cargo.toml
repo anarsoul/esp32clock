@@ -4,6 +4,7 @@ name         = "onebitdawn"
 rust-version = "1.95"
 license      = "MIT OR Apache-2.0"
 version      = "0.1.0"
+publish      = false
 
 [[bin]]
 name = "onebitdawn"
