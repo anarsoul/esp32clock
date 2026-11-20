@@ -1394,6 +1394,153 @@ tag and a control on the page, not built.
 
 Owed: the next tag's release having the file.
 
+## A 24 h soak of the v0.5-rc3 release, installed from nothing through the access point — passed 2026-11-20
+
+The release candidate's own files, not a local build, on the bare
+bench board (`another-bench`, `/dev/ttyACM0`; no panel, speaker or
+sensors, so the alarm may ring: the user, 2026-11-19). The install is
+the manual's espflash path: `onebitdawn-v0.5-rc3.bin` and
+`onebitdawn-clips-v0.5-rc3.bin` fetched from the GitHub release, the
+flash erased whole, the image at 0, the pack at 0x2E0000, a reset.
+Then the setup as a new clock's owner makes it: the host's dongle
+(`wlp0s20f0u1`, a profile with no default route) on the clock's
+access point, the setup form in headless Chromium (the home network,
+the hostname, the zone), and on the LAN the token set with a PIN read
+from the serial log and the broker on `/ha`.
+
+The soak is the one of 2026-11-18 (the section above of that date):
+the same driver, watcher, load and pass criteria, in `target/soak/`
+(the earlier run's logs moved to `run-2026-11-18/`). The previews go
+round the pack's eight clips and two note melodies, and the alarm
+rings every 6 h, first at 20 min, on the next clip. The start is the
+boot after the last of the setup's resets.
+
+The install, 2026-11-19, as planned (the release's pack is byte for
+byte `packs/clips-default.bin`): first boot `firmware v0.5-rc3`,
+`ota_0`, `pack of 8 clips, 727891 … bytes … checked in 501 ms`,
+nothing stored, the access point `clock-1bf4` on channel 1. The
+dongle had 192.168.4.2 and the host kept its default route;
+`/generate_204` a 302 to the form. The form listed five networks; the
+home one picked (the typed name hidden and disabled), the password,
+"Use this browser's zone" (`PDT7`), the hostname `another-bench`, 16
+dBm; "Saved", the reset into the station 2 s later, 10.1.1.65 by DHCP
+at 5.6 s and the time synced at 5.7 s. On the LAN, from the pages:
+the token set on `/system` with the PIN from the serial log, no
+reset; the broker on `/ha`, connected 4 s after the save as
+`clock-6a1bf4`. Seen on the way: after "token set." the System page
+still reads "(none is set)" beside the field until it is loaded
+again.
+
+A mistake of the session's, not the clock's: the serial `cat` was
+attached before `espflash reset`, which then fought it for the port
+and left the chip in download mode with the capture dead; the reset
+first and the `cat` after, as the soak of 2026-11-18 has it, worked.
+That first boot's log is `target/soak/rc3/first-attempt-serial.log`.
+
+Started 2026-11-19 16:18:07 MST (the station boot, `CoreSw`, the
+setup's own reset), to end 2026-11-20 16:18. The watcher reads the
+serial log from that boot on and does not count the setup's `API
+token set` warning. First heartbeat: heap free 54080, longest feed
+gap 1186 ms. Rings due at about 16:41, 22:41, 04:41 and 10:41, on
+Morning Mood, Mountain King, Suspended Seconds and the chip Morning
+Mood.
+
+The broker went down at 16:22:58 (uptime 291 s) and is to stay down
+for a while: the user is upgrading the host's services (2026-11-19).
+So this run does not hold "one MQTT session"; it has instead the
+session lost and found again, to be read from the log: the backoff,
+the heap across it, the reconnect and the discovery published again.
+The watcher was restarted not counting the `mqtt:` warnings and the
+receive's `NotConnected` error.
+
+Back at 16:31:14 (uptime 787 s), 8 min 15 s later: ten refused
+connects on the backoff 5, 10, 20, 40 s and then every 60 s, the
+eleventh connected to `nettop.lan` by its name (the user: its address
+may have changed; 10.1.1.28 now). Heap free 54080 after it as before,
+`2 connects`, no heal, no watchdog count, `/api` answering
+throughout.
+
+The first ring, Morning Mood at 16:41: its five minutes out (299987
+ms, no underruns, no stray positions), the preview and the stop
+posted meanwhile each logged as ignored. `/play` and `/stop` answer
+303 in this release where the earlier soak's image answered 200; the
+summary counts both as good.
+
+The watcher ended at 17:50 on the run's first warning of the clock's
+own: one gateway probe lost at uptime 5499 s (17:49:46),
+`DestinationHostUnreachable (1 in a row)`, back at the next probe 30
+s later with 14 ms; the host's ping and `/api` either side of it
+answered (one `/api` took 1061 ms at 17:50:29), same BSSID and
+channel, no heal. The soak of 2026-11-18 had no such line in 24 h.
+Not counted as a fault: the watcher was restarted letting a lone
+lost probe pass and still ending on two in a row; how many there
+are goes in the result.
+
+Five lone losses by 18 h 40 min (uptimes 5499, 5621, 8684, 60900
+and 67114 s: three in the first evening, none overnight for 14 h,
+two the next morning), each answered at the next probe. The user,
+2026-11-20 about 11:00: there is 2.4 GHz traffic in the room,
+Bluetooth headphones and a 2.4 GHz keyboard and mouse, and either
+can get in the way of this board with its ceramic antenna. The
+losses fall where someone is at the desk and stop overnight, which
+fits; the room's traffic the first evening was not noted, so that
+part is an inference.
+
+Kicked off the access point by the user, on purpose, at 12:56:22
+(uptime 74300 s; one association until then, 74294 s): `wifi:
+disconnected … AssociationTooMany`, the link down, the MQTT session
+lost. Seven connects 8.5 s apart refused by the access point with
+`AuthenticationFailed` (the attempts counted "of 10", the seconds
+"of 180", so the self-heal was three attempts away), the eighth
+joined at 74368 s, 68 s after the kick: the same address by DHCP
+0.5 s later, MQTT connected 1.2 s after that (the third session). No
+reset, no heal, no watchdog count. A preview of Halftime had begun
+6 s before the kick and played on through the scans and the
+connects, 43565 ms with 0 underruns and 0 stray positions, ending
+by itself as the driver's `/stop` could not arrive. The host lost
+two ticks' pings and one `/api`. The watcher was restarted with the
+kick's ten warnings as its baseline.
+
+`target/` was removed under the run at about 13:37 (a clean build in
+the tree), and `target/soak/` with it. The clock, the capture and
+the driver ran on, writing to files with no name; both logs were
+copied whole out of the processes' open files at 15:38 into
+`soak-rc3/` (untracked), with the driver and the watcher, and
+`refresh.sh` there copies them again before each reading. The
+watcher saw nothing from 13:37 to 15:38; the logs for those two
+hours were read afterwards and have no warning in them. Gone for
+good: the release files as downloaded, the first attempt's serial
+log, the access point's page as saved, and the logs of the soaks of
+2026-11-17 and 2026-11-18, whose figures are in their sections
+above. A soak's files belong outside `target/`.
+
+**Passed, 2026-11-20 16:18**: 24 h on one boot (last heartbeat 86404
+s, `/api` uptime 86419 s), heals and watchdog 0, no panic, and no
+warning but the broker's outage, the user's kick and five lone lost
+probes, each accounted for above. Against the criteria:
+
+- Heap free 54080 until 21:34, then 53892 (the same 188-byte step at
+  the same minute as the soaks of 2026-11-08 and 2026-11-18), 54032
+  after the rejoin; eleven one-minute dips in 1440 heartbeats, lowest
+  48780. No trend.
+- Longest feed gap 1186 ms from the first heartbeat to the last,
+  through 116 clips, the hourly saves, four rings and the rejoin.
+- All 116 `clip:` lines with 0 underruns and 0 stray positions; the
+  four rings (Morning Mood 16:41, Mountain King 22:42, Suspended
+  Seconds 04:44, the chip Morning Mood 10:45) each five minutes.
+- The descriptor index moving; 84366 images published, no stop.
+- The gateway probe: 5 lost of 2878, none two in a row.
+- The host: 2868 ticks; outside the kick's minute one lost ping and
+  no `/api` failure, the slowest 1061 ms; every page 200 and the
+  page's time the host's 287 times of 287.
+- Not held, both by an outside hand: "one MQTT session" (three: the
+  broker taken down, the kick) and one association (two).
+
+The driver was stopped at the end and left the alarm armed at 10:45
+on the chip Morning Mood, the colour blue. The uploads the earlier
+soak ended with (an OTA of the same image, the pack again) were not
+made. The logs are in `soak-rc3/`.
+
 ## The licences of what a release is built from — built 2026-11-20, run on the host; the workflows not yet run
 
 A release hands out binaries (the images, the pack maker's commands,
