@@ -475,7 +475,8 @@ players end in, set from a clip's header; `STEP`.
 **`core/src/tz.rs`**: POSIX TZ rules. `parse` (`const`, so a
 build-time rule is checked by the compiler), `Tz::period_at(unix)`
 (the offset, the daylight flag and the name in force), `fixed(minutes)`
-for the old setting, the calendar arithmetic; `TZ_MAX` 48.
+for the old setting, `shorthand` for `UTC+3` as people write it (east
+positive, the settings key's only), the calendar arithmetic; `TZ_MAX` 48.
 
 **`core/src/clock.rs`**: `LocalTime` (with the `offset_secs` it was
 computed with and `local_secs`), `weekday_of_days`, `local_time(unix,

@@ -38,7 +38,7 @@ firmware version, the network and the address the clock got.
 | variable | meaning | default |
 | --- | --- | --- |
 | `WIFI_SSID`, `WIFI_PASSWORD` | network to join; may be left empty, see provisioning | empty |
-| `TZ_RULE` | the timezone as a POSIX TZ rule: `PST8PDT,M3.2.0,M11.1.0`, `CET-1CEST,M3.5.0,M10.5.0/3`, or `<-07>7` for a fixed UTC-7 | UTC |
+| `TZ_RULE` | the timezone as a POSIX TZ rule: `PST8PDT,M3.2.0,M11.1.0`, `CET-1CEST,M3.5.0,M10.5.0/3`, or `<-07>7` for a fixed UTC-7 (POSIX only here: the sign after a name counts west, and `UTC+3` would be UTC-3) | UTC |
 | `TZ_OFFSET_MINUTES` | the older variable, minutes east of UTC, stored as a fixed rule (`-420` is `<-07>7`); `TZ_RULE` wins if both are set | 0 |
 | `API_TOKEN` | bearer token for the scripts and the API's protected keys | none |
 | `MAX_CURRENT_STEP` | LED current ceiling, 1 to 15; 5 is the 50 % step | 5 |
@@ -214,7 +214,7 @@ fetch and install it. The images are built with:
 | setting | value in the prebuilt images |
 | --- | --- |
 | network | none: the clock boots as an access point, see above |
-| timezone | `<-07>7`, Vancouver (UTC-7, permanent since BC stopped changing clocks), no daylight saving. For another zone open `/settings` and press "Use this browser's zone", or type a POSIX TZ rule |
+| timezone | `<-07>7`, Vancouver (UTC-7, permanent since BC stopped changing clocks), no daylight saving. For another zone open `/settings` and press "Use this browser's zone", or type a POSIX TZ rule or a plain offset such as `UTC+3` |
 | API token | none: set one on `/system` for the scripts |
 | everything else | the defaults: brightness cap 50 %, access point password `onebitdawn` |
 
@@ -284,7 +284,10 @@ in the browser's light or dark:
   brightness), saved together with Save, then the status: the
   firmware version and slot, the network and its signal, the broker,
   the room reading, the local time and the uptime.
-- `/settings`: the timezone (a POSIX TZ rule; the button beside it
+- `/settings`: the timezone (a POSIX TZ rule, or a plain offset as
+  `UTC+3` or `GMT-3:30`, east positive, which is stored as the rule
+  `<+03>-3`; in a rule itself POSIX counts the sign west, so `MSK-3`
+  is UTC+3; the button beside it
   fills in the browser's own zone, and the line under the form shows
   the local time the rule gives), 12/24 hour, the temperature on the
   panel and the thermometer's offset, the hostname, and the Wi-Fi

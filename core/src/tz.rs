@@ -352,6 +352,26 @@ pub fn civil_from_days(days: i64) -> (i64, u32, u32) {
     (yoe + era * 400 + if month <= 2 { 1 } else { 0 }, month, day)
 }
 
+/// The offset people write, in seconds east of UTC: `UTC+3`, `GMT-3:30`,
+/// `utc+05:45`. Only these two names, in either case, with a sign, and
+/// nothing after the offset. POSIX reads the same text with the sign
+/// the other way (`GMT+3` is three hours *west*), which is not what
+/// anyone typing it means (the user, 2026-11-20), so the settings key
+/// asks here before `parse` and stores `fixed` of the answer. The
+/// offset is whatever `parse` takes as one, turned over, so no text of
+/// this shape is left for the parser to read westwards. `GMT0` and
+/// `GMT0BST,M3.5.0/1,M10.5.0` have no sign and are rules as before.
+pub fn shorthand(s: &str) -> Option<i32> {
+    let b = s.as_bytes();
+    if b.len() < 4 || !(b[..3].eq_ignore_ascii_case(b"UTC") || b[..3].eq_ignore_ascii_case(b"GMT")) || !matches!(b[3], b'+' | b'-') {
+        return None;
+    }
+    match parse(s)? {
+        Tz { std, dst: None } => Some(-std.offset_secs),
+        _ => None,
+    }
+}
+
 /// The rule for a plain offset in minutes east of UTC: `<-07>7`,
 /// `<+0545>-5:45`, `<+00>0`. What the old setting and the old build
 /// variable become.
@@ -459,6 +479,37 @@ mod tests {
         assert_eq!(parse("EST5EDT,J60,J300").unwrap().dst.unwrap().start.day, Day::Julian(60));
         assert_eq!(parse("EST5EDT,60,300/1:30:15").unwrap().dst.unwrap().end, Transition { day: Day::ZeroBased(300), time_secs: 5415 });
         assert_eq!(parse("UTC+0:0:0").unwrap().std.offset_secs, 0);
+    }
+
+    /// `UTC+3` is east, as people write it, and only that form is taken.
+    #[test]
+    fn the_shorthand_counts_east() {
+        for (text, minutes, rule) in [
+            ("GMT+3", 180, "<+03>-3"),
+            ("GMT-3", -180, "<-03>3"),
+            ("UTC+5:45", 345, "<+0545>-5:45"),
+            ("utc-03:30", -210, "<-0330>3:30"),
+            ("GMT+3:5", 185, "<+0305>-3:05"),
+            ("GMT+3:30:00", 210, "<+0330>-3:30"),
+            ("Gmt+14", 840, "<+14>-14"),
+            ("UTC+0", 0, "<+00>0"),
+            ("UTC-0:00", 0, "<+00>0"),
+        ] {
+            assert_eq!(shorthand(text), Some(minutes * 60), "{text}");
+            assert_eq!(fixed(minutes as i16).as_str(), rule, "{text}");
+            assert_eq!(parse(rule).unwrap().std.offset_secs, minutes * 60, "{text}");
+        }
+        assert_eq!(shorthand("GMT+3:30:15"), Some(12_615), "seconds are the caller's to refuse");
+        for not in [
+            "", "UTC", "GMT0", "UTC3", "GMT+", "GMT+3:", "GMT+3:60", "GMT+25", "GMT+123", "GMT++3", "GMT+3 ",
+            "GMT0BST,M3.5.0/1,M10.5.0", "GMT+0BST,M3.5.0/1,M10.5.0", "MSK-3", "EST+5", "<+03>-3", "UTCX+3", "UTс+3",
+        ] {
+            assert_eq!(shorthand(not), None, "{not:?}");
+            // And none of them is a rule the parser would read westwards
+            // under one of the two names.
+            let west = parse(not).is_some_and(|t| t.dst.is_none() && not.len() > 3 && matches!(not.as_bytes()[3], b'+' | b'-') && matches!(t.std.name, "UTC" | "GMT"));
+            assert!(!west, "{not:?}");
+        }
     }
 
     #[test]

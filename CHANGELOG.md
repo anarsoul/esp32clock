@@ -65,6 +65,12 @@ from `http://<ip>/update`; its settings survive the update.
 
 ### Fixed
 
+- A timezone typed as `UTC+3` or `GMT+3` is three hours east, as it
+  is written everywhere but in POSIX, and is stored as the rule
+  `<+03>-3`. It was taken as a POSIX rule, where the sign counts west,
+  so the clock ended up at UTC-3. Rules proper are read as before
+  (`MSK-3`, `GMT0BST,M3.5.0/1,M10.5.0`).
+
 - The web installer's dialogs follow the browser's dark theme, where
   they stayed white with the page's light text on them; their buttons
   have the page's accent colour.

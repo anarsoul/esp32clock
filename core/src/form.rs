@@ -409,12 +409,13 @@ pub fn apply_one(s: &mut Settings, key: &str, value: &str, allow: Allow) -> Resu
         "armed" => s.alarm_armed = truthy(value),
         "twelve_hour" => s.twelve_hour = truthy(value),
         "skip" => s.skip_next = truthy(value),
-        // A POSIX TZ rule, or minutes east of UTC as the key took until
-        // 2026-11-07, which become a fixed rule.
-        "tz" => match value.parse::<i16>() {
-            Ok(minutes) if (-TZ_LIMIT_MINUTES..=TZ_LIMIT_MINUTES).contains(&minutes) => s.tz = tz::fixed(minutes),
-            Ok(_) => return Err(FormError::BadValue),
-            Err(_) => {
+        // A POSIX TZ rule; or minutes east of UTC as the key took until
+        // 2026-11-07, or `UTC+3` as people write it (`tz::shorthand`:
+        // POSIX has that sign the other way), which become a fixed rule.
+        "tz" => match value.parse::<i32>().ok().or_else(|| tz::shorthand(value).map(|secs| if secs % 60 == 0 { secs / 60 } else { i32::MAX })) {
+            Some(minutes) if (-(TZ_LIMIT_MINUTES as i32)..=TZ_LIMIT_MINUTES as i32).contains(&minutes) => s.tz = tz::fixed(minutes as i16),
+            Some(_) => return Err(FormError::BadValue),
+            None => {
                 tz::parse(value).ok_or(FormError::BadValue)?;
                 s.tz = Text::new(value).ok_or(FormError::BadValue)?;
             }
@@ -612,7 +613,7 @@ impl<T: core::fmt::Display> core::fmt::Display for OrNull<T> {
 fn write_tz_field(out: &mut impl core::fmt::Write, s: &Settings) -> core::fmt::Result {
     write!(
         out,
-        "<label>Timezone, POSIX rule <input type=text name=tz id=z maxlength={} value=\"{}\"></label>\
+        "<label>Timezone, POSIX rule or UTC+3 <input type=text name=tz id=z maxlength={} value=\"{}\"></label>\
 <button type=button id=b>Use this browser's zone</button> <small id=zn></small>",
         TZ_MAX,
         HtmlStr(s.tz.as_str())
@@ -2147,6 +2148,23 @@ mod tests {
         assert_eq!(apply_naming(&mut s, b"nonsense=1", Allow::PAGE), Err((FormError::UnknownKey, None)));
         assert_eq!(apply_naming(&mut s, b"ssid=x", Allow::PAGE), Err((FormError::Forbidden, Some("ssid"))));
         assert_eq!(apply_naming(&mut s, b"tz=0", Allow::PAGE), Ok(()));
+        // `UTC+3` is east and stored as the fixed rule; a rule that
+        // only starts like one stays a rule.
+        for (sent, stored) in [
+            (&b"tz=GMT%2B3"[..], "<+03>-3"),
+            (b"tz=GMT-3", "<-03>3"),
+            (b"tz=utc%2B5:45", "<+0545>-5:45"),
+            (b"tz=GMT0BST,M3.5.0/1,M10.5.0", "GMT0BST,M3.5.0/1,M10.5.0"),
+            (b"tz=GMT%2B3:5", "<+0305>-3:05"),
+            (b"tz=MSK-3", "MSK-3"),
+        ] {
+            assert_eq!(apply_naming(&mut s, sent, Allow::PAGE), Ok(()));
+            assert_eq!(s.tz.as_str(), stored);
+        }
+        for bad in [&b"tz=UTC%2B15"[..], b"tz=UTC-3:30:15", b"tz=GMT%2B24", b"tz=841", b"tz=40000"] {
+            assert_eq!(apply_naming(&mut s, bad, Allow::PAGE), Err((FormError::BadValue, Some("tz"))), "{bad:?}");
+        }
+        assert_eq!(s.tz.as_str(), "MSK-3");
         // Every key of the table is one `apply_one` knows.
         for (key, _) in FIELDS {
             assert_ne!(apply_one(&mut s, key, "", Allow::ALL), Err(FormError::UnknownKey), "{key}");

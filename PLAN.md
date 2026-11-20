@@ -1456,6 +1456,56 @@ footers' link has nothing behind it). Not looked for: other
 third-party code inside Espressif's binaries or the bootloader beyond
 the supplicant.
 
+## `UTC+3` in the timezone field is east — built 2026-11-20, run on white-clock
+
+The user typed `GMT+3` into the timezone field and the clock went to
+UTC-3, and `GMT-3` gave UTC+3 (2026-11-20). The parser was right by
+POSIX, where the offset after a name counts west (`TZ=GMT+3 date`
+does the same), and the label says "POSIX rule"; but nobody who types
+`GMT+3` means three hours west, the user included. A fix, so on
+`master` in the freeze.
+
+The design: a value that is all of `UTC` or `GMT` (either case), a
+sign, and `h[h][:mm]` is the offset as people write it, east
+positive (`tz::shorthand`), and `form::apply_one` stores `tz::fixed`
+of it, `<+03>-3`, as it already does for the old key's plain minutes;
+past `TZ_LIMIT_MINUTES` it is a bad value. Normalised at input and not
+in the parser, so the record holds a rule every image reads the same
+way and a rollback keeps the zone. The sign is required: `GMT0` and
+`GMT0BST,M3.5.0/1,M10.5.0` are rules as before, and so is every other
+name (`MSK-3`). The build's `TZ_RULE` stays POSIX alone, checked by
+the compiler. Refusing the form as ambiguous was the other choice,
+and the stricter; the user took this one. The label is now "Timezone,
+POSIX rule or UTC+3".
+
+What it costs: a clock that has `GMT+3` stored in POSIX's sense (three
+hours west, under that name) keeps it until its settings form is next
+saved, which sends the field back and turns it over. `<-03>3` is how
+to say that now.
+
+Tested on the host: `tz::the_shorthand_counts_east` (the forms taken
+and those left to the parser) and the cases in
+`form::a_refused_form_names_its_field`; the page sizes still fit.
+
+On white-clock, 2026-11-20, over `/api` with the token (the user had
+tried the page by hand first): `GMT+3` stored `<+03>-3` with
+`utc_offset` 180, `GMT-3` `<-03>3` and -180, `utc+5:45`
+`<+0545>-5:45`, `UTC-03:30` `<-0330>3:30`, `UTC+0` `<+00>0`; `MSK-3`
+and `GMT0BST,M3.5.0/1,M10.5.0` stored as sent; `UTC+15` a 400. The
+run found one hole: the first `shorthand` had a grammar of its own
+(two digits of minutes), so `GMT+3:5` was not it, went on to the
+parser, which takes one digit, and was stored as a rule, 185 minutes
+*west*. `shorthand` is now the parser's own reading of such a text
+turned over, so there is no offset one takes and the other does not;
+odd seconds, which `fixed` cannot write, are a bad value.
+
+The second image, the same day and the same way: the five above as
+before, `GMT+3:5` `<+0305>-3:05` with `utc_offset` 185,
+`UTC-03:30:00` `<-0330>3:30`; `UTC-03:30:15`, `UTC+15` and `GMT+24`
+each a 400 with the zone left alone; the rules as sent; the old
+key's `180` and `-420` as fixed rules. The clock's own `PDT7` put
+back after each run.
+
 ## Checks still owed
 
 - "Suspended Seconds" (2026-11-19, in `HISTORY.md`): the processor's
