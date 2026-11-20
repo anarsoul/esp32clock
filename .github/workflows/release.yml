@@ -161,49 +161,32 @@ jobs:
             images/onebitdawn-*.bin
             tools-out/onebitdawn-pack-*
           body: |
-            Flash a clock from the browser at https://anarsoul.github.io/onebitdawn/
-            (Chrome or Edge, the clock on USB), or with espflash, which also
-            clears the saved settings, since the file covers the whole flash:
+            - What changed: [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/CHANGELOG.md)
+            - How to use it: [MANUAL.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/MANUAL.md)
+
+            **Install** from the browser at https://anarsoul.github.io/onebitdawn/
+            (Chrome or Edge, the clock on USB), or with espflash, which
+            also clears the saved settings:
 
                 espflash write-bin 0x0 onebitdawn-${{ github.ref_name }}.bin
-                espflash reset
-
-            Update a running clock from `http://<ip>/system` with
-            `onebitdawn-ota-${{ github.ref_name }}.bin`, or with
-            `API_TOKEN=… scripts/ota.sh <ip> onebitdawn-ota-${{ github.ref_name }}.bin`
-            and the clock's API token, if it has one.
-
-            The sampled alarm sounds are a clip pack in a partition of
-            their own, `onebitdawn-clips-${{ github.ref_name }}.bin`:
-            the web installer writes it; after espflash, upload it from
-            `http://<ip>/clips` or write it with
-
                 espflash write-bin 0x2e0000 onebitdawn-clips-${{ github.ref_name }}.bin
                 espflash reset
 
-            `onebitdawn-clips-speaker-${{ github.ref_name }}.bin` is
-            the same eight tunes for a clock with a speaker (in the
-            buzzer's place, or on the line output's amplifier), with
-            the bass left in and a gentler limiter; it goes on the same
-            way, in the other's place.
+            **Update** a running clock with `onebitdawn-ota-${{ github.ref_name }}.bin`
+            at `http://<ip>/system`.
 
-            A pack of your own tunes (tracker modules, Commodore 64
-            and ZX Spectrum tunes, sound files) is made in the browser
-            at https://anarsoul.github.io/onebitdawn/pack/ or with
-            `onebitdawn-pack-${{ github.ref_name }}-*`, the same as a
-            command; `--help` says how.
+            | file | what it is |
+            | --- | --- |
+            | `onebitdawn-${{ github.ref_name }}.bin` | the whole flash, for espflash |
+            | `onebitdawn-ota-${{ github.ref_name }}.bin` | the update for a running clock |
+            | `onebitdawn-clips-${{ github.ref_name }}.bin` | the alarm sounds (clip pack) for the buzzer |
+            | `onebitdawn-clips-speaker-${{ github.ref_name }}.bin` | the same for a clock with a speaker; upload at `http://<ip>/clips` |
+            | `onebitdawn-pack-${{ github.ref_name }}-*` | the pack maker for your own tunes, also at https://anarsoul.github.io/onebitdawn/pack/ |
 
-            A clock flashed before this release has no such partition
-            until it is flashed again over USB or from the web installer:
-            updated over the air it has the note melodies only.
-
-            The images carry no network (the clock boots as its own access
-            point, `clock-xxxx`, password `onebitdawn`, setup form at
-            http://192.168.4.1/), Vancouver time without daylight saving (`<-07>7`) and no API
-            token: updates and uploads go from the clock's pages with the
-            PIN its panel shows, and the scripts work once a token is set
-            on `http://<ip>/system`; see "Prebuilt images" in MANUAL.md.
-            What changed is in CHANGELOG.md.
+            A new clock boots as the access point `clock-xxxx`, password
+            `onebitdawn`, setup form at http://192.168.4.1/. The images
+            have no API token: updates and uploads take the PIN the
+            panel shows.
 
   # After the release: a tag whose release failed must not become the
   # page's `latest/` (v0.5-rc1 did, its Windows pack maker not linking).
