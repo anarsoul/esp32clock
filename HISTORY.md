@@ -10464,3 +10464,313 @@ the packs themselves. The terms are now: may be copied and
 distributed, unmodified or as converted from its module by
 onebitdawn's tools, as part of onebitdawn clip packs, including
 commercially; all other rights reserved.
+
+## "Starlight & Aurora", a module of the user's second tune — built 2026-11-20, heard in headphones and on a buzzer, where it does not sound, and on white-clock's speaker: the speaker's pack's ninth clip and no other's: verified
+
+The user: "Положил Cmaj7-noguitar.mid - трек называется Starlight &
+Aurora, автор я. 4 дорожки: 1) Surge XT - acoustic grand 2) Pads -
+JE-8086 MKS80Bell/Space 3) Back - Surge XT - Sine Lead 4) Bass -
+Surge XT - Sine Lead. Surge XT VST3 есть на этом компьютере -
+пианино можешь сэмплировать оттуда. JE-8086 тут нет. Стемы треков
+лежат в stems/ - можно сэмплировать и их."
+
+A clip for the pack and nothing in the firmware, which is why it is
+on `master` in the freeze (said to the user the same day: by the
+letter a feature, in what it can break not one).
+
+**The file.** Four parts, 148 beats at 80 to the minute, 111 s:
+
+| track | part | beats | notes | range | what it is |
+| --- | --- | --- | --- | --- | --- |
+| 1 `Keys - Back` | piano | 0 to 148 | 252, one at a time, on the eighths | F3 to F4, seven pitches, velocities 46 to 86 | the pedal down throughout and never lifted |
+| 2 `Lead - Pads` | bell | 32 to 128 | 70, two at once at most | C4 to G5, velocities 38 to 90 | as played, off the grid |
+| 3 `Back (Lead #2) - Sine` | sine | 64 to 128 | 40, two at once | C4 to C5 | as played |
+| 4 `Bass - Sine` | sine | 16 to 128 | 21, four and eight beats long | F2, G2, A2 | as played |
+
+The piano alone opens (16 beats) and closes (the last 20) the tune,
+which goes round.
+
+**The stems** (`stems/Cmaj7-001.mp3` to `-004.mp3`, in the tracks'
+order, 111 s, 44 100 Hz stereo), measured:
+
+- The piano has nothing over 2 kHz (1.7 % of its power from 1 to 2
+  kHz, 0.04 % over that). Its notes are an eighth apart under the
+  pedal, so none is alone in the stem for more than 0.375 s.
+- The bell is wide (the sides as loud as the middle), a fundamental
+  with its fourth and twelfth partials and a reverb that takes 8 s to
+  fall 30 dB after the last note.
+- The two sines are sines: the second harmonic 24 and 30 dB under,
+  held level while the key is down, a slow vibrato of about 2 %.
+  The bass is 87 to 110 Hz, which the buzzer's high-pass (300 Hz)
+  takes away whole.
+
+**The design.**
+
+- `mods/src/starlight_aurora.py` over `scripts/mkxm.py`, as
+  "Suspended Seconds" is; the MIDI file copied to
+  `mods/src/starlight_aurora.mid`, the module
+  `mods/starlight-aurora.xm`, the clip `clips/starlight_aurora.xmc`.
+- **The piano** is Surge XT's own, so its notes are rendered from the
+  plugin, each of the seven pitches by itself and long, and no
+  recording is played off its pitch. The patch is taken to be
+  `patches_3rdparty/LinnStrument MPE/Keys/Acoustic Grand.fxp` and
+  checked against the stem's first note. A host for the plugin
+  offline: `pedalboard` in a virtual environment outside the tree;
+  failing that `surge-xt-cli` in real time into a null sink; failing
+  both, the stem. The renders go in the ignored `xm/`; the script
+  reads them from there. `Sample(struck=)` and `damp=` as for the
+  other piano; kept at a low rate, there being nothing over 2 kHz.
+  The pedal is never lifted, so a note rings until its key is struck
+  again or its envelope is done.
+- **The bell** is cut from its stem where a note is most alone (the
+  first C4 of a phrase, the C5 held five beats), one channel of the
+  stereo, and played at the other pitches; if the neighbours are
+  heard in it, the bell is made of its measured partials instead.
+  The reverb is the instrument's release on a channel of its own,
+  not an effect.
+- **The two sines** are made, a period of a sine with its second
+  harmonic, the vibrato the instrument's.
+- **The bass on a buzzer** would be silence. A kit for the buzzer
+  gives it harmonics (the octave and the twelfth) so that it is heard
+  by them; the speaker's keeps the sine. For the ear.
+- **Time.** The piano is on the grid. The other three are as played
+  and are kept so, to the tick (a row a sixteenth, twelve ticks a
+  row, 15.6 ms); a `quantized` kit puts them on the sixteenths, for
+  the user to choose between, since "Suspended Seconds" ended
+  quantized.
+- **Channels**: twenty at most (`xm::MAX_CHANNELS`); the script says
+  if a note found none.
+- **Size**: the default pack is 727 891 bytes of the partition's
+  1 179 648; the clip may be 200 to 250 KB at the most, less if the
+  piano's rate allows.
+
+**Steps.**
+
+1. Render the piano's seven notes; the script and the module; the
+   clock's mix against openmpt123's and the stems' sum, levels a
+   quarter second at a time.
+2. A pack of the kits in `packs/` for the page's player and a clock;
+   the user chooses by ear (the kit, the time, the limiter's
+   options, for a buzzer and for a speaker).
+3. On his word: the default pack's ninth clip (`scripts/clips.sh`,
+   `scripts/speaker-clips.sh`, the CI's and the release's lists,
+   `core/build.rs`'s comment, the pack maker's tests,
+   `clips/README.md`, `agents/clips.md`, `AGENTS.md`, the changelog,
+   the manual, the readme).
+
+**For the user to say.**
+
+- The tune's terms: taken to be those of "Suspended Seconds" (his
+  copyright; copies as part of onebitdawn clip packs; all other
+  rights reserved) until he says otherwise. Nothing is committed
+  before that.
+- Whether Surge XT's patch (GPL-3 synth; the patch by its author)
+  leaves anything to say in `clips/README.md` beyond the credit.
+- The label is "Starlight & Aurora": the pages escape a label
+  (`HtmlStr`); to be seen on the Clips page all the same.
+
+**Built, 2026-11-20.**
+
+- `scripts/surgenotes.py` renders single notes of a Surge XT patch
+  with no window and no sound card: `pedalboard` hosts the VST3
+  plugin, and the patch goes in as the plugin's state (an `.fxp` file
+  is a header of 60 bytes and Surge's `sub3` chunk, which is the
+  state; JUCE's wrapper keeps it in its own base 64). The first note
+  after a patch is loaded is not the patch's, so one is thrown away.
+  The patch is the one: its F3 at velocity 62 has the stem's first
+  note's partials within a few dB and the same width (the sides 13.3
+  dB under the middle; the stem 13.2).
+- The piano's timbre goes with the velocity (at 86 the fifth partial
+  is 15 dB over what it is at 62), so there are two layers, rendered
+  at 56 and 78, split at 66, ten notes in all for the seven keys, at
+  11 025 Hz, 0.9 s and a loop; the level goes as the velocity to the
+  power of 1.6. A note is given up after five beats, the pedal never
+  coming up.
+- The bell is made, not cut: in the stem no note is alone long
+  enough, and what it is measures simply. A tone at four times the
+  note is there at once and falls 5 dB a second; a click at twelve
+  times, 20 dB under, is gone in half a second; the note itself is
+  nothing for a quarter of a second, is over the tone at half a
+  second and then under it. Four of them (D4, G4, C5, F5) at 12 000
+  Hz; the room is a release of 2.5 s. The wide stereo of the stem is
+  not there.
+- The sines: a period of 128 samples, the octave 24 dB (the lead) and
+  30 dB (the bass) under. The stems' vibrato is a tenth of a semitone
+  and is left out.
+- `mkxm.fetch` takes a path from the root as a file made here. An
+  instrument's `volume=` does nothing where every note has its volume
+  (the column sets it), so a part's level is in its notes' volumes.
+  "Suspended Seconds" comes out of the changed script byte for byte.
+- Nineteen channels and the tempo's: eight for the piano, six for the
+  bell and its room, three for the lead, two for the bass. No note
+  without a channel and none cut, in any kit.
+- The kits: `played` (the default), `quantized` (the three played
+  parts on the sixteenths), and each with `-buzzer`, the bass with its
+  harmonics to the fifth.
+
+**Measured on the host, 2026-11-20.**
+
+- Each part alone in openmpt123's render against its stem, over the
+  part's length: set to the piano's, the lead and the bass within
+  0.1 dB; the bell 2.8 dB over its stem's middle, on purpose, the
+  stem's sides being as loud as its middle.
+- The whole against the sum of the stems: within 0.9 dB section by
+  section (the piano alone, with the bass, with the bell, all four,
+  the piano alone again); a quarter second at a time 1.9 dB rms. Over
+  2 kHz the module has 3.1 % of its power and the stems 1.25 %; under
+  300 Hz 24 % and 31 %.
+- The clock's own mix is 111.00 s and within 1.0 dB rms of
+  openmpt123's a quarter second at a time; its peak is 16 of the
+  limiter's units ("Suspended Seconds" 41). The converter names
+  nothing the player lacks.
+- This piano has no hard attack: no step in the shaped clip with any
+  setting tried but the speaker's defaults (2). The buzzer's clip:
+
+| options | rms | at the rails | the piano alone, all four |
+| --- | --- | --- | --- |
+| the defaults | -5.5 dBFS | 4.8 % | -5.1, -5.5 |
+| `knee=12,release=10` | -7.7 | 0.65 % | -8.6, -7.1 |
+| `knee=4,release=10` | -7.2 | 0.86 % | -6.9, -7.1 |
+| `knee=4,release=12` | -9.0 | 0.14 % | -10.4, -8.0 |
+
+  and the speaker's: the defaults -7.2 dBFS, 0.93 %, -6.8 and -7.2;
+  `knee=12,release=13` -10.5, 0.05 %, -13.2 and -8.9;
+  `knee=4,release=12` -8.9, 0.17 %, -9.7 and -8.2. The defaults make
+  the piano alone as loud as all four; the other tune's settings keep
+  some of the difference and are the working choice.
+- The module is 225 534 bytes and its clip 221 642: the default pack
+  with it would be 949 641 bytes, 81 % of the partition.
+
+**Where it is.** `mods/starlight-aurora.xm` (`played`),
+`-quantized.xm` and `-buzzer.xm` (`played-buzzer`), for the page's
+player. `packs/starlight-aurora-ab-buzzer.bin` (886 548 bytes, 75 %):
+`sa_played`, `sa_quantized` and `sa_bass` at `knee=12,release=10`,
+`sa_loud` the bass kit at the defaults.
+`packs/starlight-aurora-ab-speaker.bin` (664 842 bytes, 56 %):
+`sa_played` and `sa_quantized` at `knee=12,release=13`, `sa_loud` at
+the speaker's defaults. Not uploaded to a clock.
+
+**The bell's held notes, 2026-11-20.** The user, of the module in
+the page: "Колокол похож, но в конце (там где нота долго висит)
+должно быть чуть больше затухания - сейчас она остаётся висеть пока
+её не сменит следующая". The sample's fall stopped at its loop, 1.1 s
+in. A held bell now falls 4 dB a second from a beat after its start
+(`FADE`), a row at a time in the volume column, which the player
+ramps: a note of five beats ends 10.5 dB down, and its release goes
+on from there. No instrument is added, and the short notes are as
+they were. The modules are 225 687 bytes (`played`) and 225 350; the
+three in `mods/` and the two packs are made again (887 143 and
+665 284 bytes). No note without a channel and none cut.
+
+**One bass, 2026-11-20.** The user: "Бас с обертонами (который из
+starlight-aurora-buzzer.xm) перенеси в основной вариант". The bass
+with its harmonics to the fifth (0.7, 0.6, 0.5, 0.4 of the note) is
+the tune's bass, for a buzzer and a speaker alike; the `-buzzer` kits
+and `mods/starlight-aurora-buzzer.xm` are gone, and
+`mods/starlight-aurora.xm` is byte for byte what that file was. The
+kits are `played` and `quantized`. Against the stems' sum the module
+is now within 1.3 dB section by section (the bass's own section, 12
+to 24 s, 1.3 under: the same peak holds less of a wave with
+harmonics; left as the user heard it), 2.0 dB rms a quarter second at
+a time, with 18 % of its power under 300 Hz. Both packs are made
+again, three clips each, 665 284 bytes: `sa_played` and
+`sa_quantized` at the working settings, `sa_loud` at the output's
+defaults. What is said above of a buzzer kit and of `sa_bass` is as
+it was then.
+
+**In the default packs, 2026-11-20.** The user: "1) Квантизация не
+нужна, в миди уже всё выравнено. 2) starlight-aurora.xm в наушниках
+звучит хорошо, щелчков нету, нужно проверить на спикере 3) Делаем
+Starlight and Aurora 4) да 5) добавлять - сгенерируй паки по
+умолчанию, загрузи пак для спикера на white-clock".
+
+- The `quantized` kit and its module are gone, and with them the
+  kits: the tune is one, as the file has it. The two A/B packs are
+  gone too.
+- The label is the module's title, now "Starlight and Aurora" (twenty
+  characters, all an XM's title has); the tune's name keeps its `&`
+  wherever it is not a label. A clip made already is labelled by its
+  file's name, a capital a word, so the clip is
+  `clips/starlight_and_aurora.xmc` and `scripts/clips.sh` and the
+  release say `=Starlight and Aurora` after it; its name is
+  `starlight_and_aurora` either way, twenty bytes, which is
+  `NAME_MAX`.
+- The terms are those of "Suspended Seconds", the user's word:
+  `clips/README.md`, the script's top, `AGENTS.md`.
+- The clip is 221 795 bytes, `knee=12,release=10`; the speaker's is
+  made from the module with `knee=12,release=13`. Neither setting has
+  been chosen by ear: they are the other tune's.
+- The ninth clip: `scripts/clips.sh`, `scripts/speaker-clips.sh`, the
+  CI's and the release's lists, `core/build.rs`'s comment, the pack
+  maker's tests (the clip byte for byte from the module, the pack's
+  names and labels), `clips/README.md` (the terms, Surge XT's patch,
+  the bell, the commands), `agents/clips.md`, the manual, the readme,
+  the changelog.
+- Both default packs are 949 750 bytes, 80 % of the partition (727 891
+  and 61 % before): 229 898 bytes are left. The parser's test reads
+  the speaker's; the pack maker's 14 tests and its clippy pass; the
+  187 host tests pass with the nine built in and with none; the
+  firmware builds.
+- white-clock (`v0.5-rc3-8-gad5e284`, its output `split`): the
+  speaker's pack posted, "a pack of 9 clips written, 949750 bytes",
+  back in under a minute, its Clips page "Pack in flash: 9 clips, 928
+  KB of 1152" with the label on it. Its melody was `children`, a clip
+  of the local pack that this one has not, and is `beeps` now; the
+  alarm was not armed.
+
+**The speaker's high-pass, 2026-11-20.** The user asked what the
+high-pass is for this module (the converter's defaults: 300 Hz once
+for a buzzer, 100 Hz once for a speaker, which is where the bass's
+own note is) and then: "Собери варианты с highpass=60 для динамика".
+`packs/starlight-aurora-ab-speaker.bin` (665 621 bytes, 56 %), the
+speaker's shaping:
+
+| clip | options | rms | at the rails | the piano alone, all four | under 300 Hz |
+| --- | --- | --- | --- | --- | --- |
+| `sa_hp_a` "Starlight HP 100" | `knee=12,release=13`, what the default pack has | -10.6 dBFS | 0.05 % | -13.2, -8.9 | 18 % |
+| `sa_hp_b` "Starlight HP 60" | the same with `highpass=60` | -10.3 | 0.06 % | -12.5, -8.8 | 27 % |
+| `sa_hp_c` "Starlight HP 60 loud" | `highpass=60`, the limiter's defaults | -6.9 | 1.18 %, one step | -6.6, -7.0 | 37 % |
+
+Not uploaded.
+
+**Not for a buzzer, 2026-11-20.** The user: "В вариант для баззера
+этот клип не пойдёт вообще, только для спикера. На баззере не
+звучит."
+
+- `clips/starlight_and_aurora.xmc` is gone, and the tune from the
+  buzzer's pack and from every list of its clips (`scripts/clips.sh`,
+  the CI's and the release's `ALARM_CLIP` and the release's default
+  pack, `core/build.rs`'s comment): `packs/clips-default.bin` is the
+  eight again, 727 891 bytes, the same as before the tune.
+- `scripts/speaker-clips.sh` has it, from the module, as the
+  speaker's pack's ninth and last clip: that pack is 949 750 bytes,
+  80 % of the partition, and has one clip the buzzer's has not. A
+  clock with `starlight_and_aurora` chosen that is given the buzzer's
+  pack falls back as with any clip a pack lacks.
+- The pack maker's test of the default pack checks the ninth as the
+  speaker's: its name, its label, that it loops and that the
+  converter has one note of it, the module's line. 14 and 5 tests
+  pass, the clippy is clean; the 187 host tests pass with the eight
+  built in and with none.
+- `clips/README.md` has the tune at its end as the speaker's pack's
+  only; the manual and the changelog say eight and a ninth for a
+  speaker; `AGENTS.md`, `agents/clips.md`, the script's top.
+- What "In the default packs" above says of nine clips in the
+  buzzer's pack and of the clip's file was so for an hour.
+
+**The speaker's settings chosen, 2026-11-20.** The A/B pack on
+white-clock (posted, "a pack of 3 clips written, 665621 bytes", the
+three labels on its Clips page; the output `split`, so the amplifier
+and its speaker). The user: "Starlight HP 100 - баса почти не слышно,
+ну и ладно". So the clip is as `scripts/speaker-clips.sh` had it:
+the high-pass at 100 Hz, once, `knee=12,release=13`; the bass is next
+to unheard on that speaker and is left so. The speaker's default pack
+is unchanged, 949 750 bytes, and is back on white-clock.
+
+**The credits read, 2026-11-20.** The user: "Прочитал про Surge XT в
+clips/README.md, и в целом про композицию. Всё верно". Nothing is
+left to do but the commit, on his word.
+
+**The label.** A pack's label may not have `&` (`check_names`), and
+the pack maker makes "Starlight Aurora" of the module's title. The
+user's to say what the clock's pages should show.

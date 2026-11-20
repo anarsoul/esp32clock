@@ -48,7 +48,10 @@ KEY_OFF = 97
 def fetch(path):
     """The local copy of a file of VSCO 2 CE, or of a file anywhere by
     its URL (kept in `xm/` under its host's name), fetched if it is
-    not there."""
+    not there. A path from the root is a file made here, and is
+    itself."""
+    if os.path.isabs(path):
+        return path
     if "://" in path:
         parts = urllib.parse.urlsplit(path)
         local = os.path.join(ROOT, "xm", parts.netloc, os.path.basename(parts.path))

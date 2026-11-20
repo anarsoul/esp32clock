@@ -61,8 +61,11 @@ host and the browser, over `core`. `CLAUDE.md` is a symlink to this file; edit t
   2026-11-16); the modules' sources are in `mods/`. They
   are other people's music, not under the project's licence;
   `clips/README.md` credits each and must go on doing so.
-  "Suspended Seconds" is the user's own piano tune and not under the
-  project's licence either: his copyright, and it "may be copied and
+  "Suspended Seconds" and "Starlight & Aurora" (the speaker's pack
+  alone has it, from its module: a buzzer cannot say it, and there is
+  no clip of it in `clips/`) are the user's own
+  tunes and not under the project's licence either: his copyright,
+  and each "may be copied and
   distributed, unmodified or as converted from its module by
   onebitdawn's tools, as part of onebitdawn clip packs, including
   commercially; all other rights reserved". The other

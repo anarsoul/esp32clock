@@ -22,10 +22,19 @@
 # second (release=13) from a low knee, so it rides a passage's level
 # and not a note's (the user's choice, 2026-11-19; the buzzer's clip
 # has release=10).
+# Starlight and Aurora is this pack's alone, its ninth and last: a
+# soft piano under 350 Hz and a bass under 110, which on a buzzer does
+# not sound (the user, 2026-11-20), so the buzzer's pack and clips/
+# have no clip of it. It has the same limiter: its piano has no hard
+# attack to click, but the defaults make the piano alone as loud as
+# the four parts together. The high-pass stays at 100 Hz: the user's
+# choice on white-clock's speaker over 60 Hz, with either limiter
+# ("баса почти не слышно, ну и ладно").
 # The pack maker's `--sound-output speaker` is these settings, so the
 # pack is the default one's sources through it: packs/clips-default-speaker.bin,
 # under the default pack's names, so a clock's melody setting means the
-# same tune after it.
+# same tune after it (the ninth but for a clock that had it chosen and
+# is given the buzzer's pack).
 # Usage: scripts/speaker-clips.sh [pack.bin]    the pack's path, from the
 #                                               repository's root; the
 #                                               release names its own
@@ -38,4 +47,4 @@ cargo pack -o "$pack" --sound-output speaker clips/trantor.bpr \
     "mods/Orion - Nero Burning ROM v5.5.7.8kg.xm:name=halftime" mods/Orion-Nero6.3.0.2.xm:name=keygen \
     mods/nq-synchronization.pt3:restart,name=synchronization \
     mods/grieg-morning-bright.xm mods/grieg-morning-chip.xm mods/grieg-mountain-king-bright.xm \
-    mods/suspended-seconds.xm:knee=12,release=13
+    mods/suspended-seconds.xm:knee=12,release=13 mods/starlight-aurora.xm:knee=12,release=13

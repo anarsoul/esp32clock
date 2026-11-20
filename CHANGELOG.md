@@ -110,7 +110,12 @@ from `http://<ip>/update`; its settings survive the update.
 - An eighth, "Suspended Seconds", a piano tune by Vasily Khoruzhick
   written for the clock, played with its velocities and its sustain
   pedal. The tune is its composer's and not under the project's
-  licence (`clips/README.md`). The pack is eight clips and 728 KB.
+  licence (`clips/README.md`).
+  The pack is eight clips and 728 KB.
+- The speaker's pack has a ninth, "Starlight & Aurora" (on the pages
+  "Starlight and Aurora"), his too and under the same terms: a soft
+  piano, a bell, a lead and a bass, which a buzzer cannot say. That
+  pack is 950 KB.
 - The alarm sound is stored by its name and no longer by its place in
   the list: an alarm keeps its clip through a new clip pack that still
   has it, in whatever order, and through a firmware with more note

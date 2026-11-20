@@ -123,7 +123,8 @@ firmware. The default pack is the eight clips in `clips/`; a release
 has it as `onebitdawn-clips-<tag>.bin` and the web installer writes
 it. `onebitdawn-clips-speaker-<tag>.bin` is the same eight made for a
 clock with a speaker (in the buzzer's place, or on the line output's
-amplifier): the bass left in and a gentler limiter. Upload it in the
+amplifier), the bass left in and a gentler limiter, and a ninth,
+"Starlight and Aurora", which a buzzer cannot say. Upload it in the
 other's place.
 
 A pack of your own is made of tracker modules (`.xm`, `.mod`, `.s3m`),

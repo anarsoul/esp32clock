@@ -13,7 +13,8 @@ The first four are other people's music and are **not** covered by
 the project's MIT OR Apache-2.0 licence; each is credited below, and
 copyright stays with its author. The next three were made here. The
 last is the project's author's own tune, and is **not** under the
-project's licence either.
+project's licence either; so is a ninth that only the speaker's pack
+has, at the end of this file.
 
 ## `trantor.bpr`
 
@@ -137,3 +138,50 @@ cargo pack --clip clips/suspended_seconds.xmc mods/suspended-seconds.xm:knee=12,
 ```
 
 For a speaker (`scripts/speaker-clips.sh`) it is `knee=12,release=13`.
+
+## "Starlight & Aurora", in the speaker's pack only
+
+"Starlight & Aurora" (2026) by **Vasily Khoruzhick**, a tune for
+piano, a bell, a lead and a bass ("Starlight and Aurora" on the
+clock's pages, where a label may not have an `&`). **Copyright (c)
+2026 Vasily Khoruzhick. May be copied and distributed, unmodified or
+as converted from its module by onebitdawn's tools, as part of
+onebitdawn clip packs, including commercially; all other rights
+reserved.** The tune, its MIDI file
+(`mods/src/starlight_aurora.mid`), the module
+(`mods/starlight-aurora.xm`) and the clip made of it are under these
+terms and not under the project's licence. There is no clip of it
+here: it is a soft piano under 350 Hz over a bass under 110, which a
+buzzer does not say, so only the pack for a clock with a speaker
+(`scripts/speaker-clips.sh`) has it, made from the module.
+
+- **The notes** are the composer's MIDI file, with nothing arranged:
+  four parts, each note's velocity its volume, the times as they are
+  in the file.
+- **The piano** is [Surge XT](https://surge-synthesizer.github.io/)'s
+  patch "Acoustic Grand" (of its LinnStrument MPE patches), which the
+  composer played the part with: each of the part's seven notes
+  rendered from the synthesizer by itself, soft and loud, the first
+  0.9 s of each and a loop, with the note's decay in the instrument's
+  envelope. Surge XT is free software under the GPL 3; nothing of its
+  code is here, only the sound of ten notes.
+- **The bell** stands for JE-8086's "MKS80 Bell/Space", which the
+  composer used: made in the script after what his recording of the
+  part measures as, a tone two octaves over the note, a click, and
+  the note itself coming up late.
+- **The lead and the bass** are sines made in the script; the bass
+  has harmonics added, to be heard by on a small speaker.
+- **The script** that writes the module, `mods/src/starlight_aurora.py`
+  with `scripts/mkxm.py`, is the project's, under its licence, as is
+  `scripts/surgenotes.py`, which renders the piano's notes (it needs
+  Surge XT's VST3 plugin and `pedalboard`).
+
+```
+scripts/surgenotes.py "/usr/share/surge-xt/patches_3rdparty/LinnStrument MPE/Keys/Acoustic Grand.fxp" \
+    xm/surge/acoustic-grand F3:56 F3:78 G3:56 A3:78 C4:56 C4:78 D4:56 E4:56 E4:78 F4:78
+scripts/mkxm.py mods/src/starlight_aurora.py mods/starlight-aurora.xm
+scripts/speaker-clips.sh        # the module with knee=12,release=13, the pack's ninth clip
+```
+
+The limiter is the other tune's: at its defaults the piano alone is
+as loud as the four parts together.

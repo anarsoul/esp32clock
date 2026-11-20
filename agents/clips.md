@@ -197,6 +197,20 @@ scripts/mkxm.py mods/src/mountain_king.py mods/grieg-mountain-king-chip.xm chip
   unmodified or as converted from its module by onebitdawn's tools,
   as part of onebitdawn clip packs, including commercially; all other
   rights reserved (`clips/README.md`).
+- "Starlight & Aurora" (`mods/src/starlight_aurora.py`,
+  `mods/starlight-aurora.xm`) is the user's second tune, four parts
+  from his MIDI file as they are there. It is the speaker's pack's
+  ninth clip and in no other: on a buzzer it does not sound (the
+  user, 2026-11-20), so `clips/` has no clip of it and
+  `scripts/speaker-clips.sh` makes it from the module. Its label is
+  the module's title, "Starlight and Aurora" (a label may not have
+  `&`). Its piano is Surge XT's "Acoustic Grand", rendered a note at
+  a time by `scripts/surgenotes.py` (needs the plugin and
+  `pedalboard`) into the ignored `xm/surge/acoustic-grand/`, which
+  the tune's script reads; the bell (a guess, by measurement, at a
+  synthesizer that is not here) and the two sines are made in the
+  script, the bass with harmonics. The limiter's options and the
+  terms are those of "Suspended Seconds".
 - The other two there are Grieg's Morning (shortened; read off a scan) and
   In the Hall of the Mountain King (Mutopia's MIDI file). Morning in
   both kits and the Mountain King in `bright` are in the default

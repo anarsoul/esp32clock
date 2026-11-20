@@ -82,6 +82,12 @@ fn the_default_pack_from_its_sources() {
     assert_eq!(labels, ["Trantor", "Halftime", "Keygen", "Synchronization", "Morning Mood", "Morning Mood Chip", "Mountain King", "Suspended Seconds"]);
     // A speaker's clips are others, of the same lengths: the shaping
     // is the header's.
+    // And the speaker's pack has a ninth, which the buzzer's has not
+    // (scripts/speaker-clips.sh): its name and label are its title's.
+    let ninth = made("mods/starlight-aurora.xm:knee=12,release=13", Output::Speaker);
+    assert_eq!((ninth.name.as_str(), ninth.label.as_str(), ninth.loops), ("starlight_and_aurora", "Starlight and Aurora", true));
+    // One note, the module's line: nothing in it that the player lacks.
+    assert_eq!(ninth.notes.len(), 1, "{:?}", ninth.notes);
     for (arg, k) in [("mods/Orion-Nero6.3.0.2.xm:name=keygen", 2), ("mods/nq-synchronization.pt3:restart,name=synchronization", 3)] {
         let speaker = made(arg, Output::Speaker);
         assert!(speaker.data.len() == clips[k].data.len() && speaker.data != clips[k].data, "{arg}");

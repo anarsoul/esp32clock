@@ -98,7 +98,8 @@ jobs:
           CLIP_PACK_FILE="images/onebitdawn-clips-${GITHUB_REF_NAME}.bin" \
             cargo host-test the_pack_file_parses -- --nocapture
           # The same eight for a clock with a speaker, converted again
-          # from mods/ (scripts/speaker-clips.sh): for the Clips page
+          # from mods/, and a ninth that a buzzer cannot say
+          # (scripts/speaker-clips.sh): for the Clips page
           # or `espflash write-bin 0x2e0000`; the web installer writes
           # the buzzer's.
           scripts/speaker-clips.sh "images/onebitdawn-clips-speaker-${GITHUB_REF_NAME}.bin"
