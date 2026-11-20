@@ -21,6 +21,9 @@ The user's, and what the readiness check of the same day left open.
   `v0.4-67-gfb0e18f`). Three in the README under the feature list,
   all six in the manual beside what they show; the manual said four
   pages and has `/clips` in its list now.
+  Retaken 2026-11-20 from white-clock on `v0.5-rc3` (the user: its
+  pages are master's), the same way, with the broker's user blurred
+  as well; the settings page has the sound output now.
 - [x] A picture of the board with the buzzer mod, beside the README's
   description of it (the user's; a photograph, so the user's to take).
   Two, taken by the user 2026-11-17, in `pics/`: the component side
