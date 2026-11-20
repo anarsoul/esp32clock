@@ -546,7 +546,7 @@
     "last_paths": {
       "idf": "",
       "netlist": "",
-      "plot": "clock_zero_v3",
+      "plot": "clock_zero_v4",
       "specctra_dsn": "",
       "step": "",
       "vrml": ""
@@ -683,7 +683,7 @@
         "uuid": "8b8f4d59-0f56-4848-8537-f0c0b169a339"
       }
     ],
-    "used_designators": "#PWR1-6,J1,R1-2,U1",
+    "used_designators": "#PWR1-6,J1,R1-2,R7,U1",
     "variants": []
   },
   "sheets": [

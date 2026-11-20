@@ -393,6 +393,30 @@ on `buzzer`; the Wi-Fi's clicks gone at rest; the amplifier's own
 click at the two edges; the start of a sound not cut; through a reset
 with and without the pull-down; the Zero's LED.
 
+**The adapters with the filter on them — drawn and ordered by the
+user 2026-11-19, not built, nothing heard.** SuperMini v2 and Zero v4
+(`adapter/`, `gerbers_clock_supermini_v2.zip` and
+`gerbers_clock_zero_v4.zip`; the boards built so far are SuperMini v1
+and Zero v3). Both carry the filter as heard on the breadboard, R4
+2.2 kΩ and C1 4.7 nF, R5 10 kΩ and C2 2 nF, R6 3.3 kΩ to ground, from
+GPIO20; R3, 10 kΩ from GPIO10 to ground, the shutdown's pull-down;
+and J2, a five-pin header in the order of the PAM8302 board's own,
+A+, A−, SD, 5 V, GND. R7 is a 0 Ω link between socket pins 16 and 14,
+fitted only on an HU-058D, which has driver 1's clock on 14 (the
+README's short wire). R4 is at the filter and not at the pin (the
+user: the track before it is driven by the pin and picks up nothing;
+after R4 it would be 2.2 kΩ beside the antenna). The boards are
+6.5 mm (SuperMini) and 5.7 mm (Zero) wider than the old 40.5 mm, all
+of it on the side away from the socket. Checked before the order:
+KiCad's DRC and ERC with no errors, the two netlists the same but for
+the module's footprint, and each archive's nine layers and two drill
+files the same as its board file draws. With C2 at 2 nF the figures
+for a PAM8302 board with its trimmer are a division of 0.152, −3 dB
+at 15.7 kHz and −38 dB at 250 kHz. To check when they come: that each
+fits its case, the filter's output on a scope, the amplifier on J2
+with its pull-up off, and on a PAM8302 with no trimmer across its
+input whether R6 has to be 2.7 kΩ (`bench/pdm-amp.md`).
+
 ### A watchdog — designed, built and run on test-clock 2026-11-17; a soak still owed
 
 The backlog's "No watchdog" (second pass): `esp_hal::init` disables

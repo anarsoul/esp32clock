@@ -546,7 +546,7 @@
     "last_paths": {
       "idf": "",
       "netlist": "",
-      "plot": "clock_supermini_v1",
+      "plot": "clock_supermini_v2",
       "specctra_dsn": "",
       "step": "",
       "vrml": ""
@@ -683,7 +683,7 @@
         "uuid": "8b8f4d59-0f56-4848-8537-f0c0b169a339"
       }
     ],
-    "used_designators": "#PWR1-6,J1,R1-2,U1",
+    "used_designators": "#PWR1-9,C1-2,J1-2,R1-6,U1",
     "variants": []
   },
   "sheets": [
