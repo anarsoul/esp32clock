@@ -47,6 +47,10 @@ host and the browser, over `core`. `CLAUDE.md` is a symlink to this file; edit t
 - Commit only when asked. Commit messages end with
   `Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>` (the user asked
   for this trailer in this project).
+- `master` is in feature freeze until v0.5 is tagged: it takes bug
+  fixes only, no new features. New work goes on a separate branch,
+  `next` for one; say so when a request is a feature rather than a
+  fix. The rule ends with the tag; take this item out then.
 - `3rdparty/` is the reverse-engineering reference (public domain), ignored
   by git. Read it; do not modify it.
 - `clips/` holds the clips of the default clip pack
