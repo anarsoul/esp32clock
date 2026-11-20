@@ -1476,7 +1476,7 @@ way and a rollback keeps the zone. The sign is required: `GMT0` and
 name (`MSK-3`). The build's `TZ_RULE` stays POSIX alone, checked by
 the compiler. Refusing the form as ambiguous was the other choice,
 and the stricter; the user took this one. The label is now "Timezone,
-POSIX rule or UTC+3".
+POSIX rule or UTC±N".
 
 What it costs: a clock that has `GMT+3` stored in POSIX's sense (three
 hours west, under that name) keeps it until its settings form is next

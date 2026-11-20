@@ -613,7 +613,7 @@ impl<T: core::fmt::Display> core::fmt::Display for OrNull<T> {
 fn write_tz_field(out: &mut impl core::fmt::Write, s: &Settings) -> core::fmt::Result {
     write!(
         out,
-        "<label>Timezone, POSIX rule or UTC+3 <input type=text name=tz id=z maxlength={} value=\"{}\"></label>\
+        "<label>Timezone, POSIX rule or UTC±N <input type=text name=tz id=z maxlength={} value=\"{}\"></label>\
 <button type=button id=b>Use this browser's zone</button> <small id=zn></small>",
         TZ_MAX,
         HtmlStr(s.tz.as_str())
