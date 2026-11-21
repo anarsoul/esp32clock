@@ -180,10 +180,10 @@ buzzer does not say, so only the pack for a clock with a speaker
 scripts/surgenotes.py "/usr/share/surge-xt/patches_3rdparty/LinnStrument MPE/Keys/Acoustic Grand.fxp" \
     xm/surge/acoustic-grand F3:56 F3:78 G3:56 A3:78 C4:56 C4:78 D4:56 E4:56 E4:78 F4:78
 scripts/mkxm.py mods/src/starlight_aurora.py mods/starlight-aurora.xm
-scripts/speaker-clips.sh        # the module with knee=48,release=13, the pack's ninth clip
+scripts/speaker-clips.sh        # the module with knee=64,release=13, the pack's ninth clip
 ```
 
-The limiter has the other tune's release from a higher knee, 48: at
-the defaults the piano alone is as loud as the four parts together,
-and at the other tune's knee of 12 the peaks are flattened at full
+The limiter is off, a knee of 64 being over the tune's peak: at the
+defaults the piano alone is as loud as the four parts together, and
+at the other tune's knee of 12 the peaks are flattened at full
 scale, which a speaker plays as clicks.

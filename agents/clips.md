@@ -210,11 +210,12 @@ scripts/mkxm.py mods/src/mountain_king.py mods/grieg-mountain-king-chip.xm chip
   the tune's script reads; the bell (a guess, by measurement, at a
   synthesizer that is not here) and the two sines are made in the
   script, the bass with harmonics. Its limiter is
-  `knee=48,release=13`: at the other tune's knee of 12 the four parts
-  are always over the knee and each new peak is flattened at full
-  scale, heard as clicks on a speaker. Its samples are 8 bits, 35 to
-  44 dB over their own rounding, which is the hiss under its quiet
-  notes (`PLAN.md`). The terms are those of "Suspended Seconds".
+  `knee=64,release=13`, which is the limiter off: at the other tune's
+  knee of 12 the four parts are always over the knee and each new peak
+  is flattened at full scale, heard as clicks on a speaker. The hiss
+  under its quiet piano on a speaker in the buzzer's place is the
+  transistor's stage and not the clip: the line output has none
+  (`PLAN.md`). The terms are those of "Suspended Seconds".
 - The other two there are Grieg's Morning (shortened; read off a scan) and
   In the Hall of the Mountain King (Mutopia's MIDI file). Morning in
   both kits and the Mountain King in `bright` are in the default

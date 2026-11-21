@@ -1653,7 +1653,7 @@ each a 400 with the zone left alone; the rules as sent; the old
 key's `180` and `-420` as fixed rules. The clock's own `PDT7` put
 back after each run.
 
-## "Starlight & Aurora" clicks on a speaker: the limiter's knee from 12 to 48; its hiss is the 8-bit samples — built 2026-11-20, the knee heard on test-clock, the hiss not fixed
+## "Starlight & Aurora" clicks on a speaker: the limiter off, its knee from 12 to 64; its hiss is the transistor's stage — built 2026-11-20, heard on test-clock and white-clock
 
 The user, with the speaker's pack on test-clock: "есть щелчки".
 
@@ -1741,6 +1741,26 @@ would do it is samples of 16 bits, which the player and the clip
 format do not have: a feature, for after v0.5. The piano's alone are
 about 140 KB more (the pack 1090 KB of 1152); with the bells' too it
 does not fit.
+
+**The knee again, and what the hiss is, 2026-11-20 (later).** The
+user, after the clip at 48 and at 64 on both clocks: "Лимитер выключай
+вообще, knee=64". At 64 no sample is at full scale and the clip is
+-15.7 dBFS, as loud as "Suspended Seconds"; `scripts/speaker-clips.sh`
+makes it so.
+
+The hiss is not the samples', whatever is said above. A firmware that
+plays 16-bit samples was built on `next` and the piano given them: on
+test-clock, whose speaker is on the buzzer's transistor (the S8550,
+the speaker mod), the hiss was as before, and on white-clock's
+amplifier the same clip was clean ("sa_a хорошо звучит на усилителе -
+прямо как надо :) а на S8550 (speaker mod) есть шипение"). Every
+hearing of the hiss above was on the transistor. On it a pure sine of
+250 Hz or 1 kHz, a looped 16-bit sample with nothing over 1.5 kHz
+within 54 dB, hisses too, and a clip of zeros much less ("Синусы
+шипят, тишина шипит заметно меньше"). So it is that stage under any
+signal, and "Suspended Seconds" covers it better. On the amplifier 16
+bits against 8: "16 бит лучше, но 8 бит тоже приемлемо", so the tune
+goes out at 8 bits in v0.5 and the 16-bit samples stay on `next`.
 
 ## Checks still owed
 
