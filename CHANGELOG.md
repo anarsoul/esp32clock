@@ -13,6 +13,11 @@ from `http://<ip>/update`; its settings survive the update.
 
 ### Changed
 
+- A clip on the buzzer's pin goes through the chip's converter at 128
+  bits a sample and no longer at 256 (the line output keeps the
+  build's): a speaker in the buzzer's place, on the buzzer's
+  transistor, hissed under any sound, and hisses less with half the
+  edges.
 - The module player no longer clicks where a note is cut by the next
   on its channel or a level changes: both are ramped over a few
   milliseconds, as FastTracker does. Halftime and Keygen are played

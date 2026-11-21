@@ -91,7 +91,7 @@ use esp_hal::gpio::OutputSignal;
 use esp_hal::i2s::master::{Channels, DataFormat, I2s, PdmConfig, PdmSlotMode, PdmTxConfig, TdmConfig};
 use esp_hal::peripherals::{DMA, DMA_CH1, I2S0};
 use esp_hal::time::Rate;
-use onebitdawn_core::clip::{CHUNK, Pacer, SLOTS, Stream, chunk_us, chunks_in, converter_clock, fade};
+use onebitdawn_core::clip::{CHUNK, Pacer, SLOTS, Stream, chunk_us, chunks_in, converter_bits, converter_clock, fade};
 use log::{info, warn};
 use static_cell::ConstStaticCell;
 
@@ -281,8 +281,12 @@ impl Sampler {
         let slot = |chunk: u32| unsafe { core::slice::from_raw_parts_mut((base as *mut u8).add(chunk as usize % SLOTS * CHUNK), CHUNK) };
 
         let mut player = Stream::new(data, looping);
-        // Set for a clip that goes through the chip's converter.
-        let (converter, sample_rate) = (player.converter(), player.sample_rate());
+        // The pin, as the setting is now, for the whole clip.
+        let out = settings::get().output.clips();
+        // Set for a clip that goes through the chip's converter: the
+        // bits it is to make of a sample, fewer on the buzzer's pin,
+        // whose transistor makes a hiss of the edges.
+        let (converter, sample_rate) = (player.converter().map(|bits| converter_bits(bits, out == SoundPin::Buzzer)), player.sample_rate());
         // The rate the ring is read at. A beeper clip has its own; see
         // `clip::BEEPER_BIT_RATE`. The converter's is what its whole
         // dividers come to.
@@ -379,7 +383,6 @@ impl Sampler {
         // The stream is under way and at zeros: connect the line. The
         // buzzer's through the inverter, a 1 pulling it low; the line
         // output's as it is, a 1 high.
-        let out = settings::get().output.clips();
         // The amplifier is on already, the buzzer task's doing, but for
         // an output changed since the melody began.
         if out == SoundPin::Line {

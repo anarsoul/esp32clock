@@ -1762,6 +1762,35 @@ signal, and "Suspended Seconds" covers it better. On the amplifier 16
 bits against 8: "16 бит лучше, но 8 бит тоже приемлемо", so the tune
 goes out at 8 bits in v0.5 and the 16-bit samples stay on `next`.
 
+**The transistor's stage and the converter's bit rate, 2026-11-20.**
+On test-clock's speaker (the S8550, the speaker mod) the user: "Синусы
+шипят, тишина шипит заметно меньше", of sines of 250 Hz and 1 kHz
+that are clean in the clip. So the stage hisses under any signal. Then
+the same clips through the converter at 256 bits a sample (8 Mbit/s,
+the default) and at 128 (4 Mbit/s), by a bench switch in `src/clip.rs`
+that is not committed, each run through with no underrun: "128 бит
+звучит лучше на speaker mod - меньше шипения". Half the edges, less
+hiss: what one would expect of a transistor that turns off more slowly
+than it turns on, which makes the line's level depend on the bits'
+pattern and so brings the converter's noise, all of it far over the
+audio band, down into it; with zeros in, the pattern is regular and
+there is nothing to bring down. Not measured on a scope. 64 bits a
+sample the driver refuses for this converter (`Pdm(InvalidClock)`: the
+up-sampling's `fs` would be 960, over its 480), and at 16 kHz it was
+white noise (2026-11-13).
+
+**128 bits a sample on the buzzer's pin — built 2026-11-20 on `next`,
+heard there, on `master` since 2026-11-21 (the user: "Работает", then
+"это всё-таки фикс").**
+`clip::converter_bits` gives a clip on the buzzer's pin
+`BUZZER_CONVERTER_BITS`, 128, and one on the line output the build's
+`CLIP_PDM_BITS`; `src/clip.rs` reads the `output` setting once a clip
+and takes its pin and its bits from that. The bench switch is gone.
+Heard on test-clock's speaker (the transistor) and on white-clock,
+its amplifier and, with `output` at `buzzer`, its buzzer, which is
+not a stock one: a stock buzzer at 128 bits and 31 250 Hz nobody has
+heard.
+
 ## Checks still owed
 
 - "Suspended Seconds" (2026-11-19, in `HISTORY.md`): the processor's

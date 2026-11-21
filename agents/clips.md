@@ -284,3 +284,5 @@ CLIP_PDM_BITS=128 cargo build --release
   Mbit/s for a 16 kHz clip, as the clocks' buzzers have heard it. 256
   (4.096 Mbit/s) is the default and 384 the third. More bits are less
   of the converter's own noise and shorter pulses for the transistor.
+  The variable is the line output's: a clip on the buzzer's pin gets
+  128 at most (`clip::BUZZER_CONVERTER_BITS`, `agents/hardware.md`).

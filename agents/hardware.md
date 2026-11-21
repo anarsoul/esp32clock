@@ -37,9 +37,22 @@ The pin under a clip:
 
 The bit rate:
 
-- A PCM clip or a module is the chip's PDM converter's bits: 8 Mbit/s
-  for a clip at 31 250 samples a second, the converters' default, and
-  4.096 Mbit/s for a 16 kHz one.
+- A PCM clip or a module is the chip's PDM converter's bits. On the
+  line output: 8 Mbit/s for a clip at 31 250 samples a second, the
+  converters' default, and 4.096 Mbit/s for a 16 kHz one, 256 bits a
+  sample. On the buzzer's pin half that, 128 bits a sample
+  (`clip::BUZZER_CONVERTER_BITS`), whatever the build's.
+- Why: a speaker in the buzzer's place, on the S8550 (the speaker
+  mod), hisses under any sound, pure sines of 250 Hz and 1 kHz too,
+  and a clip of zeros much less; at 128 bits a sample there is less of
+  it than at 256 (the user's ear on test-clock, 2026-11-20), and the
+  same clips on the line output's amplifier have none. Reasoned, not
+  seen on a scope: the transistor turns off more slowly than it turns
+  on, the line's level then goes with the bits' pattern, and the
+  converter's noise comes down from over the audio band; zeros make a
+  regular pattern with nothing to bring down. 64 bits a sample the
+  driver refuses at this rate. A stock buzzer has not been heard at
+  128 bits and 31 250 Hz.
 - At 2.048 Mbit/s (16 kHz, `CLIP_PDM_BITS=128`) on white-clock
   (flyback diode, R5 at 5.1 k) it was cleaner than the software
   sigma-delta at 1 Mbit/s (2026-11-13). A stock board's transistor has

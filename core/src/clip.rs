@@ -425,6 +425,22 @@ impl<'a> Player<'a> {
 /// unless the build says otherwise, its ratio of four; at 64, a ratio
 /// of one, the line carried white noise (2026-11-13).
 pub const CONVERTER: Option<u32> = if config::CLIP_PDM { Some(config::CLIP_PDM_BITS) } else { None };
+/// The most bits a sample the converter makes for the buzzer's pin.
+/// The transistor there turns off more slowly than it turns on, so
+/// the line's level goes with the pattern of the bits and not only
+/// with how many are ones, and the converter's noise, which is all far
+/// over the audio band, comes down into it as a hiss under any sound,
+/// a pure sine too; with half the edges there is less of it (the
+/// user's ear on a speaker in the buzzer's place, 2026-11-20). The
+/// line output's amplifier takes the build's bits and is clean. Fewer
+/// than this the driver does not make at `FAST_HZ`.
+pub const BUZZER_CONVERTER_BITS: u32 = 128;
+
+/// The bits a sample the converter is to make for a clip on the
+/// buzzer's pin or on the line output, of the build's `bits`.
+pub const fn converter_bits(bits: u32, buzzer: bool) -> u32 {
+    if buzzer && bits > BUZZER_CONVERTER_BITS { BUZZER_CONVERTER_BITS } else { bits }
+}
 /// One step of the 8-bit sample for the chip's converter, in the
 /// units of `LEVEL`: 127 steps are 0.85 of the rail. By ear, on two
 /// hard-limited modules (2026-11-13): 0.70, the software loop's, was
@@ -1618,6 +1634,14 @@ mod tests {
         assert_eq!(converter_clock(FAST_HZ, 256), (10, 16 * FAST_HZ));
         assert_eq!(converter_clock(FAST_HZ, 128).1, 16 * FAST_HZ);
         assert_eq!(converter_clock(FAST_HZ, 384), (0, 0));
+        // The buzzer's pin gets no more than its own, whatever the
+        // build's; the line output the build's. There is a clock for
+        // it at every rate a clip has.
+        assert_eq!([128, 256, 384].map(|bits| converter_bits(bits, true)), [128; 3]);
+        assert_eq!([128, 256, 384].map(|bits| converter_bits(bits, false)), [128, 256, 384]);
+        for rate in [PCM_HZ, 2 * PCM_HZ, FAST_HZ] {
+            assert!(converter_clock(rate, BUZZER_CONVERTER_BITS).1 != 0, "{rate}");
+        }
     }
 
     #[test]
