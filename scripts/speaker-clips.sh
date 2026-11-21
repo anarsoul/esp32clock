@@ -25,9 +25,12 @@
 # Starlight and Aurora is this pack's alone, its ninth and last: a
 # soft piano under 350 Hz and a bass under 110, which on a buzzer does
 # not sound (the user, 2026-11-20), so the buzzer's pack and clips/
-# have no clip of it. It has the same limiter: its piano has no hard
-# attack to click, but the defaults make the piano alone as loud as
-# the four parts together. The high-pass stays at 100 Hz: the user's
+# have no clip of it. Its limiter has the same release from a knee of
+# 48: at Suspended Seconds' 12 its four parts together were always
+# over the knee and every new peak was flattened at full scale, 1254
+# samples of the clip, which the user heard as clicks on test-clock's
+# speaker; at 48 it is 63 and 2.6 dB quieter (the user, 2026-11-20:
+# "с 48 хорошо"). The high-pass stays at 100 Hz: the user's
 # choice on white-clock's speaker over 60 Hz, with either limiter
 # ("баса почти не слышно, ну и ладно").
 # The pack maker's `--sound-output speaker` is these settings, so the
@@ -47,4 +50,4 @@ cargo pack -o "$pack" --sound-output speaker clips/trantor.bpr \
     "mods/Orion - Nero Burning ROM v5.5.7.8kg.xm:name=halftime" mods/Orion-Nero6.3.0.2.xm:name=keygen \
     mods/nq-synchronization.pt3:restart,name=synchronization \
     mods/grieg-morning-bright.xm mods/grieg-morning-chip.xm mods/grieg-mountain-king-bright.xm \
-    mods/suspended-seconds.xm:knee=12,release=13 mods/starlight-aurora.xm:knee=12,release=13
+    mods/suspended-seconds.xm:knee=12,release=13 mods/starlight-aurora.xm:knee=48,release=13

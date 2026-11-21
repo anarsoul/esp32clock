@@ -84,7 +84,7 @@ fn the_default_pack_from_its_sources() {
     // is the header's.
     // And the speaker's pack has a ninth, which the buzzer's has not
     // (scripts/speaker-clips.sh): its name and label are its title's.
-    let ninth = made("mods/starlight-aurora.xm:knee=12,release=13", Output::Speaker);
+    let ninth = made("mods/starlight-aurora.xm:knee=48,release=13", Output::Speaker);
     assert_eq!((ninth.name.as_str(), ninth.label.as_str(), ninth.loops), ("starlight_and_aurora", "Starlight and Aurora", true));
     // One note, the module's line: nothing in it that the player lacks.
     assert_eq!(ninth.notes.len(), 1, "{:?}", ninth.notes);

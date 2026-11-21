@@ -1653,6 +1653,95 @@ each a 400 with the zone left alone; the rules as sent; the old
 key's `180` and `-420` as fixed rules. The clock's own `PDT7` put
 back after each run.
 
+## "Starlight & Aurora" clicks on a speaker: the limiter's knee from 12 to 48; its hiss is the 8-bit samples — built 2026-11-20, the knee heard on test-clock, the hiss not fixed
+
+The user, with the speaker's pack on test-clock: "есть щелчки".
+
+**What was measured.** The clip rendered on the host by the firmware's
+player (`CLIP_PCM_DUMP`, `CLIP_WIDE`; `CLIP_RAW` for the mix before the
+shaper), 111 s at 31 250 samples a second.
+
+- The mix before the shaper has no step and no burst, and is as
+  `openmpt123` renders the module. The player is not the cause.
+- With `knee=12,release=13` the shaped clip is at full scale (±32512)
+  for 1254 samples, in runs of up to 12, at 181 places, most of them
+  between 48 s and 96 s. The mix peaks near 62 000 and a knee of 12 is
+  12 288, so the limiter is never off; its attack is instant, and every
+  sample over the envelope as it has decayed goes to full scale, a
+  flat top on each new peak. "Suspended Seconds" with the same options
+  is there for 51 samples at 11 places.
+- The knee, `release=13` throughout (on the bare bench board the clip
+  as it was played through with 0 underruns, 0 stray positions, 70 of
+  111 s filling):
+
+| knee | samples at full scale | RMS, dBFS |
+| --- | --- | --- |
+| 12 to 32 | 1254 to 1211 | -10.6 |
+| 40 | 394 | -11.8 |
+| 48 | 63 | -13.2 |
+| 56 | 5 | -14.5 |
+| 64, the limiter off | 0 | -15.7 |
+
+**What was heard.** A pack of the clip at 12, 48 and 64
+(`packs/starlight-aurora-knee-ab-speaker.bin`) on test-clock's speaker.
+The user: "С 48 хорошо, но в тишине слышно шипение". So
+`scripts/speaker-clips.sh` makes it with `knee=48,release=13`.
+
+**The hiss.** A clip of zeros (ADPCM codes of 0, made by hand: the WAV
+converter refuses silence, and brings sox's dither of one step up to
+full scale, which was the first, wrong, "silence") is cleaner than the
+tune's quiet notes (the user), so it is not the converter or the
+amplifier. It is the samples' 8 bits:
+
+- The render has a flat floor over 5.6 kHz, where a piano sampled at
+  11 025 Hz has nothing: 37 to 40 dB under the tune at any level,
+  whatever the knee.
+- Each sample against what it was rounded from (`scripts/mkxm.py`,
+  measured with the float kept): the piano's notes 40 to 44 dB over
+  their rounding, and their loops, which are what a held note is,
+  35 dB (D4, F4) to 44; the bells 41 to 44; the two waves 46 and 49.
+- A part alone, its share of the band over 5.6 kHz against the whole
+  mix: the bell -42 to -47 dB, the piano -52 to -59, the lead and the
+  bass under -61.
+
+**What was tried for the hiss, 2026-11-20, and dropped.** The user
+asked for the samples nearer full scale and for the rounding's error
+shaped. Measured as the 8-bit module's render less that of the same
+module with 16-bit samples (`openmpt123`, linear interpolation):
+
+- Shaping the error: not built. At a sample rate of 11 or 12 kHz the
+  whole band is where the ear is keen, and the best filter there is
+  gains under 1 dB, A-weighted.
+- Nearer full scale: the piano's `DEPTH` from 12 to 18 dB (its worst
+  loops, D4 and F4, from 35 to 41 dB; 24 gives the mix no more), and
+  the bell's level moved into an envelope of its instrument with a
+  loop of whole periods (43.7 to 48 dB, and under a held bell the
+  rounding is the note's harmonics). In the mix: the rounding 47.2 dB
+  under the tune before and 48.1 after, 44.2 and 45.8 in the quiet
+  stretches.
+- The band over 5.6 kHz did not move with either, so it is not the
+  rounding: it is the images of linear interpolation, 42 dB under the
+  tune over 9 kHz, most of it the bell's. With the samples at 22 050
+  and 24 000 Hz it is 9 to 14 dB lower, in a clip of 428 KB.
+- Heard on test-clock, the three as `sa_a`, `sa_b`, `sa_c`
+  (`packs/starlight-aurora-hiss-ab-speaker.bin`). The user: "шипение
+  больше всего слышно у пианино в самом начале. Я не слышу разницы в
+  шипении между 3мя вариантами". So neither was kept, and the module
+  is as it was.
+- The start, where the piano is alone: the shaper adds nothing (the
+  mix before it and the clip after have the same floor), and the floor
+  between the partials is the 8 bits' (4 to 5.5 kHz: -56.7 dB of the
+  total with 8-bit samples, -70.9 with 16-bit; 5.5 to 9 kHz -60 and
+  -69). A piano note's attack is 43 to 45 dB over its rounding
+  whatever the envelope takes, since the hammer's peak is what full
+  scale is.
+
+Not fixed, and not to be had from 8 bits: a few dB is not heard. What
+would do it is samples of 16 bits, which the player and the clip
+format do not have: a feature, for after v0.5. The piano's alone are
+about 140 KB more (the pack 1090 KB of 1152); with the bells' too it
+does not fit.
+
 ## Checks still owed
 
 - "Suspended Seconds" (2026-11-19, in `HISTORY.md`): the processor's
